@@ -10,6 +10,8 @@ BASE_URL="http://127.0.0.1:${PORT_NUMBER}"
 LOG_FILE="$(mktemp /tmp/hekmat-atelier-maintenance-http.XXXXXX.log)"
 SERVER_PID=""
 READINESS_BODY=""
+export INITIAL_ADMIN_USERNAME="ci_maintenance_${GITHUB_RUN_ID:-local}"
+export INITIAL_ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("base64url"))')"
 
 cleanup() {
   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -qAtc "UPDATE application_runtime_state SET maintenance_mode=false, operation=NULL, backup_id=NULL, started_at=NULL, updated_at=NOW() WHERE id='global'" >/dev/null 2>&1 || true
