@@ -1,4 +1,5 @@
 name: Verify pull request
+run-name: Verify exact head SHA ${{ github.event.pull_request.head.sha }}
 on:
   pull_request:
     branches: [main]
@@ -24,6 +25,7 @@ jobs:
           --health-cmd "pg_isready -U atelier_ci -d atelier_ci"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      VALIDATED_GIT_SHA: ${{ github.event.pull_request.head.sha }}
       TZ: ${{ matrix.timezone }}
       DB_DRIVER: postgres
       DATABASE_URL: postgresql://atelier_ci:atelier_ci@127.0.0.1:5432/atelier_ci
@@ -31,6 +33,8 @@ jobs:
       ALLOW_TEST_DATABASE: "true"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VALIDATED_GIT_SHA }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -43,7 +47,7 @@ jobs:
       - run: npm run build
         env:
           NODE_ENV: production
-          GIT_SHA: ${{ github.sha }}
+          GIT_SHA: ${{ env.VALIDATED_GIT_SHA }}
           AUTH_SECRET: ci-build-only-secret
 
   restore-drill:
@@ -58,6 +62,7 @@ jobs:
           --health-cmd "pg_isready -U atelier_drill -d atelier_source"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
+      VALIDATED_GIT_SHA: ${{ github.event.pull_request.head.sha }}
       CI: "true"
       DB_DRIVER: postgres
       DATABASE_URL: postgresql://atelier_drill:atelier_drill@127.0.0.1:5432/atelier_source
@@ -69,6 +74,8 @@ jobs:
       BACKUP_LOCAL_PATH: /tmp/hekmat-atelier-drill
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.VALIDATED_GIT_SHA }}
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci --no-audit --no-fund
