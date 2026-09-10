@@ -99,7 +99,7 @@ export async function createSystemBackup(context: AuditContext, notes?: string, 
     await storage.preflight(requiredStorage);
     await db.update(backups).set({ status: "running" }).where(eq(backups.id, id));
     temporary = await storage.createTemporary(id);
-    await runTool("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file=-"], databaseUrl(), temporary.handle.fd);
+    await runTool("pg_dump", ["--format=custom", "--no-owner", "--no-acl"], databaseUrl(), temporary.handle.fd);
     await temporary.handle.sync(); await temporary.handle.close();
     const file = await storage.commit(id, temporary.path);
     const [checksum, fileInfo] = await Promise.all([sha256(file), stat(file)]);
