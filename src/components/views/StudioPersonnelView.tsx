@@ -141,6 +141,8 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
   const [salaryProjectId, setSalaryProjectId] = useState("");
   const [salaryNotes, setSalaryNotes] = useState("");
   const [submittingSalary, setSubmittingSalary] = useState(false);
+  const [settlementAccountId, setSettlementAccountId] = useState("");
+  const [financialAccounts, setFinancialAccounts] = useState<any[]>([]);
 
   // New Activity Log note
   const [logNote, setLogNote] = useState("");
@@ -196,6 +198,10 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
         if (d.success) setProjects(d.projects || []);
       })
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/accounts").then((r) => r.json()).then((d) => { if (d.success) setFinancialAccounts(d.accounts || []); }).catch(() => {});
   }, []);
 
   // Load Personnel Details
@@ -348,11 +354,12 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
   // Update Salary Status (e.g. Paid)
   const handleUpdateSalaryStatus = async (salaryId: string, status: "pending" | "approved" | "paid") => {
     if (!selectedId) return;
+    if (status === "paid" && !settlementAccountId) { alert("حساب پرداخت دستمزد را انتخاب کنید."); return; }
     try {
       const res = await fetch(`/api/studio/personnel/${selectedId}/salary/${salaryId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paymentStatus: status }),
+        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ paymentStatus: status, accountId: settlementAccountId }),
       });
       const data = await res.json();
       if (data.success) {
@@ -1247,6 +1254,13 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
 
                       {/* Salary Records List */}
                       <div>
+                        <div className="mb-3">
+                          <label className="mb-1 block text-xs font-medium text-slate-400">حساب پرداخت دستمزد</label>
+                          <select value={settlementAccountId} onChange={(e) => setSettlementAccountId(e.target.value)} className="w-full rounded-xl border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-white">
+                            <option value="">انتخاب حساب بانکی یا صندوق</option>
+                            {financialAccounts.map((account) => <option key={account.id} value={account.id}>{account.name} — {formatMoney(account.balance)}</option>)}
+                          </select>
+                        </div>
                         <h4 className="text-xs font-semibold text-slate-400 mb-3">سوابق دستمزد و کارکردها:</h4>
 
                         {detail.salaryRecords.length === 0 ? (

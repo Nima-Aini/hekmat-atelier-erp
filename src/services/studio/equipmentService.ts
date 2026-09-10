@@ -11,6 +11,9 @@ import {
 import { and, desc, eq, ilike, ne, or, sql } from "drizzle-orm";
 import { ApiError, assertUuid, decimal, pageNumber } from "@/lib/apiError";
 import { getNextSequenceCode } from "@/services/sequence";
+import { logAuditEvent } from "@/services/audit";
+import { assertEquipmentScheduleAvailable, assertPersonnelScheduleAvailable, lockScheduleResources } from "./scheduling";
+import { toJalaliDate } from "@/lib/dateUtils";
 
 export type EquipmentMasterStatus = "available" | "reserved" | "project" | "repair";
 
@@ -82,6 +85,8 @@ export interface ReserveEquipmentInput {
   reservedFrom: Date | string;
   reservedTo: Date | string;
   notes?: string | null;
+  actorId?: string;
+  authorName?: string;
 }
 
 export const VALID_EQUIPMENT_CATEGORIES = [
@@ -469,8 +474,8 @@ export async function checkEquipmentAvailability(
 
   if (conflicting.length > 0) {
     const conflict = conflicting[0];
-    const fromStr = new Date(conflict.reservedFrom).toLocaleDateString("fa-IR");
-    const toStr = new Date(conflict.reservedTo).toLocaleDateString("fa-IR");
+    const fromStr = toJalaliDate(conflict.reservedFrom, { showTime: true });
+    const toStr = toJalaliDate(conflict.reservedTo, { showTime: true });
     throw new ApiError(
       409,
       `تداخل زمانی! این تجهیز در بازه ${fromStr} تا ${toStr} برای پروژه «${conflict.projectTitle || "دیگر"}» رزرو است.`
@@ -497,6 +502,7 @@ export async function reserveStudioEquipment(input: ReserveEquipmentInput) {
   }
 
   return db.transaction(async (tx) => {
+    await lockScheduleResources(tx, [input.equipmentId], input.assignedPersonnelId ? [input.assignedPersonnelId] : []);
     // 1. Verify equipment exists and is not retired
     const [equipment] = await tx
       .select()
@@ -510,7 +516,8 @@ export async function reserveStudioEquipment(input: ReserveEquipmentInput) {
     }
 
     // 2. Conflict prevention: check overlap
-    await checkEquipmentAvailability(input.equipmentId, from, to, undefined, tx);
+    await assertEquipmentScheduleAvailable(tx, input.equipmentId, from, to);
+    if (input.assignedPersonnelId) await assertPersonnelScheduleAvailable(tx, input.assignedPersonnelId, from, to);
 
     // 3. Create reservation
     const [reservation] = await tx
@@ -535,13 +542,20 @@ export async function reserveStudioEquipment(input: ReserveEquipmentInput) {
         .where(eq(studioEquipment.id, input.equipmentId));
     }
 
+    await logAuditEvent("STUDIO_EQUIPMENT_RESERVED", "equipment_reservation", reservation.id, {
+      studioProjectId: reservation.studioProjectId,
+      equipmentId: reservation.equipmentId,
+      reservedFrom: from.toISOString(),
+      reservedTo: to.toISOString(),
+    }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName }, tx);
     return reservation;
   });
 }
 
 export async function updateReservationStatus(
   reservationId: string,
-  action: "checkout" | "checkin" | "cancel" | "confirm"
+  action: "checkout" | "checkin" | "cancel" | "confirm",
+  actor?: { employeeId?: string; employeeName?: string },
 ) {
   assertUuid(reservationId);
 
@@ -553,6 +567,12 @@ export async function updateReservationStatus(
       .limit(1);
 
     if (!reservation) throw new ApiError(404, "رزرو موردنظر یافت نشد.");
+
+    if (action === "confirm") {
+      await lockScheduleResources(tx, [reservation.equipmentId], reservation.assignedPersonnelId ? [reservation.assignedPersonnelId] : []);
+      await assertEquipmentScheduleAvailable(tx, reservation.equipmentId, reservation.reservedFrom, reservation.reservedTo, reservation.id);
+      if (reservation.assignedPersonnelId) await assertPersonnelScheduleAvailable(tx, reservation.assignedPersonnelId, reservation.reservedFrom, reservation.reservedTo, undefined, reservation.id);
+    }
 
     const now = new Date();
     const updateData: Partial<typeof equipmentReservations.$inferInsert> = {};
@@ -592,6 +612,11 @@ export async function updateReservationStatus(
         .where(eq(studioEquipment.id, reservation.equipmentId));
     }
 
+    await logAuditEvent(`STUDIO_EQUIPMENT_${action.toUpperCase()}`, "equipment_reservation", reservationId, {
+      studioProjectId: reservation.studioProjectId,
+      before: { status: reservation.status },
+      after: { status: updated.status },
+    }, { userId: actor?.employeeId, employeeId: actor?.employeeId, userName: actor?.employeeName }, tx);
     return updated;
   });
 }
@@ -817,6 +842,9 @@ export async function updateRentalEquipment(id: string, input: UpdateRentalEquip
   if (!existing) {
     throw new ApiError(404, "تجهیز اجاره‌ای یافت نشد.");
   }
+  if (existing.expenseId && (input.rentalCost !== undefined || input.studioProjectId !== undefined)) {
+    throw new ApiError(409, "هزینه یا پروژه رنتال ثبت‌شده در حسابداری قابل تغییر مستقیم نیست.");
+  }
 
   const updateData: Partial<typeof rentalEquipment.$inferInsert> = {
     updatedAt: new Date(),
@@ -884,15 +912,9 @@ export async function updateRentalEquipment(id: string, input: UpdateRentalEquip
 export async function deleteRentalEquipment(id: string) {
   assertUuid(id);
 
-  const [deleted] = await db
-    .delete(rentalEquipment)
-    .where(eq(rentalEquipment.id, id))
-    .returning();
-
-  if (!deleted) {
-    throw new ApiError(404, "تجهیز اجاره‌ای یافت نشد.");
-  }
-
-  return { success: true, message: "تجهیز اجاره‌ای با موفقیت حذف گردید." };
+  const [existing] = await db.select().from(rentalEquipment).where(eq(rentalEquipment.id, id)).limit(1);
+  if (!existing) throw new ApiError(404, "تجهیز اجاره‌ای یافت نشد.");
+  if (existing.expenseId || existing.financialStatus === "posted") throw new ApiError(409, "رنتال دارای هزینه حسابداری قابل حذف نیست؛ برگشت مالی لازم است.");
+  await db.update(rentalEquipment).set({ financialStatus: "voided", voidReason: "لغو رکورد پیش‌نویس", voidedAt: new Date(), status: "cancelled", updatedAt: new Date() }).where(eq(rentalEquipment.id, id));
+  return { success: true, message: "رکورد رنتال بدون حذف سابقه لغو گردید." };
 }
-

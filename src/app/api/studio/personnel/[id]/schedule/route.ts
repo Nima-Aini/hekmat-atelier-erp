@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/services/access";
+import { getScopedProjectIds, requirePermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import { getPersonnelSchedule } from "@/services/studio/personnelService";
 
@@ -15,7 +15,7 @@ export async function GET(
     const fromDate = searchParams.get("from") ? new Date(searchParams.get("from")!) : undefined;
     const toDate = searchParams.get("to") ? new Date(searchParams.get("to")!) : undefined;
 
-    const schedule = await getPersonnelSchedule(id, fromDate, toDate);
+    const schedule = await getPersonnelSchedule(id, fromDate, toDate, await getScopedProjectIds());
     return NextResponse.json({ success: true, schedule });
   } catch (error) {
     return apiError(error, "دریافت برنامه کاری پرسنل");

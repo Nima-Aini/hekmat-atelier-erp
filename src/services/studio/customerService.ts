@@ -5,7 +5,7 @@ import {
   studioProjects,
   studioContracts,
 } from "@/db/schema";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, exists, ilike, inArray, or, sql } from "drizzle-orm";
 import { ApiError, assertUuid, pageNumber } from "@/lib/apiError";
 
 export interface CreateStudioCustomerInput {
@@ -51,6 +51,7 @@ export interface ListStudioCustomerFilter {
   vipLevel?: string;
   page?: number;
   pageSize?: number;
+  allowedCoreProjectIds?: string[] | null;
 }
 
 export async function listStudioCustomers(filter: ListStudioCustomerFilter) {
@@ -59,6 +60,11 @@ export async function listStudioCustomers(filter: ListStudioCustomerFilter) {
   const offset = (page - 1) * pageSize;
 
   const conditions = [];
+  if (filter.allowedCoreProjectIds !== undefined && filter.allowedCoreProjectIds !== null) {
+    conditions.push(filter.allowedCoreProjectIds.length
+      ? exists(db.select({ value: sql`1` }).from(studioProjects).where(and(eq(studioProjects.studioCustomerId, studioCustomers.id), inArray(studioProjects.projectId, filter.allowedCoreProjectIds))))
+      : sql`false`);
+  }
 
   if (filter.customerType && filter.customerType !== "all") {
     conditions.push(eq(studioCustomers.customerType, filter.customerType));
@@ -172,6 +178,7 @@ export async function getStudioCustomerById(id: string) {
   const projects = await db
     .select({
       id: studioProjects.id,
+      projectId: studioProjects.projectId,
       projectNumber: studioProjects.projectNumber,
       title: studioProjects.title,
       eventType: studioProjects.eventType,

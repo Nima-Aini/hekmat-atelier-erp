@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/services/access";
+import { getScopedProjectIds } from "@/services/access";
 import { apiError, assertUuid } from "@/lib/apiError";
 import { reserveStudioEquipment } from "@/services/studio/equipmentService";
 import { db } from "@/db";
@@ -9,11 +9,13 @@ import {
   studioProjects,
   studioPersonnel,
 } from "@/db/schema";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { requireStudioGlobalAccess, requireStudioProjectAccess } from "@/services/studio/access";
 
 export async function GET(req: NextRequest) {
   try {
-    await requirePermission("studio.view");
+    await requireStudioGlobalAccess("studio.view");
+    const allowedCoreProjectIds = await getScopedProjectIds();
     const { searchParams } = new URL(req.url);
 
     const equipmentId = searchParams.get("equipmentId");
@@ -21,6 +23,7 @@ export async function GET(req: NextRequest) {
     const status = searchParams.get("status");
 
     const conditions = [];
+    if (allowedCoreProjectIds !== null) conditions.push(allowedCoreProjectIds.length ? inArray(studioProjects.projectId, allowedCoreProjectIds) : sql`false`);
 
     if (equipmentId) {
       assertUuid(equipmentId);
@@ -74,10 +77,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requirePermission("studio.equipment.reserve");
     const body = await req.json();
+    const actor = body.studioProjectId
+      ? (await requireStudioProjectAccess(body.studioProjectId, "studio.equipment.reserve")).actor
+      : await requireStudioGlobalAccess("studio.equipment.reserve");
 
-    const reservation = await reserveStudioEquipment(body);
+    const reservation = await reserveStudioEquipment({ ...body, actorId: actor.employeeId, authorName: actor.employeeName });
     return NextResponse.json({ success: true, reservation }, { status: 201 });
   } catch (error) {
     return apiError(error, "رزرو تجهیز");

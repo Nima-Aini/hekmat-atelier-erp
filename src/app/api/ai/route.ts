@@ -1,4 +1,4 @@
-import { apiError } from "@/lib/apiError";
+import { apiError, assertUuid } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { requirePermission } from "@/services/access";
 import { queryAIAssistant, chatWithAI } from "@/services/ai";
@@ -6,15 +6,16 @@ import { executeAIAction } from "@/services/aiDataModifier";
 
 export async function POST(req: Request) {
   try {
-    await requirePermission("ai.view");
     const body = await req.json();
+    if (body.projectId) assertUuid(body.projectId);
+    await requirePermission("ai.view", body.projectId || undefined);
 
     if (body.action === "execute_action") {
-      await requirePermission("admin.settings");
+      const actor = await requirePermission("admin.settings");
       if (!body.actionProposal) {
         return NextResponse.json({ success: false, error: "اطلاعات عملیات هوش مصنوعی مشخص نیست." }, { status: 400 });
       }
-      const executionResult = await executeAIAction(body.actionProposal);
+      const executionResult = await executeAIAction(body.actionProposal, actor.employeeId);
       return NextResponse.json({ ...executionResult });
     }
 

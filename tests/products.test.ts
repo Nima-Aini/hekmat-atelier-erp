@@ -44,10 +44,18 @@ const create = async (special = false) => (await database.insert(products).value
 
 beforeAll(async () => {
   // PostgreSQL WASM does not need the pgcrypto extension for gen_random_uuid.
-  state.db = { execute: async (query: Parameters<typeof dialect.sqlToQuery>[0]) => {
-    const { sql } = dialect.sqlToQuery(query);
-    return pg.exec(sql.replace('CREATE EXTENSION IF NOT EXISTS "pgcrypto";', ""));
-  } };
+  const migrationDb: {
+    execute: (query: Parameters<typeof dialect.sqlToQuery>[0]) => Promise<unknown>;
+    transaction: (callback: (tx: typeof migrationDb) => Promise<unknown>) => Promise<unknown>;
+  } = {
+    execute: async (query) => {
+      const compiled = dialect.sqlToQuery(query);
+      const migrationSql = compiled.sql.replace('CREATE EXTENSION IF NOT EXISTS "pgcrypto";', "");
+      return compiled.params.length ? pg.query(migrationSql, compiled.params) : pg.exec(migrationSql);
+    },
+    transaction: async (callback) => callback(migrationDb),
+  };
+  state.db = migrationDb;
   await migrateDatabase();
   await migrateDatabase(); // Re-running startup migrations must retain data and succeed.
   state.db = database;

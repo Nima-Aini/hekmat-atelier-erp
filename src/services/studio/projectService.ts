@@ -1,4 +1,5 @@
 import { db } from "@/db";
+import crypto from "node:crypto";
 import {
   studioProjects,
   studioCustomers,
@@ -18,11 +19,20 @@ import {
   studioProjectExpenses,
   employees,
   suppliers,
+  projects,
+  customerProjectMemberships,
+  invoices,
+  payments as corePayments,
+  expenses as coreExpenses,
 } from "@/db/schema";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { ApiError, assertUuid, decimal, pageNumber } from "@/lib/apiError";
 import { getNextSequenceCode } from "@/services/sequence";
-import { checkEquipmentAvailability } from "./equipmentService";
+import { assertEquipmentScheduleAvailable, assertPersonnelScheduleAvailable, lockScheduleResources } from "./scheduling";
+import { createInvoice } from "@/services/invoice";
+import { postCanonicalExpense, postCanonicalReceipt } from "@/services/financial";
+import { logAuditEvent } from "@/services/audit";
+import { toJalaliDate } from "@/lib/dateUtils";
 
 // ==========================================
 // TYPES & INTERFACES
@@ -42,6 +52,8 @@ export interface CreateProjectInput {
   shootingBrief?: string | null;
   notes?: string | null;
   authorName?: string | null;
+  coreProjectId?: string | null;
+  actorId?: string;
 }
 
 export interface UpdateProjectInput {
@@ -57,6 +69,7 @@ export interface UpdateProjectInput {
   shootingBrief?: string | null;
   notes?: string | null;
   authorName?: string | null;
+  actorId?: string;
 }
 
 export interface CreateContractInput {
@@ -69,6 +82,8 @@ export interface CreateContractInput {
   signedDocumentUrl?: string | null;
   status?: "draft" | "sent" | "signed" | "in_progress" | "completed" | "cancelled";
   authorName?: string | null;
+  actorId?: string;
+  idempotencyKey?: string;
 }
 
 export interface UpdateContractInput {
@@ -81,6 +96,7 @@ export interface UpdateContractInput {
   signedDocumentUrl?: string | null;
   status?: "draft" | "sent" | "signed" | "in_progress" | "completed" | "cancelled";
   authorName?: string | null;
+  actorId?: string;
 }
 
 export interface CreatePaymentInput {
@@ -92,6 +108,10 @@ export interface CreatePaymentInput {
   status?: "received" | "pending" | "verified";
   notes?: string | null;
   authorName?: string | null;
+  actorId?: string;
+  accountId: string;
+  invoiceId?: string | null;
+  idempotencyKey?: string;
 }
 
 export interface CreateExpenseInput {
@@ -103,6 +123,9 @@ export interface CreateExpenseInput {
   paymentStatus?: "paid" | "pending";
   notes?: string | null;
   authorName?: string | null;
+  actorId?: string;
+  accountId?: string | null;
+  idempotencyKey?: string;
 }
 
 export interface AssignPersonnelInput {
@@ -112,6 +135,7 @@ export interface AssignPersonnelInput {
   unitsCount?: number | string;
   notes?: string | null;
   authorName?: string | null;
+  actorId?: string;
 }
 
 export interface AddRentalInput {
@@ -124,7 +148,12 @@ export interface AddRentalInput {
   returnDate: Date | string;
   notes?: string | null;
   authorName?: string | null;
+  actorId?: string;
+  accountId?: string | null;
+  idempotencyKey?: string;
 }
+
+function requestHash(value: unknown) { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
 
 export interface ReserveEquipmentForProjectInput {
   equipmentId: string;
@@ -133,6 +162,7 @@ export interface ReserveEquipmentForProjectInput {
   reservedTo: Date | string;
   notes?: string | null;
   authorName?: string | null;
+  actorId?: string;
 }
 
 export interface AddTimelineLogInput {
@@ -141,6 +171,7 @@ export interface AddTimelineLogInput {
   description?: string | null;
   authorName?: string | null;
   metadata?: any;
+  actorEmployeeId?: string | null;
 }
 
 // Pipeline Stages requested:
@@ -201,6 +232,7 @@ export async function logProjectTimeline(
       title: input.title,
       description: input.description?.trim() || null,
       authorName: input.authorName?.trim() || "مدیر استودیو",
+      actorEmployeeId: input.actorEmployeeId || null,
       metadata: input.metadata || {},
     })
     .returning();
@@ -224,13 +256,14 @@ export async function getProjectTimeline(projectId: string) {
 // PIPELINE VIEW & SUMMARY
 // ==========================================
 
-export async function getStudioPipeline() {
+export async function getStudioPipeline(allowedCoreProjectIds: string[] | null = null) {
   // Fetch all projects with customer and contract overview
   const projectsList = await db
     .select({
       id: studioProjects.id,
       projectNumber: studioProjects.projectNumber,
       studioCustomerId: studioProjects.studioCustomerId,
+      projectId: studioProjects.projectId,
       title: studioProjects.title,
       eventType: studioProjects.eventType,
       packageType: studioProjects.packageType,
@@ -256,6 +289,7 @@ export async function getStudioPipeline() {
     .innerJoin(studioCustomers, eq(studioProjects.studioCustomerId, studioCustomers.id))
     .innerJoin(customers, eq(studioCustomers.customerId, customers.id))
     .leftJoin(employees, eq(studioProjects.managerEmployeeId, employees.id))
+    .where(allowedCoreProjectIds === null ? undefined : allowedCoreProjectIds.length ? inArray(studioProjects.projectId, allowedCoreProjectIds) : sql`false`)
     .orderBy(desc(studioProjects.createdAt));
 
   // Fetch payments to calculate paid amounts per project
@@ -370,6 +404,7 @@ export async function updateStudioProjectStage(
   newStage: string,
   note?: string,
   authorName: string = "مدیر استودیو"
+  , actorId?: string
 ) {
   assertUuid(projectId);
 
@@ -411,6 +446,7 @@ export async function updateStudioProjectStage(
         title: `تغییر مرحله پایپ‌لاین به «${newStageTitle}»`,
         description: note || `پروژه از مرحله «${prevStageTitle}» به «${newStageTitle}» منتقل شد.`,
         authorName,
+        actorEmployeeId: actorId || null,
         metadata: {
           previousStatus: existing.status,
           newStatus: newStage,
@@ -418,6 +454,9 @@ export async function updateStudioProjectStage(
       },
       tx
     );
+    await logAuditEvent("STUDIO_PROJECT_STAGE_CHANGED", "studio_project", projectId, {
+      before: { status: existing.status }, after: { status: newStage }, note: note || null,
+    }, { userId: actorId, employeeId: actorId, userName: authorName }, tx);
 
     return updated;
   });
@@ -434,12 +473,17 @@ export async function listStudioProjects(filter: {
   customerId?: string;
   page?: number;
   pageSize?: number;
+  allowedCoreProjectIds?: string[] | null;
 }) {
   const page = pageNumber(filter.page ? String(filter.page) : null, 1);
   const pageSize = pageNumber(filter.pageSize ? String(filter.pageSize) : null, 20, 100);
   const offset = (page - 1) * pageSize;
 
   const conditions = [];
+
+  if (filter.allowedCoreProjectIds !== undefined && filter.allowedCoreProjectIds !== null) {
+    conditions.push(filter.allowedCoreProjectIds.length ? inArray(studioProjects.projectId, filter.allowedCoreProjectIds) : sql`false`);
+  }
 
   if (filter.status && filter.status !== "all") {
     conditions.push(eq(studioProjects.status, filter.status));
@@ -485,6 +529,7 @@ export async function listStudioProjects(filter: {
       id: studioProjects.id,
       projectNumber: studioProjects.projectNumber,
       studioCustomerId: studioProjects.studioCustomerId,
+      projectId: studioProjects.projectId,
       title: studioProjects.title,
       eventType: studioProjects.eventType,
       packageType: studioProjects.packageType,
@@ -535,6 +580,7 @@ export async function getStudioProjectById(id: string) {
       id: studioProjects.id,
       projectNumber: studioProjects.projectNumber,
       studioCustomerId: studioProjects.studioCustomerId,
+      projectId: studioProjects.projectId,
       title: studioProjects.title,
       eventType: studioProjects.eventType,
       packageType: studioProjects.packageType,
@@ -714,27 +760,18 @@ export async function getStudioProjectById(id: string) {
     .where(eq(studioTasks.studioProjectId, id))
     .orderBy(studioTasks.dueDate);
 
-  // 10. Financial Calculations
-  const contractTotal = Number(project.totalContractValue || 0) > 0
-    ? Number(project.totalContractValue)
-    : contracts.reduce((sum, c) => sum + Number(c.totalAmount || 0), 0);
-
-  const totalPaymentsReceived = payments
-    .filter((p) => p.status === "received")
-    .reduce((sum, p) => sum + Number(p.amount || 0), 0);
-
-  const directExpensesTotal = expenses
-    .reduce((sum, e) => sum + Number(e.amount || 0), 0);
-
-  const personnelCostTotal = assignedPersonnel
-    .reduce((sum, p) => sum + Number(p.totalCalculated || 0), 0);
-
-  const rentalCostTotal = rentals
-    .reduce((sum, r) => sum + Number(r.rentalCost || 0), 0);
-
-  const totalCost = directExpensesTotal + personnelCostTotal + rentalCostTotal;
+  // Canonical ERP accounting is authoritative; Studio rows are metadata only.
+  const canonicalInvoices = project.projectId ? await db.select().from(invoices).where(and(eq(invoices.projectId, project.projectId), eq(invoices.status, "issued"))) : [];
+  const canonicalPayments = project.projectId ? await db.select().from(corePayments).where(and(eq(corePayments.projectId, project.projectId), eq(corePayments.status, "completed"), eq(corePayments.paymentType, "customer_receipt"))) : [];
+  const canonicalExpenses = project.projectId ? await db.select().from(coreExpenses).where(and(eq(coreExpenses.projectId, project.projectId), eq(coreExpenses.status, "posted"))) : [];
+  const contractTotal = canonicalInvoices.reduce((sum, row) => sum + Number(row.grandTotal), 0);
+  const totalPaymentsReceived = canonicalPayments.reduce((sum, row) => sum + Number(row.amount), 0);
+  const personnelCostTotal = canonicalExpenses.filter((row) => ["personnel", "salary"].includes(row.category)).reduce((sum, row) => sum + Number(row.amount), 0);
+  const rentalCostTotal = canonicalExpenses.filter((row) => row.category === "rental").reduce((sum, row) => sum + Number(row.amount), 0);
+  const directExpensesTotal = canonicalExpenses.filter((row) => !["personnel", "salary", "rental"].includes(row.category)).reduce((sum, row) => sum + Number(row.amount), 0);
+  const totalCost = canonicalExpenses.reduce((sum, row) => sum + Number(row.amount), 0);
   const grossProfit = contractTotal - totalCost;
-  const remainingBalance = Math.max(0, contractTotal - totalPaymentsReceived);
+  const remainingBalance = canonicalInvoices.reduce((sum, row) => sum + Number(row.balanceDue), 0);
   const marginPercent = contractTotal > 0 ? ((grossProfit / contractTotal) * 100).toFixed(1) : "0";
 
   return {
@@ -750,6 +787,13 @@ export async function getStudioProjectById(id: string) {
     calendarEvents,
     tasks,
     financialSummary: {
+      source: "erp",
+      invoicedRevenue: contractTotal,
+      recognizedRevenue: contractTotal,
+      revenueRecognitionBasis: "issued_invoices",
+      collectedRevenue: totalPaymentsReceived,
+      postedCost: totalCost,
+      outstandingReceivable: remainingBalance,
       contractTotal,
       totalPaymentsReceived,
       remainingBalance,
@@ -776,6 +820,7 @@ export async function createStudioProject(input: CreateProjectInput) {
   const [customer] = await db
     .select({
       id: studioCustomers.id,
+      customerId: studioCustomers.customerId,
       name: customers.name,
       mobile: customers.mobile,
     })
@@ -801,13 +846,26 @@ export async function createStudioProject(input: CreateProjectInput) {
 
   const eventDate = input.eventDate ? new Date(input.eventDate) : new Date();
   const initialStatus = input.status || "lead";
+  if (Number.isNaN(eventDate.getTime())) throw new ApiError(400, "تاریخ رویداد نامعتبر است.");
+  if (!VALID_PROJECT_STATUSES.includes(initialStatus as any)) throw new ApiError(400, "وضعیت پروژه نامعتبر است.");
 
   return db.transaction(async (tx) => {
+    let coreProjectId = input.coreProjectId || null;
+    if (coreProjectId) {
+      assertUuid(coreProjectId);
+      const [coreProject] = await tx.select({ id: projects.id }).from(projects).where(eq(projects.id, coreProjectId)).limit(1);
+      if (!coreProject) throw new ApiError(404, "پروژه مالی انتخاب‌شده یافت نشد.");
+    } else {
+      const [coreProject] = await tx.insert(projects).values({ code: `ATL-${projectNumber}`, name: input.title.trim(), label: "پروژه آتلیه", description: input.notes?.trim() || null, status: initialStatus === "cancelled" ? "archived" : "active", startDate: eventDate, managerEmployeeId: input.managerEmployeeId || null }).returning();
+      coreProjectId = coreProject.id;
+    }
+    await tx.insert(customerProjectMemberships).values({ customerId: customer.customerId, projectId: coreProjectId }).onConflictDoNothing();
     const [project] = await tx
       .insert(studioProjects)
       .values({
         projectNumber,
         studioCustomerId: input.studioCustomerId,
+        projectId: coreProjectId,
         title: input.title.trim(),
         eventType: input.eventType || "wedding",
         packageType: input.packageType?.trim() || "standard",
@@ -830,6 +888,7 @@ export async function createStudioProject(input: CreateProjectInput) {
         title: "ایجاد پرونده پروژه جدید",
         description: `پروژه «${project.title}» برای مشتری «${customer.name}» در مرحله «${getStageTitle(initialStatus)}» ثبت گردید.`,
         authorName: input.authorName || "مدیر استودیو",
+        actorEmployeeId: input.actorId || null,
         metadata: {
           projectNumber,
           initialStatus,
@@ -839,6 +898,10 @@ export async function createStudioProject(input: CreateProjectInput) {
       },
       tx
     );
+    await logAuditEvent("STUDIO_PROJECT_CREATED", "studio_project", project.id, {
+      coreProjectId,
+      status: initialStatus,
+    }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || undefined }, tx);
 
     // Initialize production plan
     const targetDelivery = new Date(eventDate.getTime() + 30 * 24 * 60 * 60 * 1000);
@@ -907,7 +970,7 @@ export async function updateStudioProject(id: string, input: UpdateProjectInput)
     if (input.eventDate !== undefined && input.eventDate !== null) {
       const newD = new Date(input.eventDate);
       if (existing.eventDate.toISOString() !== newD.toISOString()) {
-        changes.push(`تاریخ برگزاری: ${newD.toLocaleDateString("fa-IR")}`);
+        changes.push(`تاریخ برگزاری: ${toJalaliDate(newD)}`);
       }
       updateData.eventDate = newD;
     }
@@ -920,6 +983,7 @@ export async function updateStudioProject(id: string, input: UpdateProjectInput)
     if (input.backupLocation !== undefined) updateData.backupLocation = input.backupLocation?.trim() || null;
 
     if (input.status !== undefined && input.status !== null && input.status !== existing.status) {
+      if (!VALID_PROJECT_STATUSES.includes(input.status as any)) throw new ApiError(400, "وضعیت پروژه نامعتبر است.");
       changes.push(`وضعیت: ${getStageTitle(input.status)}`);
       updateData.status = input.status;
     }
@@ -960,18 +1024,24 @@ export async function updateStudioProject(id: string, input: UpdateProjectInput)
           title: "ویرایش مشخصات پروژه",
           description: `تغییرات اعمال‌شده:\n• ${changes.join("\n• ")}`,
           authorName: input.authorName || "مدیر استودیو",
+          actorEmployeeId: input.actorId || null,
           metadata: { changes },
         },
         tx
       );
+      await logAuditEvent("STUDIO_PROJECT_UPDATED", "studio_project", id, {
+        coreProjectId: existing.projectId,
+        before: existing,
+        after: updated,
+      }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || undefined }, tx);
     }
 
     return updated;
   });
 }
 
-export async function updateStudioProjectStatus(id: string, newStatus: string, authorName: string = "مدیر استودیو") {
-  return updateStudioProjectStage(id, newStatus, undefined, authorName);
+export async function updateStudioProjectStatus(id: string, newStatus: string, authorName: string = "مدیر استودیو", actorId?: string) {
+  return updateStudioProjectStage(id, newStatus, undefined, authorName, actorId);
 }
 
 // ==========================================
@@ -980,6 +1050,7 @@ export async function updateStudioProjectStatus(id: string, newStatus: string, a
 
 export async function createStudioContract(projectId: string, input: CreateContractInput) {
   assertUuid(projectId);
+  const idempotencyKey = input.idempotencyKey?.trim() || crypto.randomUUID();
 
   const total = Number(decimal(input.totalAmount, "مبلغ قرارداد", 2, true));
   const deposit = input.depositAmount ? Number(decimal(input.depositAmount, "مبلغ بیعانه", 2)) : 0;
@@ -995,19 +1066,28 @@ export async function createStudioContract(projectId: string, input: CreateContr
   const contractStatus = input.status || "signed";
 
   return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyKey}, 0))`);
+    const [prior] = await tx.select().from(studioContracts).where(eq(studioContracts.idempotencyKey, idempotencyKey)).limit(1);
+    if (prior) return { ...prior, remainingBalance: (Number(prior.totalAmount) - Number(prior.depositAmount)).toFixed(2) };
     const [project] = await tx
-      .select()
+      .select({ id: studioProjects.id, title: studioProjects.title, status: studioProjects.status, projectId: studioProjects.projectId, customerId: studioCustomers.customerId })
       .from(studioProjects)
+      .innerJoin(studioCustomers, eq(studioProjects.studioCustomerId, studioCustomers.id))
       .where(eq(studioProjects.id, projectId))
       .limit(1);
 
     if (!project) throw new ApiError(404, "پروژه یافت نشد.");
+    if (!project.projectId) throw new ApiError(422, "پروژه آتلیه هنوز به پروژه مالی متصل نیست.");
+    const invoice = await createInvoice({ requestKey: `studio-contract:${idempotencyKey}`, requestHash: requestHash({ projectId, total, contractDate: contractDate.toISOString() }), customerId: project.customerId, projectId: project.projectId, invoiceDate: contractDate, dueDate: deliveryDate, items: [{ productType: "custom", isCustom: true, productName: `قرارداد آتلیه - ${project.title}`, quantity: 1, unitPrice: total, unitCost: 0 }], notes: input.termsAndConditions?.trim() || `قرارداد ${contractNumber}`, auditContext: { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || "کاربر آتلیه" } }, tx);
 
     const [contract] = await tx
       .insert(studioContracts)
       .values({
         contractNumber,
         studioProjectId: projectId,
+        invoiceId: invoice.id,
+        idempotencyKey,
+        financialStatus: "posted",
         totalAmount: total.toFixed(2),
         depositAmount: deposit.toFixed(2),
         installmentsCount: installments,
@@ -1018,19 +1098,6 @@ export async function createStudioContract(projectId: string, input: CreateContr
         status: contractStatus,
       })
       .returning();
-
-    // If deposit was paid upfront, create a payment record
-    if (deposit > 0) {
-      await tx.insert(studioProjectPayments).values({
-        studioProjectId: projectId,
-        amount: deposit.toFixed(2),
-        paymentType: "deposit",
-        paymentMethod: "card_transfer",
-        paidAt: contractDate,
-        status: "received",
-        notes: `پیش‌پرداخت قرارداد شماره ${contractNumber}`,
-      });
-    }
 
     // Advance project status if it was in lead/contact/proposal
     const newStatus = ["lead", "contact", "proposal"].includes(project.status)
@@ -1054,15 +1121,18 @@ export async function createStudioContract(projectId: string, input: CreateContr
         title: `تنظیم قرارداد رسمی شماره ${contractNumber}`,
         description: `قرارداد به ارزش ${total.toLocaleString("fa-IR")} تومان و بیعانه ${deposit.toLocaleString("fa-IR")} تومان ثبت و منعقد گردید.`,
         authorName: input.authorName || "مدیر استودیو",
+        actorEmployeeId: input.actorId || null,
         metadata: {
           contractNumber,
           totalAmount: total,
           depositAmount: deposit,
           status: contractStatus,
+          invoiceId: invoice.id,
         },
       },
       tx
     );
+    await logAuditEvent("STUDIO_CONTRACT_POSTED", "studio_contract", contract.id, { projectId: project.projectId, studioProjectId: projectId, invoiceId: invoice.id, amount: total }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || "کاربر آتلیه" }, tx);
 
     return {
       ...contract,
@@ -1082,6 +1152,8 @@ export async function updateStudioContract(contractId: string, input: UpdateCont
       .limit(1);
 
     if (!existing) throw new ApiError(404, "قرارداد یافت نشد.");
+    if (existing.invoiceId && input.totalAmount !== undefined && Number(input.totalAmount) !== Number(existing.totalAmount)) throw new ApiError(409, "مبلغ قرارداد دارای فاکتور صادرشده است؛ ابتدا از فرآیند اصلاح/برگشت فاکتور استفاده کنید.");
+    if (existing.invoiceId && input.status === "cancelled") throw new ApiError(409, "لغو قرارداد مالی باید همراه با فرآیند برگشت فاکتور انجام شود.");
 
     const updateData: Partial<typeof studioContracts.$inferInsert> = {
       updatedAt: new Date(),
@@ -1126,6 +1198,7 @@ export async function updateStudioContract(contractId: string, input: UpdateCont
         title: `به‌روزرسانی قرارداد شماره ${existing.contractNumber}`,
         description: `وضعیت قرارداد: ${updated.status} - مبلغ: ${Number(updated.totalAmount).toLocaleString("fa-IR")} تومان`,
         authorName: input.authorName || "مدیر استودیو",
+        actorEmployeeId: input.actorId || null,
         metadata: {
           contractNumber: existing.contractNumber,
           status: updated.status,
@@ -1133,6 +1206,7 @@ export async function updateStudioContract(contractId: string, input: UpdateCont
       },
       tx
     );
+    await logAuditEvent("STUDIO_CONTRACT_UPDATED", "studio_contract", contractId, { before: existing, after: updated }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || undefined }, tx);
 
     return updated;
   });
@@ -1153,28 +1227,49 @@ export async function listProjectPayments(projectId: string) {
 
 export async function createStudioPayment(projectId: string, input: CreatePaymentInput) {
   assertUuid(projectId);
+  assertUuid(input.accountId);
+  const idempotencyKey = input.idempotencyKey?.trim() || crypto.randomUUID();
   const amount = Number(decimal(input.amount, "مبلغ دریافتی", 2, true));
   const paidAt = input.paidAt ? new Date(input.paidAt) : new Date();
+  if (Number.isNaN(paidAt.getTime())) throw new ApiError(400, "تاریخ پرداخت نامعتبر است.");
 
   return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyKey}, 0))`);
+    const [prior] = await tx.select().from(studioProjectPayments).where(eq(studioProjectPayments.idempotencyKey, idempotencyKey)).limit(1);
+    if (prior) return prior;
     const [project] = await tx
-      .select({ id: studioProjects.id, title: studioProjects.title })
+      .select({ id: studioProjects.id, title: studioProjects.title, projectId: studioProjects.projectId, customerId: studioCustomers.customerId })
       .from(studioProjects)
+      .innerJoin(studioCustomers, eq(studioProjects.studioCustomerId, studioCustomers.id))
       .where(eq(studioProjects.id, projectId))
       .limit(1);
 
     if (!project) throw new ApiError(404, "پروژه یافت نشد.");
+    if (!project.projectId) throw new ApiError(422, "پروژه آتلیه به پروژه مالی متصل نیست.");
+    let invoiceId = input.invoiceId || null;
+    if (invoiceId) assertUuid(invoiceId);
+    if (!invoiceId) {
+      const [contract] = await tx.select({ invoiceId: studioContracts.invoiceId }).from(studioContracts).where(and(eq(studioContracts.studioProjectId, projectId), eq(studioContracts.financialStatus, "posted"))).orderBy(desc(studioContracts.createdAt)).limit(1);
+      invoiceId = contract?.invoiceId || null;
+    }
+    if (!invoiceId) throw new ApiError(422, "برای ثبت دریافت ابتدا فاکتور قرارداد صادر کنید.");
+    const canonical = await postCanonicalReceipt(tx, { requestKey: `studio-payment:${idempotencyKey}`, requestHash: requestHash({ projectId, invoiceId, accountId: input.accountId, amount, paidAt: paidAt.toISOString() }), customerId: project.customerId, projectId: project.projectId, invoiceId, accountId: input.accountId, amount, paymentDate: paidAt, paymentMethod: input.paymentMethod || "card_transfer", referenceNumber: input.referenceCode, notes: input.notes }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || "کاربر آتلیه" });
 
     const [payment] = await tx
       .insert(studioProjectPayments)
       .values({
         studioProjectId: projectId,
+        paymentId: canonical.id,
+        invoiceId,
+        accountId: input.accountId,
+        idempotencyKey,
+        financialStatus: "posted",
         amount: amount.toFixed(2),
         paymentType: input.paymentType || "installment_1",
         paymentMethod: input.paymentMethod || "card_transfer",
         referenceCode: input.referenceCode?.trim() || null,
         paidAt,
-        status: input.status || "received",
+        status: "received",
         notes: input.notes?.trim() || null,
       })
       .returning();
@@ -1193,6 +1288,7 @@ export async function createStudioPayment(projectId: string, input: CreatePaymen
         title: `ثبت ${typeLabel} به مبلغ ${amount.toLocaleString("fa-IR")} تومان`,
         description: `روش پرداخت: ${input.paymentMethod || "کارت به کارت"} ${input.referenceCode ? `(پیگیری: ${input.referenceCode})` : ""}`,
         authorName: input.authorName || "حسابداری استودیو",
+        actorEmployeeId: input.actorId || null,
         metadata: {
           paymentId: payment.id,
           amount,
@@ -1202,12 +1298,13 @@ export async function createStudioPayment(projectId: string, input: CreatePaymen
       },
       tx
     );
+    await logAuditEvent("STUDIO_PAYMENT_POSTED", "studio_payment", payment.id, { projectId: project.projectId, studioProjectId: projectId, canonicalPaymentId: canonical.id, amount }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || undefined }, tx);
 
     return payment;
   });
 }
 
-export async function deleteStudioPayment(paymentId: string) {
+export async function deleteStudioPayment(paymentId: string, actor?: { employeeId: string; employeeName: string }) {
   assertUuid(paymentId);
 
   return db.transaction(async (tx) => {
@@ -1219,21 +1316,24 @@ export async function deleteStudioPayment(paymentId: string) {
 
     if (!payment) throw new ApiError(404, "پرداختی یافت نشد.");
 
-    await tx.delete(studioProjectPayments).where(eq(studioProjectPayments.id, paymentId));
+    if (payment.paymentId || payment.financialStatus === "posted") throw new ApiError(409, "پرداخت ثبت‌شده قابل حذف نیست؛ برگشت مالی باید از فرآیند حسابداری انجام شود.");
+    await tx.update(studioProjectPayments).set({ financialStatus: "voided", voidReason: "لغو رکورد پیش‌نویس", voidedAt: new Date(), status: "cancelled" }).where(eq(studioProjectPayments.id, paymentId));
 
     await logProjectTimeline(
       payment.studioProjectId,
       {
-        actionType: "PAYMENT_DELETED",
-        title: `حذف رکورد پرداختی به مبلغ ${Number(payment.amount).toLocaleString("fa-IR")} تومان`,
-        description: `رسید پرداخت مربوط به تاریخ ${payment.paidAt.toLocaleDateString("fa-IR")} حذف گردید.`,
-        authorName: "حسابداری استودیو",
+        actionType: "PAYMENT_VOIDED",
+        title: `لغو رکورد پیش‌نویس پرداخت به مبلغ ${Number(payment.amount).toLocaleString("fa-IR")} تومان`,
+        description: "رکورد بدون حذف سابقه لغو شد.",
+        authorName: actor?.employeeName || "حسابداری استودیو",
+        actorEmployeeId: actor?.employeeId || null,
         metadata: { paymentId },
       },
       tx
     );
+    await logAuditEvent("STUDIO_PAYMENT_VOIDED", "studio_payment", paymentId, { studioProjectId: payment.studioProjectId, before: { status: payment.financialStatus }, after: { status: "voided" } }, { userId: actor?.employeeId, employeeId: actor?.employeeId, userName: actor?.employeeName }, tx);
 
-    return { success: true, message: "پرداختی با موفقیت حذف شد." };
+    return { success: true, message: "رکورد پیش‌نویس بدون حذف سابقه لغو شد." };
   });
 }
 
@@ -1252,25 +1352,39 @@ export async function listProjectExpenses(projectId: string) {
 
 export async function createStudioExpense(projectId: string, input: CreateExpenseInput) {
   assertUuid(projectId);
+  const idempotencyKey = input.idempotencyKey?.trim() || crypto.randomUUID();
   if (!input.title || !input.title.trim()) {
     throw new ApiError(400, "عنوان هزینه الزامی است.");
   }
   const amount = Number(decimal(input.amount, "مبلغ هزینه", 2, true));
   const paidAt = input.paidAt ? new Date(input.paidAt) : new Date();
+  if (Number.isNaN(paidAt.getTime())) throw new ApiError(400, "تاریخ هزینه نامعتبر است.");
+  if (input.accountId) assertUuid(input.accountId);
 
   return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyKey}, 0))`);
+    const [prior] = await tx.select().from(studioProjectExpenses).where(eq(studioProjectExpenses.idempotencyKey, idempotencyKey)).limit(1);
+    if (prior) return prior;
     const [project] = await tx
-      .select({ id: studioProjects.id, title: studioProjects.title })
+      .select({ id: studioProjects.id, title: studioProjects.title, projectId: studioProjects.projectId })
       .from(studioProjects)
       .where(eq(studioProjects.id, projectId))
       .limit(1);
 
     if (!project) throw new ApiError(404, "پروژه یافت نشد.");
+    if (!project.projectId) throw new ApiError(422, "پروژه آتلیه به پروژه مالی متصل نیست.");
+    const paid = (input.paymentStatus || "paid") === "paid";
+    const canonical = await postCanonicalExpense(tx, { requestKey: `studio-expense:${idempotencyKey}`, requestHash: requestHash({ projectId, accountId: input.accountId || null, amount, paidAt: paidAt.toISOString(), title: input.title.trim() }), projectId: project.projectId, accountId: input.accountId || null, title: input.title.trim(), category: input.expenseCategory || "misc", amount, expenseDate: paidAt, description: input.notes || input.recipientName || null, paid }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || "کاربر آتلیه" });
 
     const [expense] = await tx
       .insert(studioProjectExpenses)
       .values({
         studioProjectId: projectId,
+        expenseId: canonical.expense.id,
+        paymentId: canonical.payment?.id || null,
+        accountId: input.accountId || null,
+        idempotencyKey,
+        financialStatus: "posted",
         expenseCategory: input.expenseCategory || "personnel",
         title: input.title.trim(),
         amount: amount.toFixed(2),
@@ -1289,6 +1403,7 @@ export async function createStudioExpense(projectId: string, input: CreateExpens
         title: `ثبت هزینه «${expense.title}»`,
         description: `مبلغ: ${amount.toLocaleString("fa-IR")} تومان ${expense.recipientName ? `- دریافت‌کننده: ${expense.recipientName}` : ""}`,
         authorName: input.authorName || "مدیر استودیو",
+        actorEmployeeId: input.actorId || null,
         metadata: {
           expenseId: expense.id,
           category: expense.expenseCategory,
@@ -1297,12 +1412,13 @@ export async function createStudioExpense(projectId: string, input: CreateExpens
       },
       tx
     );
+    await logAuditEvent("STUDIO_EXPENSE_POSTED", "studio_expense", expense.id, { projectId: project.projectId, studioProjectId: projectId, canonicalExpenseId: canonical.expense.id, amount }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || undefined }, tx);
 
     return expense;
   });
 }
 
-export async function deleteStudioExpense(expenseId: string) {
+export async function deleteStudioExpense(expenseId: string, actor?: { employeeId: string; employeeName: string }) {
   assertUuid(expenseId);
 
   return db.transaction(async (tx) => {
@@ -1314,21 +1430,24 @@ export async function deleteStudioExpense(expenseId: string) {
 
     if (!expense) throw new ApiError(404, "هزینه یافت نشد.");
 
-    await tx.delete(studioProjectExpenses).where(eq(studioProjectExpenses.id, expenseId));
+    if (expense.expenseId || expense.financialStatus === "posted") throw new ApiError(409, "هزینه ثبت‌شده قابل حذف نیست؛ برگشت مالی باید از فرآیند حسابداری انجام شود.");
+    await tx.update(studioProjectExpenses).set({ financialStatus: "voided", voidReason: "لغو رکورد پیش‌نویس", voidedAt: new Date(), paymentStatus: "voided" }).where(eq(studioProjectExpenses.id, expenseId));
 
     await logProjectTimeline(
       expense.studioProjectId,
       {
-        actionType: "EXPENSE_DELETED",
-        title: `حذف هزینه «${expense.title}»`,
-        description: `هزینه به مبلغ ${Number(expense.amount).toLocaleString("fa-IR")} تومان حذف گردید.`,
-        authorName: "مدیر استودیو",
+        actionType: "EXPENSE_VOIDED",
+        title: `لغو پیش‌نویس هزینه «${expense.title}»`,
+        description: "رکورد بدون حذف سابقه لغو شد.",
+        authorName: actor?.employeeName || "مدیر استودیو",
+        actorEmployeeId: actor?.employeeId || null,
         metadata: { expenseId },
       },
       tx
     );
+    await logAuditEvent("STUDIO_EXPENSE_VOIDED", "studio_expense", expenseId, { studioProjectId: expense.studioProjectId, before: { status: expense.financialStatus }, after: { status: "voided" } }, { userId: actor?.employeeId, employeeId: actor?.employeeId, userName: actor?.employeeName }, tx);
 
-    return { success: true, message: "هزینه با موفقیت حذف شد." };
+    return { success: true, message: "پیش‌نویس هزینه بدون حذف سابقه لغو شد." };
   });
 }
 
@@ -1340,8 +1459,9 @@ export async function assignPersonnelToProject(projectId: string, input: AssignP
   assertUuid(projectId);
   assertUuid(input.personnelId);
 
-  const [project] = await db.select({ id: studioProjects.id }).from(studioProjects).where(eq(studioProjects.id, projectId)).limit(1);
+  const [project] = await db.select({ id: studioProjects.id, projectId: studioProjects.projectId }).from(studioProjects).where(eq(studioProjects.id, projectId)).limit(1);
   if (!project) throw new ApiError(404, "پروژه یافت نشد.");
+  if (!project.projectId) throw new ApiError(422, "پروژه آتلیه به پروژه مالی متصل نیست.");
 
   const [personnel] = await db.select({ id: studioPersonnel.id, fullName: studioPersonnel.fullName, primaryRole: studioPersonnel.primaryRole }).from(studioPersonnel).where(eq(studioPersonnel.id, input.personnelId)).limit(1);
   if (!personnel) throw new ApiError(404, "عوامل یا پرسنل یافت نشد.");
@@ -1372,10 +1492,12 @@ export async function assignPersonnelToProject(projectId: string, input: AssignP
         title: `تخصیص عامل اجرایی: ${personnel.fullName}`,
         description: `نقش: ${personnel.primaryRole} - دستمزد مصوب: ${Number(total).toLocaleString("fa-IR")} تومان`,
         authorName: input.authorName || "مدیر تولید استودیو",
+        actorEmployeeId: input.actorId || null,
         metadata: { personnelId: personnel.id, salaryRecordId: record.id, totalCalculated: total },
       },
       tx
     );
+    await logAuditEvent("STUDIO_PERSONNEL_ASSIGNED", "personnel_salary", record.id, { studioProjectId: projectId, coreProjectId: project.projectId, personnelId: input.personnelId, amount: total }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || undefined }, tx);
 
     return record;
   });
@@ -1387,8 +1509,9 @@ export async function addRentalToProject(projectId: string, input: AddRentalInpu
     throw new ApiError(400, "عنوان تجهیز کرایه‌ای الزامی است.");
   }
 
-  const [project] = await db.select({ id: studioProjects.id }).from(studioProjects).where(eq(studioProjects.id, projectId)).limit(1);
+  const [project] = await db.select({ id: studioProjects.id, projectId: studioProjects.projectId }).from(studioProjects).where(eq(studioProjects.id, projectId)).limit(1);
   if (!project) throw new ApiError(404, "پروژه یافت نشد.");
+  if (!project.projectId) throw new ApiError(422, "پروژه آتلیه به پروژه مالی متصل نیست.");
 
   if (input.supplierId) {
     assertUuid(input.supplierId);
@@ -1413,10 +1536,20 @@ export async function addRentalToProject(projectId: string, input: AddRentalInpu
   }
 
   return db.transaction(async (tx) => {
+    const idempotencyKey = input.idempotencyKey?.trim() || crypto.randomUUID();
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyKey}, 0))`);
+    const [prior] = await tx.select().from(rentalEquipment).where(eq(rentalEquipment.idempotencyKey, idempotencyKey)).limit(1);
+    if (prior) return prior;
+    const canonical = await postCanonicalExpense(tx, { requestKey: `studio-rental:${idempotencyKey}`, requestHash: requestHash({ projectId, itemTitle: input.itemTitle.trim(), cost, pickup: pickup.toISOString() }), projectId: project.projectId, accountId: input.accountId || null, title: `اجاره تجهیز: ${input.itemTitle.trim()}`, category: "rental", amount: cost, expenseDate: pickup, description: input.notes || input.rentalCompany || null, supplierId: input.supplierId || null, paymentType: input.supplierId ? "supplier_payment" : "expense_payment", paid: Boolean(input.accountId) }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || "کاربر آتلیه" });
     const [rental] = await tx
       .insert(rentalEquipment)
       .values({
         studioProjectId: projectId,
+        expenseId: canonical.expense.id,
+        paymentId: canonical.payment?.id || null,
+        accountId: input.accountId || null,
+        idempotencyKey,
+        financialStatus: "posted",
         supplierId: input.supplierId || null,
         itemTitle: input.itemTitle.trim(),
         rentalCompany: input.rentalCompany?.trim() || "تأمین‌کننده کرایه تجهیزات",
@@ -1435,10 +1568,12 @@ export async function addRentalToProject(projectId: string, input: AddRentalInpu
         title: `کرایه تجهیز خارجی: ${rental.itemTitle}`,
         description: `هزینه کرایه: ${Number(cost).toLocaleString("fa-IR")} تومان - شرکت: ${rental.rentalCompany}`,
         authorName: input.authorName || "مدیر فنی",
+        actorEmployeeId: input.actorId || null,
         metadata: { rentalId: rental.id, cost },
       },
       tx
     );
+    await logAuditEvent("STUDIO_RENTAL_POSTED", "rental_equipment", rental.id, { projectId: project.projectId, studioProjectId: projectId, canonicalExpenseId: canonical.expense.id, amount: cost }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || undefined }, tx);
 
     return rental;
   });
@@ -1460,10 +1595,10 @@ export async function reserveEquipmentForProject(projectId: string, input: Reser
     throw new ApiError(400, "تاریخ پایان رزرو باید بعد از شروع باشد.");
   }
 
-  // Conflict check
-  await checkEquipmentAvailability(input.equipmentId, from, to);
-
   return db.transaction(async (tx) => {
+    await lockScheduleResources(tx, [input.equipmentId], input.assignedPersonnelId ? [input.assignedPersonnelId] : []);
+    await assertEquipmentScheduleAvailable(tx, input.equipmentId, from, to);
+    if (input.assignedPersonnelId) await assertPersonnelScheduleAvailable(tx, input.assignedPersonnelId, from, to);
     const [equipment] = await tx.select({ id: studioEquipment.id, title: studioEquipment.title, code: studioEquipment.code }).from(studioEquipment).where(eq(studioEquipment.id, input.equipmentId)).limit(1);
 
     const [reservation] = await tx
@@ -1484,12 +1619,20 @@ export async function reserveEquipmentForProject(projectId: string, input: Reser
       {
         actionType: "EQUIPMENT_RESERVED",
         title: `رزرو تجهیز آتلیه: ${equipment?.title || "تجهیز"} (${equipment?.code || ""})`,
-        description: `بازه رزرو: از ${from.toLocaleDateString("fa-IR")} تا ${to.toLocaleDateString("fa-IR")}`,
+        description: `بازه رزرو: از ${toJalaliDate(from, { showTime: true })} تا ${toJalaliDate(to, { showTime: true })}`,
         authorName: input.authorName || "انباردار فنی",
+        actorEmployeeId: input.actorId || null,
         metadata: { reservationId: reservation.id, equipmentId: input.equipmentId },
       },
       tx
     );
+
+    await logAuditEvent("STUDIO_EQUIPMENT_RESERVED", "equipment_reservation", reservation.id, {
+      studioProjectId: projectId,
+      equipmentId: input.equipmentId,
+      reservedFrom: from.toISOString(),
+      reservedTo: to.toISOString(),
+    }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || undefined }, tx);
 
     return reservation;
   });

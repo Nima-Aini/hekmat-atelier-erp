@@ -8,6 +8,27 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: true
+      matrix:
+        timezone: [UTC, Asia/Tehran]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: atelier_ci
+          POSTGRES_PASSWORD: atelier_ci
+          POSTGRES_DB: atelier_ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U atelier_ci -d atelier_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TZ: ${{ matrix.timezone }}
+      DB_DRIVER: postgres
+      DATABASE_URL: postgresql://atelier_ci:atelier_ci@127.0.0.1:5432/atelier_ci
+      TEST_DATABASE_URL: postgresql://atelier_ci:atelier_ci@127.0.0.1:5432/atelier_ci
+      ALLOW_TEST_DATABASE: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -15,7 +36,47 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm test
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm run secrets:scan
+      - run: npm test
       - run: npm run build
+        env:
+          NODE_ENV: production
+          GIT_SHA: ${{ github.sha }}
+          AUTH_SECRET: ci-build-only-secret
+
+  restore-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: atelier_drill, POSTGRES_PASSWORD: atelier_drill, POSTGRES_DB: atelier_source }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U atelier_drill -d atelier_source"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CI: "true"
+      DB_DRIVER: postgres
+      DATABASE_URL: postgresql://atelier_drill:atelier_drill@127.0.0.1:5432/atelier_source
+      TEST_DATABASE_URL: postgresql://atelier_drill:atelier_drill@127.0.0.1:5432/atelier_source
+      POSTGRES_ADMIN_URL: postgresql://atelier_drill:atelier_drill@127.0.0.1:5432/postgres
+      ALLOW_TEST_DATABASE: "true"
+      RUN_POSTGRES_RESTORE_DRILL: "true"
+      BACKUP_STORAGE_DRIVER: local
+      BACKUP_LOCAL_PATH: /tmp/hekmat-atelier-drill
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - name: Install PostgreSQL 16 client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
+      - name: Verify PostgreSQL server and native tool versions
+        run: npm run postgres:check
+      - name: Run mandatory native backup and restore drill
+        run: npx vitest run tests/zz-backup-postgres-drill.test.ts
+      - name: Validate maintenance mode through real HTTP
+        run: npm run maintenance:http-drill

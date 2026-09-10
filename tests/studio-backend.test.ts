@@ -207,6 +207,18 @@ describe("Hekmat Atelier (حکمت آتلیه) - Backend Services & Workflows", 
       ).rejects.toThrow("تداخل زمانی!");
     });
 
+    it("serializes two concurrent overlapping reservations", async () => {
+      const concurrentEquipment = await createStudioEquipment({ title: `دوربین همزمان ${Date.now()}`, category: "camera" });
+      const from = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000);
+      const to = new Date(from.getTime() + 2 * 60 * 60 * 1000);
+      const results = await Promise.allSettled([
+        reserveStudioEquipment({ equipmentId: concurrentEquipment.id, reservedFrom: from, reservedTo: to }),
+        reserveStudioEquipment({ equipmentId: concurrentEquipment.id, reservedFrom: from, reservedTo: to }),
+      ]);
+      expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+      expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    });
+
     it("should update reservation status to checkout and checkin", async () => {
       const reservations = (await getStudioEquipmentById(equipmentId)).reservations;
       const firstRes = reservations[0];
@@ -416,16 +428,17 @@ describe("Hekmat Atelier (حکمت آتلیه) - Backend Services & Workflows", 
       expect(project360.productionPlan).toBeDefined();
       expect(project360.productionPlan?.steps.length).toBe(6);
 
-      // Verify backend financial computations
+      // Canonical ERP accounting is authoritative: a deposit field is not a
+      // receipt, and a pending wage is not posted until a real payment exists.
       const fin = project360.financialSummary;
       expect(fin.contractTotal).toBe(120000000);
-      expect(fin.totalPaymentsReceived).toBe(40000000);
-      expect(fin.remainingBalance).toBe(80000000);
-      expect(fin.personnelCostTotal).toBe(12000000);
+      expect(fin.totalPaymentsReceived).toBe(0);
+      expect(fin.remainingBalance).toBe(120000000);
+      expect(fin.personnelCostTotal).toBe(0);
       expect(fin.rentalCostTotal).toBe(18000000);
-      expect(fin.totalCost).toBe(30000000); // 12M + 18M = 30M
-      expect(fin.grossProfit).toBe(90000000); // 120M - 30M = 90M
-      expect(fin.marginPercent).toBe("75.0%"); // 90 / 120 * 100 = 75%
+      expect(fin.totalCost).toBe(18000000);
+      expect(fin.grossProfit).toBe(102000000);
+      expect(fin.marginPercent).toBe("85.0%");
     });
   });
 });

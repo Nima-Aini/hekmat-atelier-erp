@@ -2,6 +2,7 @@ import {
   pgTable,
   text,
   integer,
+  bigint,
   numeric,
   timestamp,
   boolean,
@@ -162,7 +163,16 @@ export const employeeAccounts = pgTable("employee_accounts", {
   roleId: uuid("role_id").references(() => roles.id),
   status: text("status").default("active").notNull(),
   lastLoginAt: timestamp("last_login_at"),
+  sessionInvalidBefore: timestamp("session_invalid_before"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const authLoginAttempts = pgTable("auth_login_attempts", {
+  key: text("key").primaryKey(),
+  attempts: integer("attempts").default(0).notNull(),
+  windowStartedAt: timestamp("window_started_at").defaultNow().notNull(),
+  blockedUntil: timestamp("blocked_until"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -613,10 +623,15 @@ export const expenses = pgTable("expenses", {
   projectId: uuid("project_id").references(() => projects.id),
   employeeId: uuid("employee_id").references(() => employees.id),
   accountId: uuid("account_id").references(() => accounts.id),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
   expenseDate: timestamp("expense_date").defaultNow().notNull(),
   title: text("title").notNull(),
   description: text("description"),
   receiptImageUrl: text("receipt_image_url"),
+  status: text("status").default("posted").notNull(),
+  reversalOfExpenseId: uuid("reversal_of_expense_id"),
+  reversalReason: text("reversal_reason"),
+  reversedAt: timestamp("reversed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -688,6 +703,7 @@ export const auditLogs = pgTable("audit_logs", {
   projectId: uuid("project_id").references(() => projects.id),
   parentLogId: uuid("parent_log_id"),
   userId: text("user_id").default("system_user"),
+  actorEmployeeId: uuid("actor_employee_id").references(() => employees.id, { onDelete: "set null" }),
   userName: text("user_name").default("کاربر سیستم"),
   details: jsonb("details"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -700,6 +716,19 @@ export const backups = pgTable("backups", {
   checksum: text("checksum").notNull(),
   status: text("status").default("completed").notNull(), // completed, failed, restored
   backupData: jsonb("backup_data"), // Complete serialized system snapshot
+  storageDriver: text("storage_driver").default("legacy").notNull(),
+  storageKey: text("storage_key"),
+  format: text("format").default("legacy_json").notNull(),
+  formatVersion: integer("format_version").default(1).notNull(),
+  sizeBytesBigint: bigint("size_bytes_bigint", { mode: "number" }),
+  schemaVersion: text("schema_version"),
+  gitSha: text("git_sha"),
+  databaseDriver: text("database_driver"),
+  createdById: uuid("created_by_id").references(() => employees.id, { onDelete: "set null" }),
+  notes: text("notes"),
+  failureReason: text("failure_reason"),
+  verifiedAt: timestamp("verified_at"),
+  metadata: jsonb("metadata"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -858,7 +887,7 @@ export const studioProjects = pgTable("studio_projects", {
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_studio_projects_core_project").on(t.projectId)]);
 
 // 16.3. Studio Contracts
 export const studioContracts = pgTable("studio_contracts", {
@@ -866,6 +895,8 @@ export const studioContracts = pgTable("studio_contracts", {
   contractNumber: text("contract_number").notNull().unique(), // e.g. CTR-1403-0001
   studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id, { onDelete: "cascade" }),
   invoiceId: uuid("invoice_id").references(() => invoices.id),
+  idempotencyKey: text("idempotency_key"),
+  financialStatus: text("financial_status").default("draft").notNull(),
   totalAmount: numeric("total_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   depositAmount: numeric("deposit_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   installmentsCount: integer("installments_count").default(1).notNull(),
@@ -876,7 +907,7 @@ export const studioContracts = pgTable("studio_contracts", {
   signedDocumentUrl: text("signed_document_url"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_studio_contracts_invoice").on(t.invoiceId), uniqueIndex("uq_studio_contracts_idempotency").on(t.idempotencyKey)]);
 
 // 16.4. Studio Personnel (Employee & Temporary Worker)
 export const studioPersonnel = pgTable("studio_personnel", {
@@ -918,11 +949,16 @@ export const personnelSalaryRecords = pgTable("personnel_salary_records", {
   totalCalculated: numeric("total_calculated", { precision: 15, scale: 2 }).default("0").notNull(),
   paymentStatus: text("payment_status").default("pending").notNull(), // pending, approved, paid
   paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
+  financialStatus: text("financial_status").default("draft").notNull(),
+  voidReason: text("void_reason"),
+  voidedAt: timestamp("voided_at"),
   settlementDate: timestamp("settlement_date"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_studio_salary_payment").on(t.paymentId), uniqueIndex("uq_studio_salary_idempotency").on(t.idempotencyKey)]);
 
 // 16.7. Studio Equipment
 export const studioEquipment = pgTable("studio_equipment", {
@@ -973,11 +1009,17 @@ export const rentalEquipment = pgTable("rental_equipment", {
   pickupDate: timestamp("pickup_date").notNull(),
   returnDate: timestamp("return_date").notNull(),
   expenseId: uuid("expense_id").references(() => expenses.id, { onDelete: "set null" }),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
+  financialStatus: text("financial_status").default("draft").notNull(),
+  voidReason: text("void_reason"),
+  voidedAt: timestamp("voided_at"),
   status: text("status").default("rented").notNull(), // planned, rented, returned, settled
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_rental_expense").on(t.expenseId), uniqueIndex("uq_rental_idempotency").on(t.idempotencyKey)]);
 
 // 16.10. Production Plans & Production Steps
 export const studioProductionPlans = pgTable("studio_production_plans", {
@@ -1064,6 +1106,7 @@ export const studioProjectTimelines = pgTable("studio_project_timelines", {
   title: text("title").notNull(),
   description: text("description"),
   authorName: text("author_name").default("مدیر استودیو"),
+  actorEmployeeId: uuid("actor_employee_id").references(() => employees.id, { onDelete: "set null" }),
   metadata: jsonb("metadata").default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -1072,6 +1115,11 @@ export const studioProjectTimelines = pgTable("studio_project_timelines", {
 export const studioProjectPayments = pgTable("studio_project_payments", {
   id: uuid("id").defaultRandom().primaryKey(),
   studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id, { onDelete: "cascade" }),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
+  invoiceId: uuid("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
+  financialStatus: text("financial_status").default("draft").notNull(),
   amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
   paymentType: text("payment_type").default("deposit").notNull(), // deposit, installment_1, installment_2, settlement, extra
   paymentMethod: text("payment_method").default("card_transfer").notNull(), // card_transfer, pos, cash, cheque, online
@@ -1079,13 +1127,20 @@ export const studioProjectPayments = pgTable("studio_project_payments", {
   paidAt: timestamp("paid_at").defaultNow().notNull(),
   status: text("status").default("received").notNull(), // received, pending, verified
   notes: text("notes"),
+  voidReason: text("void_reason"),
+  voidedAt: timestamp("voided_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_studio_payments_core_payment").on(t.paymentId), uniqueIndex("uq_studio_payments_idempotency").on(t.idempotencyKey)]);
 
 // 16.16. Studio Project Expenses (هزینه‌های مستقیم پروژه)
 export const studioProjectExpenses = pgTable("studio_project_expenses", {
   id: uuid("id").defaultRandom().primaryKey(),
   studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id, { onDelete: "cascade" }),
+  expenseId: uuid("expense_id").references(() => expenses.id, { onDelete: "set null" }),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
+  financialStatus: text("financial_status").default("draft").notNull(),
   expenseCategory: text("expense_category").default("personnel").notNull(), // personnel, rental, location, printing_album, catering, transport, retouch_edit, misc
   title: text("title").notNull(),
   amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
@@ -1093,8 +1148,10 @@ export const studioProjectExpenses = pgTable("studio_project_expenses", {
   paidAt: timestamp("paid_at").defaultNow().notNull(),
   paymentStatus: text("payment_status").default("paid").notNull(), // paid, pending
   notes: text("notes"),
+  voidReason: text("void_reason"),
+  voidedAt: timestamp("voided_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_studio_expenses_core_expense").on(t.expenseId), uniqueIndex("uq_studio_expenses_idempotency").on(t.idempotencyKey)]);
 
 // ==========================================
 // 17. HEKMAT ATELIER RELATIONS
@@ -1280,4 +1337,3 @@ export const studioNotificationsRelations = relations(studioNotifications, ({ on
     references: [studioProjects.id],
   }),
 }));
-

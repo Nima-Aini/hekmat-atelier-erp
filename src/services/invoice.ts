@@ -23,7 +23,7 @@ import { eq, and, sql, desc } from "drizzle-orm";
 import { recordInventoryTransaction } from "./inventory";
 import { resolveProductPrice } from "./pricing";
 import { recalculateCustomerHealth } from "./customerHealth";
-import { logAuditEvent } from "./audit";
+import { logAuditEvent, type AuditContext } from "./audit";
 
 export interface CreateInvoiceItemInput {
   productId?: string | null;
@@ -63,6 +63,7 @@ export interface CreateInvoiceInput {
   };
   notes?: string;
   manualInvoiceNumber?: string;
+  auditContext?: AuditContext;
 }
 
 /**
@@ -530,7 +531,7 @@ export async function createInvoice(input: CreateInvoiceInput, client?: Transact
       grandTotal,
       customerId,
       itemsCount: processedItems.length,
-    }, undefined, tx);
+    }, input.auditContext, tx);
 
     return createdInvoice;
   };

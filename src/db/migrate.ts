@@ -1,12 +1,20 @@
 import { db, pool } from "./index";
 import { sql } from "drizzle-orm";
+import { runVersionedMigrations } from "./migrations";
 
 /**
  * Creates all database tables if they don't exist.
  * This replaces drizzle-kit push for production on Render.com
  */
 export async function migrateDatabase() {
-  console.log("Running database migration...");
+  const migrationClient = typeof (pool as any).connect === "function" ? await (pool as any).connect() : null;
+  let lockAcquired = false;
+  try {
+    if (migrationClient) {
+      await migrationClient.query("SELECT pg_advisory_lock(hashtext($1))", ["hekmat_atelier_schema_migrations"]);
+      lockAcquired = true;
+    }
+    console.log("Running database migration...");
 
   try {
     await db.execute(sql`CREATE EXTENSION IF NOT EXISTS "pgcrypto";`);
@@ -1041,7 +1049,7 @@ export async function migrateDatabase() {
       SELECT r.id, p.id FROM roles r JOIN permissions p ON p.code IN ('customers.view','customers.create','customers.update','orders.view','orders.create','invoices.view','invoices.create','invoices.update','commissions.view','reports.view','projects.view','customers.transfer','payments.create') WHERE r.code='sales'
     ON CONFLICT DO NOTHING;
     INSERT INTO role_permissions(role_id, permission_id)
-      SELECT r.id, p.id FROM roles r JOIN permissions p ON p.code IN ('customers.view','customers.create','customers.update','orders.view','orders.create','orders.update','orders.edit','orders.cancel','orders.convert','orders.manage','notes.view','notes.create','notes.update','notes.complete','invoices.view','invoices.create','invoices.update','commissions.view','reports.view','cost.view','profit.view','projects.view','projects.create','projects.update','projects.price.manage','projects.commission.manage','projects.expense.manage','customers.transfer','payments.create','employees.view','employees.manage','expenses.view','expenses.create','expenses.edit','expenses.delete','purchases.view','purchases.create','purchases.edit','purchases.delete','alerts.view','alerts.resolve','production.create','financial.edit','admin.settings','backup.create','global_search','invoices.reverse','invoices.delete') WHERE r.code='manager'
+      SELECT r.id, p.id FROM roles r JOIN permissions p ON p.code IN ('customers.view','customers.create','customers.update','orders.view','orders.create','orders.update','orders.edit','orders.cancel','orders.convert','orders.manage','notes.view','notes.create','notes.update','notes.complete','invoices.view','invoices.create','invoices.update','commissions.view','reports.view','cost.view','profit.view','projects.view','projects.create','projects.update','projects.price.manage','projects.commission.manage','projects.expense.manage','customers.transfer','payments.create','employees.view','employees.manage','expenses.view','expenses.create','expenses.edit','expenses.delete','purchases.view','purchases.create','purchases.edit','purchases.delete','alerts.view','alerts.resolve','production.create','financial.edit','admin.settings','global_search','invoices.reverse','invoices.delete') WHERE r.code='manager'
     ON CONFLICT DO NOTHING;
     INSERT INTO role_permissions(role_id, permission_id)
       SELECT r.id, p.id FROM roles r JOIN permissions p ON p.code IN ('customers.view','customers.create','customers.update','invoices.view','invoices.create','invoices.update','customers.transfer','payments.create','projects.view','reports.view','products.view','global_search') WHERE r.code='visitor'
@@ -1598,5 +1606,10 @@ export async function migrateDatabase() {
 
   `);
 
+  await runVersionedMigrations();
   console.log("Migration completed successfully!");
+  } finally {
+    if (lockAcquired) await migrationClient.query("SELECT pg_advisory_unlock(hashtext($1))", ["hekmat_atelier_schema_migrations"]);
+    migrationClient?.release();
+  }
 }

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: hekmat-production
+  group: hekmat-atelier-production
   cancel-in-progress: false
 
 permissions:
@@ -16,6 +16,30 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: true
+      matrix:
+        timezone: [UTC, Asia/Tehran]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: atelier_ci
+          POSTGRES_PASSWORD: atelier_ci
+          POSTGRES_DB: atelier_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U atelier_ci -d atelier_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TZ: ${{ matrix.timezone }}
+      DB_DRIVER: postgres
+      DATABASE_URL: postgresql://atelier_ci:atelier_ci@127.0.0.1:5432/atelier_ci
+      TEST_DATABASE_URL: postgresql://atelier_ci:atelier_ci@127.0.0.1:5432/atelier_ci
+      ALLOW_TEST_DATABASE: "true"
 
     steps:
       - name: Checkout
@@ -30,30 +54,71 @@ jobs:
       - name: Install locked dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Run critical tests
-        run: npm test
-
       - name: Type-check
         run: npm run typecheck
 
+      - name: Run critical tests
+        run: npm test
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Scan tracked source for high-confidence secrets
+        run: npm run secrets:scan
+
       - name: Build production application
         run: npm run build
+        env:
+          NODE_ENV: production
+          GIT_SHA: ${{ github.sha }}
+          AUTH_SECRET: ci-build-only-secret
 
   deploy:
-    needs: verify
+    needs: [verify, restore-drill]
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 30
+    env:
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      PM2_APP_NAME: ${{ vars.PM2_APP_NAME }}
+      APP_PORT: ${{ vars.APP_PORT }}
+      READINESS_URL: ${{ vars.READINESS_URL }}
+      DEPLOY_REPOSITORY_URL: ${{ vars.DEPLOY_REPOSITORY_URL }}
+      EXPECTED_REPOSITORY_URL: https://github.com/${{ github.repository }}.git
+      SSH_HOST_VALUE: ${{ secrets.SSH_HOST }}
+      SSH_USER_VALUE: ${{ secrets.SSH_USER }}
+      SSH_KEY_VALUE: ${{ secrets.SSH_PRIVATE_KEY }}
+      SSH_PORT_VALUE: ${{ secrets.SSH_PORT }}
+      APP_ENV: production
 
     steps:
+      - name: Checkout verified revision for smoke tooling
+        uses: actions/checkout@v4
+
+      - name: Validate isolated deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_PATH PM2_APP_NAME APP_PORT READINESS_URL DEPLOY_REPOSITORY_URL; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required production repository variable: $name" >&2
+              exit 1
+            fi
+          done
+          for name in SSH_HOST_VALUE SSH_USER_VALUE SSH_KEY_VALUE SSH_PORT_VALUE; do
+            test -n "${!name:-}" || { echo "Missing required production secret: ${name%_VALUE}" >&2; exit 1; }
+          done
+          bash scripts/validate-deploy-config.sh
+
       - name: Deploy exact commit over SSH
         uses: appleboy/ssh-action@v1.2.2
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
+          port: ${{ secrets.SSH_PORT }}
           command_timeout: 25m
+          envs: DEPLOY_PATH,PM2_APP_NAME,APP_PORT,READINESS_URL,DEPLOY_REPOSITORY_URL,EXPECTED_REPOSITORY_URL,APP_ENV
           script: |
             set -e
             export NVM_DIR="${NVM_DIR:-/root/.nvm}"
@@ -63,11 +128,59 @@ jobs:
             command -v node
             command -v npm
             command -v pm2
-            cd /var/www/project2
-            git remote set-url origin https://github.com/Nima-Aini/hekmat.git
-            git fetch origin main
-            git show origin/main:deploy.sh > /tmp/hekmat-deploy.sh
-            chmod 700 /tmp/hekmat-deploy.sh
-            PROJECT_DIR=/var/www/project2 \
-            APP_NAME=akma-accounting \
-            bash /tmp/hekmat-deploy.sh "${{ github.sha }}"
+            : "${DEPLOY_PATH:?Missing DEPLOY_PATH}"
+            : "${PM2_APP_NAME:?Missing PM2_APP_NAME}"
+            : "${APP_PORT:?Missing APP_PORT}"
+            : "${READINESS_URL:?Missing READINESS_URL}"
+            : "${DEPLOY_REPOSITORY_URL:?Missing DEPLOY_REPOSITORY_URL}"
+            : "${APP_ENV:?Missing APP_ENV}"
+            cd "$DEPLOY_PATH"
+            test "$(git remote get-url origin)" = "$DEPLOY_REPOSITORY_URL" || { echo "Deployment directory is not the configured Atelier repository." >&2; exit 1; }
+            git fetch --no-tags origin "${{ github.sha }}"
+            git cat-file -e "${{ github.sha }}^{commit}"
+            git show "${{ github.sha }}:deploy.sh" > /tmp/hekmat-atelier-deploy.sh
+            chmod 700 /tmp/hekmat-atelier-deploy.sh
+            PROJECT_DIR="$DEPLOY_PATH" APP_NAME="$PM2_APP_NAME" PORT="$APP_PORT" READINESS_URL="$READINESS_URL" APP_ENV="$APP_ENV" EXPECTED_REPOSITORY_URL="$EXPECTED_REPOSITORY_URL" \
+              bash /tmp/hekmat-atelier-deploy.sh "${{ github.sha }}"
+
+      - name: Verify exact SHA and read-only smoke checks
+        run: npm run smoke:test
+        env:
+          SMOKE_BASE_URL: ${{ vars.READINESS_URL }}
+          EXPECTED_GIT_SHA: ${{ github.sha }}
+          EXPECTED_APP_ENV: production
+          EXPECTED_SCHEMA_VERSION: 005_backup_recovery
+
+  restore-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: atelier_drill, POSTGRES_PASSWORD: atelier_drill, POSTGRES_DB: atelier_source }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U atelier_drill -d atelier_source"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CI: "true"
+      DB_DRIVER: postgres
+      DATABASE_URL: postgresql://atelier_drill:atelier_drill@127.0.0.1:5432/atelier_source
+      TEST_DATABASE_URL: postgresql://atelier_drill:atelier_drill@127.0.0.1:5432/atelier_source
+      POSTGRES_ADMIN_URL: postgresql://atelier_drill:atelier_drill@127.0.0.1:5432/postgres
+      ALLOW_TEST_DATABASE: "true"
+      RUN_POSTGRES_RESTORE_DRILL: "true"
+      BACKUP_STORAGE_DRIVER: local
+      BACKUP_LOCAL_PATH: /tmp/hekmat-atelier-drill
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - name: Install PostgreSQL 16 client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
+      - name: Verify PostgreSQL server and native tool versions
+        run: npm run postgres:check
+      - run: npx vitest run tests/zz-backup-postgres-drill.test.ts
+      - name: Validate maintenance mode through real HTTP
+        run: npm run maintenance:http-drill

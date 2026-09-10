@@ -39,7 +39,7 @@ import {
   UserCheck
 } from "lucide-react";
 import { NeonBadge } from "@/components/ui/NeonBadge";
-import { toJalaliDate, formatMoney, formatNumber, gregorianToJalali, jalaliToGregorian, getJalaliMonthLength, toPersianDigits } from "@/lib/dateUtils";
+import { toJalaliDate, formatMoney, formatNumber, gregorianToJalali, jalaliToGregorian, getJalaliMonthLength, toPersianDigits, getBusinessWeekday, toBusinessGregorianDateString } from "@/lib/dateUtils";
 
 // Pipeline Stages as per specification
 const PIPELINE_STAGES = [
@@ -329,7 +329,7 @@ const ProjectExecutionPlanTab: React.FC<ProjectExecutionPlanTabProps> = ({
         role: roleName,
         conflictProject: conflictingEvent.projectNumber || conflictingEvent.projectTitle || "پروژه دیگر",
         conflictTitle: conflictingEvent.title,
-        conflictTime: `${new Date(conflictingEvent.startTime).toLocaleDateString("fa-IR")} ساعت ${new Date(conflictingEvent.startTime).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" })}`,
+        conflictTime: toJalaliDate(conflictingEvent.startTime, { showTime: true }),
       };
     }
     return null;
@@ -940,15 +940,14 @@ const GlobalProductionCalendarView: React.FC<GlobalProductionCalendarViewProps> 
   const handleGoToToday = () => {
     const today = gregorianToJalali(new Date());
     setCurrentJalali({ year: today.year || 1403, month: today.month || 1, day: today.day || 1 });
-    const todayG = new Date();
-    setSelectedDayYMD(todayG.toISOString().split("T")[0]);
+    setSelectedDayYMD(toBusinessGregorianDateString(new Date()));
   };
 
   // Workload analyzer for any gregorian date YYYY-MM-DD
   const analyzeWorkload = (ymdStr: string) => {
     const eventsOnDay = globalEvents.filter((e) => {
       if (!e.startTime) return false;
-      return e.startTime.split("T")[0] === ymdStr && e.eventType === "shooting";
+      return toBusinessGregorianDateString(e.startTime) === ymdStr && e.eventType === "shooting";
     });
 
     const count = eventsOnDay.length;
@@ -999,7 +998,7 @@ const GlobalProductionCalendarView: React.FC<GlobalProductionCalendarViewProps> 
   const firstDayGreg = jalaliToGregorian({ year: currentJalali.year, month: currentJalali.month, day: 1 });
   const firstDayDate = firstDayGreg;
   // Gregorian: 0 = Sun, 6 = Sat. Map to Persian: 0 = Sat, 1 = Sun, ..., 6 = Fri
-  const firstDayPersianIndex = (firstDayDate.getDay() + 1) % 7;
+  const firstDayPersianIndex = (getBusinessWeekday(firstDayDate) + 1) % 7;
 
   const monthCells = [];
   // Empty slots for offset
@@ -1009,7 +1008,7 @@ const GlobalProductionCalendarView: React.FC<GlobalProductionCalendarViewProps> 
   // Days of the month
   for (let d = 1; d <= monthLength; d++) {
     const gDate = jalaliToGregorian({ year: currentJalali.year, month: currentJalali.month, day: d });
-    const ymdStr = `${gDate.getFullYear()}-${String(gDate.getMonth() + 1).padStart(2, "0")}-${String(gDate.getDate()).padStart(2, "0")}`;
+    const ymdStr = toBusinessGregorianDateString(gDate);
     monthCells.push({
       type: "day" as const,
       dayNum: d,
@@ -1289,9 +1288,9 @@ const GlobalProductionCalendarView: React.FC<GlobalProductionCalendarViewProps> 
               // For simplicity, let's list 7 days starting from first day of month + weekday offset
               const dNum = Math.min(Math.max(currentJalali.day - firstDayPersianIndex + wIdx, 1), monthLength);
               const gDate = jalaliToGregorian({ year: currentJalali.year, month: currentJalali.month, day: dNum });
-              const ymdStr = `${gDate.getFullYear()}-${String(gDate.getMonth() + 1).padStart(2, "0")}-${String(gDate.getDate()).padStart(2, "0")}`;
+              const ymdStr = toBusinessGregorianDateString(gDate);
               const workload = analyzeWorkload(ymdStr);
-              const dayEvents = globalEvents.filter(e => e.startTime?.startsWith(ymdStr) && e.eventType === "shooting");
+              const dayEvents = globalEvents.filter(e => e.startTime && toBusinessGregorianDateString(e.startTime) === ymdStr && e.eventType === "shooting");
 
               return (
                 <div key={name} className="bg-slate-900/40 p-3 rounded-xl border border-slate-800 space-y-3 min-w-[130px]">
@@ -1397,6 +1396,7 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
   // Personnel & Equipment global lists for production planning
   const [personnelList, setPersonnelList] = useState<any[]>([]);
   const [equipmentList, setEquipmentList] = useState<any[]>([]);
+  const [financialAccounts, setFinancialAccounts] = useState<any[]>([]);
   const [globalEvents, setGlobalEvents] = useState<any[]>([]);
   const [equipmentReservationsList, setEquipmentReservationsList] = useState<any[]>([]);
 
@@ -1473,6 +1473,7 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
 
   // Payment Form State
   const [paymentForm, setPaymentForm] = useState(() => ({
+    accountId: "",
     amount: 0,
     paymentType: "deposit",
     paymentMethod: "card_transfer",
@@ -1483,6 +1484,7 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
 
   // Expense Form State
   const [expenseForm, setExpenseForm] = useState(() => ({
+    accountId: "",
     expenseCategory: "personnel",
     title: "",
     amount: 0,
@@ -1507,7 +1509,7 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
   const loadData = async () => {
     setLoading(true);
     try {
-      const [pipeRes, projRes, custRes, persRes, equipRes, calRes, resRes] = await Promise.all([
+      const [pipeRes, projRes, custRes, persRes, equipRes, calRes, resRes, accountRes] = await Promise.all([
         fetch("/api/studio/pipeline").then((r) => r.json()),
         fetch("/api/studio/projects?pageSize=100").then((r) => r.json()),
         fetch("/api/studio/customers?pageSize=100").then((r) => r.json()),
@@ -1515,6 +1517,7 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
         fetch("/api/studio/equipment?pageSize=100").then((r) => r.json()),
         fetch("/api/studio/calendar").then((r) => r.json()),
         fetch("/api/studio/equipment/reservations?pageSize=200").then((r) => r.json()),
+        fetch("/api/accounts").then((r) => r.json()),
       ]);
 
       if (pipeRes.success) {
@@ -1539,6 +1542,7 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
       if (resRes.success) {
         setEquipmentReservationsList(resRes.reservations || []);
       }
+      if (accountRes.success) setFinancialAccounts(accountRes.accounts || []);
     } catch (err) {
       console.error("Error loading CRM data:", err);
     } finally {
@@ -1659,7 +1663,7 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
     try {
       const res = await fetch(`/api/studio/projects/${selectedProjectId}/contracts`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(contractForm),
       }).then((r) => r.json());
 
@@ -1676,15 +1680,15 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
   // Save Payment
   const handleSavePayment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProjectId || Number(paymentForm.amount) <= 0) {
-      alert("مبلغ پرداختی باید بزرگتر از صفر باشد.");
+    if (!selectedProjectId || !paymentForm.accountId || Number(paymentForm.amount) <= 0) {
+      alert("مبلغ و حساب دریافت الزامی است.");
       return;
     }
 
     try {
       const res = await fetch(`/api/studio/projects/${selectedProjectId}/payments`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(paymentForm),
       }).then((r) => r.json());
 
@@ -1701,15 +1705,15 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
   // Save Expense
   const handleSaveExpense = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProjectId || !expenseForm.title.trim() || Number(expenseForm.amount) <= 0) {
-      alert("عنوان و مبلغ هزینه الزامی است.");
+    if (!selectedProjectId || !expenseForm.title.trim() || (expenseForm.paymentStatus === "paid" && !expenseForm.accountId) || Number(expenseForm.amount) <= 0) {
+      alert("عنوان، مبلغ و حساب پرداخت هزینه الزامی است.");
       return;
     }
 
     try {
       const res = await fetch(`/api/studio/projects/${selectedProjectId}/expenses`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(expenseForm),
       }).then((r) => r.json());
 
@@ -2760,7 +2764,7 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
                                 <div className="flex items-center justify-between">
                                   <h4 className="font-bold text-sm text-slate-200">{log.title}</h4>
                                   <span className="text-[11px] text-slate-500 font-mono">
-                                    {new Date(log.createdAt).toLocaleDateString("fa-IR")} - {new Date(log.createdAt).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" })}
+                                    {toJalaliDate(log.createdAt, { showTime: true })}
                                   </span>
                                 </div>
 
@@ -2877,7 +2881,8 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
 
                         <button
                           onClick={() => {
-                            setPaymentForm({
+                      setPaymentForm({
+                        accountId: "",
                               amount: 0,
                               paymentType: "installment_1",
                               paymentMethod: "card_transfer",
@@ -2959,7 +2964,8 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
 
                         <button
                           onClick={() => {
-                            setExpenseForm({
+                      setExpenseForm({
+                        accountId: "",
                               expenseCategory: "personnel",
                               title: "",
                               amount: 0,
@@ -3461,6 +3467,14 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
                 />
               </div>
 
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">حساب دریافت‌کننده *</label>
+                <select required value={paymentForm.accountId} onChange={(e) => setPaymentForm({ ...paymentForm, accountId: e.target.value })} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-white">
+                  <option value="">انتخاب حساب بانکی یا صندوق</option>
+                  {financialAccounts.map((account) => <option key={account.id} value={account.id}>{account.name} — {formatMoney(account.balance)}</option>)}
+                </select>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-300 mb-1">نوع پرداخت</label>
@@ -3550,6 +3564,13 @@ export const StudioCRMView: React.FC<{ onNavigate?: (tab: string) => void }> = (
             </div>
 
             <form onSubmit={handleSaveExpense} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">حساب پرداخت‌کننده *</label>
+                <select required value={expenseForm.accountId} onChange={(e) => setExpenseForm({ ...expenseForm, accountId: e.target.value })} className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-sm text-white">
+                  <option value="">انتخاب حساب بانکی یا صندوق</option>
+                  {financialAccounts.map((account) => <option key={account.id} value={account.id}>{account.name} — {formatMoney(account.balance)}</option>)}
+                </select>
+              </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">دسته‌بندی هزینه</label>
                 <select

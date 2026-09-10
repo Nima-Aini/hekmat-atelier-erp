@@ -9,8 +9,11 @@ import {
   studioProjects,
   employees,
 } from "@/db/schema";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { ApiError, assertUuid, decimal, pageNumber } from "@/lib/apiError";
+import crypto from "node:crypto";
+import { postCanonicalExpense } from "@/services/financial";
+import { logAuditEvent } from "@/services/audit";
 
 export interface CreatePersonnelInput {
   employeeId?: string | null;
@@ -557,10 +560,11 @@ export async function deletePersonnelSkill(skillId: string) {
   return deleted;
 }
 
-export async function getPersonnelSchedule(personnelId: string, fromDate?: Date, toDate?: Date) {
+export async function getPersonnelSchedule(personnelId: string, fromDate?: Date, toDate?: Date, allowedCoreProjectIds: string[] | null = null) {
   assertUuid(personnelId);
 
   // Calendar events where this personnel is assigned
+  const scopeCondition = allowedCoreProjectIds === null ? undefined : allowedCoreProjectIds.length ? inArray(studioProjects.projectId, allowedCoreProjectIds) : sql`false`;
   const allEvents = await db
     .select({
       id: studioCalendarEvents.id,
@@ -578,6 +582,7 @@ export async function getPersonnelSchedule(personnelId: string, fromDate?: Date,
     })
     .from(studioCalendarEvents)
     .leftJoin(studioProjects, eq(studioCalendarEvents.studioProjectId, studioProjects.id))
+    .where(scopeCondition)
     .orderBy(studioCalendarEvents.startTime);
 
   // Filter events matching personnelId
@@ -592,6 +597,7 @@ export async function getPersonnelSchedule(personnelId: string, fromDate?: Date,
 
   // Equipment reservations
   const resConditions = [eq(equipmentReservations.assignedPersonnelId, personnelId)];
+  if (scopeCondition) resConditions.push(scopeCondition);
   if (fromDate) resConditions.push(sql`${equipmentReservations.reservedTo} >= ${fromDate}`);
   if (toDate) resConditions.push(sql`${equipmentReservations.reservedFrom} <= ${toDate}`);
 
@@ -623,7 +629,7 @@ export async function getPersonnelSchedule(personnelId: string, fromDate?: Date,
     })
     .from(studioTasks)
     .leftJoin(studioProjects, eq(studioTasks.studioProjectId, studioProjects.id))
-    .where(eq(studioTasks.assignedPersonnelId, personnelId))
+    .where(and(eq(studioTasks.assignedPersonnelId, personnelId), ...(scopeCondition ? [scopeCondition] : [])))
     .orderBy(studioTasks.dueDate);
 
   return {
@@ -640,6 +646,8 @@ export async function recordPersonnelSalary(input: {
   rateAmount: number | string;
   unitsCount?: number | string;
   notes?: string;
+  actorId?: string;
+  actorName?: string;
 }) {
   assertUuid(input.personnelId);
   if (input.studioProjectId) assertUuid(input.studioProjectId);
@@ -650,9 +658,8 @@ export async function recordPersonnelSalary(input: {
   // Business Logic in Backend: total calculation must not be decided by Frontend
   const total = (rate * units).toFixed(2);
 
-  const [record] = await db
-    .insert(personnelSalaryRecords)
-    .values({
+  return db.transaction(async (tx) => {
+    const [record] = await tx.insert(personnelSalaryRecords).values({
       personnelId: input.personnelId,
       studioProjectId: input.studioProjectId || null,
       salaryType: input.salaryType || "per_project",
@@ -661,16 +668,17 @@ export async function recordPersonnelSalary(input: {
       totalCalculated: total,
       paymentStatus: "pending",
       notes: input.notes?.trim() || null,
-    })
-    .returning();
-
-  return record;
+    }).returning();
+    await logAuditEvent("STUDIO_WAGE_CREATED", "personnel_salary", record.id, { studioProjectId: record.studioProjectId, personnelId: record.personnelId, amount: record.totalCalculated }, { userId: input.actorId, employeeId: input.actorId, userName: input.actorName }, tx);
+    return record;
+  });
 }
 
 export async function updatePersonnelSalaryStatus(
   salaryId: string,
   status: "pending" | "approved" | "paid",
-  settlementDate?: Date | string
+  settlementDate?: Date | string,
+  options?: { accountId?: string; idempotencyKey?: string; actorId?: string; actorName?: string }
 ) {
   assertUuid(salaryId);
   if (!["pending", "approved", "paid"].includes(status)) {
@@ -679,34 +687,44 @@ export async function updatePersonnelSalaryStatus(
 
   const sDate = status === "paid" ? (settlementDate ? new Date(settlementDate) : new Date()) : null;
 
-  const [updated] = await db
-    .update(personnelSalaryRecords)
-    .set({
-      paymentStatus: status,
-      settlementDate: sDate,
-      updatedAt: new Date(),
-    })
-    .where(eq(personnelSalaryRecords.id, salaryId))
-    .returning();
-
-  if (!updated) {
-    throw new ApiError(404, "رکورد دستمزد یافت نشد.");
-  }
-
-  return updated;
+  if (sDate && Number.isNaN(sDate.getTime())) throw new ApiError(400, "تاریخ تسویه نامعتبر است.");
+  return db.transaction(async (tx) => {
+    // Lock only the salary row. PostgreSQL rejects FOR UPDATE across the nullable
+    // side of the project LEFT JOIN, and the salary row is the concurrency guard.
+    const [salary] = await tx.select().from(personnelSalaryRecords).where(eq(personnelSalaryRecords.id, salaryId)).for("update").limit(1);
+    if (!salary) throw new ApiError(404, "رکورد دستمزد یافت نشد.");
+    const [personnel] = await tx
+      .select({ employeeId: studioPersonnel.employeeId, personnelName: studioPersonnel.fullName })
+      .from(studioPersonnel)
+      .where(eq(studioPersonnel.id, salary.personnelId))
+      .limit(1);
+    if (!personnel) throw new ApiError(422, "پرسنل مرتبط با رکورد دستمزد یافت نشد.");
+    const [project] = salary.studioProjectId
+      ? await tx.select({ coreProjectId: studioProjects.projectId }).from(studioProjects).where(eq(studioProjects.id, salary.studioProjectId)).limit(1)
+      : [];
+    const existing = { salary, ...personnel, coreProjectId: project?.coreProjectId || null };
+    if (status === "paid") {
+      if (existing.salary.paymentId && existing.salary.financialStatus === "posted") return existing.salary;
+      if (!options?.accountId) throw new ApiError(400, "حساب پرداخت دستمزد الزامی است.");
+      assertUuid(options.accountId);
+      if (existing.salary.studioProjectId && !existing.coreProjectId) throw new ApiError(422, "پروژه دستمزد به پروژه مالی متصل نیست.");
+      const key = options.idempotencyKey?.trim() || crypto.randomUUID();
+      const canonical = await postCanonicalExpense(tx, { requestKey: `studio-wage:${key}`, requestHash: crypto.createHash("sha256").update(JSON.stringify({ salaryId, accountId: options.accountId, amount: existing.salary.totalCalculated })).digest("hex"), projectId: existing.coreProjectId, accountId: options.accountId, employeeId: existing.employeeId, title: `دستمزد ${existing.personnelName}`, category: "salary", amount: existing.salary.totalCalculated, expenseDate: sDate!, description: existing.salary.notes, paymentType: "salary_payout", paid: true }, { userId: options.actorId, employeeId: options.actorId, userName: options.actorName });
+      const [updated] = await tx.update(personnelSalaryRecords).set({ paymentStatus: "paid", paymentId: canonical.payment!.id, accountId: options.accountId, idempotencyKey: key, financialStatus: "posted", settlementDate: sDate, updatedAt: new Date() }).where(eq(personnelSalaryRecords.id, salaryId)).returning();
+      await logAuditEvent("STUDIO_WAGE_PAID", "personnel_salary", salaryId, { projectId: existing.coreProjectId, paymentId: canonical.payment!.id, expenseId: canonical.expense.id, amount: existing.salary.totalCalculated }, { userId: options.actorId, employeeId: options.actorId, userName: options.actorName }, tx);
+      return updated;
+    }
+    if (existing.salary.paymentId) throw new ApiError(409, "دستمزد پرداخت‌شده را نمی‌توان به وضعیت قبلی بازگرداند.");
+    const [updated] = await tx.update(personnelSalaryRecords).set({ paymentStatus: status, settlementDate: null, updatedAt: new Date() }).where(eq(personnelSalaryRecords.id, salaryId)).returning();
+    return updated;
+  });
 }
 
 export async function deletePersonnelSalaryRecord(salaryId: string) {
   assertUuid(salaryId);
-  const [deleted] = await db
-    .delete(personnelSalaryRecords)
-    .where(eq(personnelSalaryRecords.id, salaryId))
-    .returning();
-
-  if (!deleted) {
-    throw new ApiError(404, "رکورد دستمزد یافت نشد.");
-  }
-
-  return { success: true, message: "رکورد دستمزد با موفقیت حذف گردید." };
+  const [existing] = await db.select().from(personnelSalaryRecords).where(eq(personnelSalaryRecords.id, salaryId)).limit(1);
+  if (!existing) throw new ApiError(404, "رکورد دستمزد یافت نشد.");
+  if (existing.paymentId || existing.financialStatus === "posted") throw new ApiError(409, "دستمزد ثبت‌شده قابل حذف نیست؛ برگشت مالی لازم است.");
+  await db.update(personnelSalaryRecords).set({ financialStatus: "voided", voidReason: "لغو رکورد پیش‌نویس", voidedAt: new Date(), updatedAt: new Date() }).where(eq(personnelSalaryRecords.id, salaryId));
+  return { success: true, message: "رکورد پیش‌نویس بدون حذف سابقه لغو گردید." };
 }
-

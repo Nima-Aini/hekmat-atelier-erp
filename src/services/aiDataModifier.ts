@@ -66,7 +66,7 @@ export async function executeAIAction(action: AIActionPayload, userId?: string) 
           percent,
           updatedCount,
           description,
-        });
+        }, { userId, employeeId: userId }, tx);
 
         return {
           success: true,
@@ -111,7 +111,7 @@ export async function executeAIAction(action: AIActionPayload, userId?: string) 
           action: "APPLY_INFLATION_RAW_MATERIALS",
           percent,
           updatedCount,
-        });
+        }, { userId, employeeId: userId }, tx);
 
         return {
           success: true,
@@ -151,7 +151,7 @@ export async function executeAIAction(action: AIActionPayload, userId?: string) 
         percent,
         commissionBase,
         count,
-      });
+      }, { userId, employeeId: userId });
 
       return {
         success: true,
@@ -186,7 +186,7 @@ export async function executeAIAction(action: AIActionPayload, userId?: string) 
         })
         .returning();
 
-      await logAuditEvent("CREATE", "product", newProd.id, { name, code, basePrice });
+      await logAuditEvent("CREATE", "product", newProd.id, { name, code, basePrice }, { userId, employeeId: userId });
       return { success: true, message: `محصول جدید «${name}» با موفقیت در سیستم ثبت شد.`, product: newProd };
     }
 
@@ -216,7 +216,7 @@ export async function executeAIAction(action: AIActionPayload, userId?: string) 
         })
         .returning();
 
-      await logAuditEvent("CREATE", "customer", newCust.id, { name, code, mobile });
+      await logAuditEvent("CREATE", "customer", newCust.id, { name, code, mobile }, { userId, employeeId: userId });
       return { success: true, message: `مشتری «${name}» با موفقیت در سامانه ایجاد شد.`, customer: newCust };
     }
 

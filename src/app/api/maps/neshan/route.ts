@@ -2,31 +2,10 @@ import { getEmployeeContext } from "@/services/access";
 import { ApiError } from "@/lib/apiError";
 import { apiError } from "@/lib/apiError";
 import { NextResponse } from "next/server";
-import { db } from "@/db";
-import { systemSettings } from "@/db/schema";
-import { eq } from "drizzle-orm";
-
-// Production compatibility fallback. Rotate this exposed legacy key and set NESHAN_API_KEY,
-// then remove the fallback in a separately coordinated deployment.
-const LEGACY_NESHAN_KEY = "service.3a9a6b9c59054a20a4786affab22c5d7";
-
-async function getNeshanKey(): Promise<string> {
-  if (process.env.NESHAN_API_KEY) {
-    return process.env.NESHAN_API_KEY;
-  }
-  try {
-    const [settings] = await db
-      .select({ neshanApiKey: systemSettings.neshanApiKey })
-      .from(systemSettings)
-      .where(eq(systemSettings.id, "main_config"))
-      .limit(1);
-    if (settings?.neshanApiKey && settings.neshanApiKey.trim().length > 5) {
-      return settings.neshanApiKey.trim();
-    }
-  } catch (e) {
-    console.error("Error reading neshanApiKey from DB:", e);
-  }
-  return LEGACY_NESHAN_KEY;
+function getNeshanKey(): string {
+  const key = process.env.NESHAN_API_KEY?.trim();
+  if (!key) throw new ApiError(503, "سرویس نقشه پیکربندی نشده است.");
+  return key;
 }
 
 export async function GET(req: Request) {
@@ -34,7 +13,7 @@ export async function GET(req: Request) {
     if (!await getEmployeeContext()) throw new ApiError(401, "ابتدا وارد حساب کاربری شوید.");
     const { searchParams } = new URL(req.url);
     const action = searchParams.get("action") || "search";
-    const apiKey = await getNeshanKey();
+    const apiKey = getNeshanKey();
 
     if (action === "search") {
       const term = searchParams.get("term") || searchParams.get("q") || "";
@@ -56,8 +35,7 @@ export async function GET(req: Request) {
       });
 
       if (!res.ok) {
-        const errText = await res.text();
-        console.warn("Neshan Search API error response:", res.status, errText);
+        console.warn("Neshan Search API request failed with status:", res.status);
         return NextResponse.json({
           success: false,
           error: "جستجوی نقشه انجام نشد؛ تنظیمات API نشان را بررسی کنید.",
@@ -91,8 +69,7 @@ export async function GET(req: Request) {
       });
 
       if (!res.ok) {
-        const errText = await res.text();
-        console.warn("Neshan Reverse API error response:", res.status, errText);
+        console.warn("Neshan Reverse API request failed with status:", res.status);
         return NextResponse.json({
           success: false,
           error: "دریافت نشانی از سرویس نقشه انجام نشد.",
@@ -116,8 +93,8 @@ export async function GET(req: Request) {
     }
 
     return NextResponse.json({ success: false, error: "عملیات نامعتبر است." }, { status: 400 });
-  } catch (error: any) {
-    console.error("Neshan API Route error:", error);
+  } catch (error: unknown) {
+    if (!(error instanceof ApiError)) console.error("Neshan API route failed unexpectedly.", error);
     return apiError(error);
   }
 }

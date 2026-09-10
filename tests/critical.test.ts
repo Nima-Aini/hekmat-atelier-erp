@@ -4,7 +4,7 @@
  * Coverage: Authorization, Expense accounting, Invoice, Pagination, Jalali
  */
 import { describe, it, expect } from "vitest";
-import { parseJalaliString, gregorianToJalali, getJalaliMonthLength, jalaliToGregorian, toJalaliDate } from "../src/lib/dateUtils";
+import { getBusinessDateTimeParts, getStartOfDayJalali, parseJalaliString, gregorianToJalali, getJalaliMonthLength, jalaliToGregorian, toJalaliDate } from "../src/lib/dateUtils";
 import { auditActionLabel, getAuditDetailRows, getAuditSummary } from "../src/lib/auditPresentation";
 import { apiError } from "../src/lib/apiError";
 import { displayMoneyValue, formatThousands, normalizeDigits, parseFormattedNumber } from "../src/components/ui/MoneyInput";
@@ -37,6 +37,18 @@ describe("Jalali Date System", () => {
     expect(getJalaliMonthLength(1403, 1)).toBe(31);
     expect(getJalaliMonthLength(1403, 12)).toBe(30);
     expect(getJalaliMonthLength(1404, 12)).toBe(29);
+  });
+  it("uses Tehran midnight at the Nowruz boundary", () => {
+    expect(toJalaliDate("2024-03-19T20:29:59.000Z", { persianDigits: false })).toBe("1402/12/29");
+    expect(toJalaliDate("2024-03-19T20:30:00.000Z", { persianDigits: false })).toBe("1403/01/01");
+    expect(jalaliToGregorian({ year: 1403, month: 1, day: 1 }).toISOString()).toBe("2024-03-19T20:30:00.000Z");
+  });
+  it("normalizes historical Tehran offsets and month boundaries explicitly", () => {
+    const instant = new Date("2021-06-01T19:31:00.000Z");
+    const parts = getBusinessDateTimeParts(instant);
+    expect(parts).toMatchObject({ year: 2021, month: 6, day: 2 });
+    const start = getStartOfDayJalali(instant);
+    expect(getBusinessDateTimeParts(start)).toMatchObject({ year: 2021, month: 6, day: 2, hour: 0, minute: 0 });
   });
 });
 
@@ -86,6 +98,14 @@ describe("Validation helpers", () => {
     } finally {
       console.error = originalError;
     }
+  });
+  it("returns a correlation reference without leaking unexpected diagnostics", async () => {
+    const originalError = console.error; console.error = () => undefined;
+    try {
+      const response = apiError(new Error("failed postgresql://admin:super-secret@db.internal/atelier"), "آزمون");
+      const body = await response.json();
+      expect(response.status).toBe(500); expect(body.reference).toMatch(/^[0-9a-f-]{36}$/); expect(body.error).toContain("غیرمنتظره"); expect(JSON.stringify(body)).not.toContain("super-secret");
+    } finally { console.error = originalError; }
   });
   it("rejects NaN/Infinity amounts", () => {
     expect(isFinite(NaN)).toBe(false);

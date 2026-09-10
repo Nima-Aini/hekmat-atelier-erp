@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/services/access";
+import { getScopedProjectIds, requirePermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import {
   listStudioCustomers,
@@ -23,6 +23,7 @@ export async function GET(req: NextRequest) {
       vipLevel,
       page,
       pageSize,
+      allowedCoreProjectIds: await getScopedProjectIds(),
     });
 
     return NextResponse.json({ success: true, ...result });
