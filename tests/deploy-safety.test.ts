@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 
 const script = path.join(process.cwd(), "scripts", "validate-deploy-config.sh");
+const deployScript = readFileSync(path.join(process.cwd(), "deploy.sh"), "utf8");
+const stagingWorkflow = readFileSync(path.join(process.cwd(), ".github", "workflows", "deploy-staging.yml"), "utf8");
 const valid = {
   DEPLOY_PATH: "/var/www/hekmat-atelier-staging",
   PM2_APP_NAME: "hekmat-atelier-staging",
@@ -29,5 +32,20 @@ describe("deployment target safety", () => {
     ["legacy repository", { DEPLOY_REPOSITORY_URL: "https://github.com/Nima-Aini/hekmat.git" }],
   ])("rejects %s", (_label, values) => {
     expect(validate(values).status).not.toBe(0);
+  });
+
+  it("automatically deploys only the staging branch while preserving manual dispatch", () => {
+    expect(stagingWorkflow).toMatch(/push:\s*\n\s*branches:\s*\n\s*- codex\/phase2-hardening/);
+    expect(stagingWorkflow).toContain("workflow_dispatch:");
+    expect(stagingWorkflow).toContain("needs: [verify, restore-drill]");
+    expect(stagingWorkflow).toContain("cancel-in-progress: false");
+    expect(stagingWorkflow).toContain('bash /tmp/hekmat-atelier-staging-deploy.sh "${{ github.sha }}"');
+  });
+
+  it("creates a verified native backup before applying migrations", () => {
+    const backup = deployScript.indexOf("npm run backup:create");
+    const migration = deployScript.indexOf("npm run db:migrate");
+    expect(backup).toBeGreaterThan(-1);
+    expect(migration).toBeGreaterThan(backup);
   });
 });

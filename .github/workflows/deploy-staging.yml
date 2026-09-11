@@ -2,6 +2,9 @@ name: Deploy to staging
 run-name: Staging exact SHA ${{ github.sha }}
 
 on:
+  push:
+    branches:
+      - codex/phase2-hardening
   workflow_dispatch:
 
 concurrency:
@@ -86,9 +89,10 @@ jobs:
           command_timeout: 25m
           envs: DEPLOY_PATH,PM2_APP_NAME,APP_PORT,READINESS_URL,DEPLOY_REPOSITORY_URL,EXPECTED_REPOSITORY_URL,APP_ENV
           script: |
-            set -e
+            set -euo pipefail
             export NVM_DIR="${NVM_DIR:-/root/.nvm}"
             test ! -s "$NVM_DIR/nvm.sh" || . "$NVM_DIR/nvm.sh"
+            export PATH="/usr/lib/postgresql/16/bin:$PATH"
             cd "$DEPLOY_PATH"
             test "$(git remote get-url origin)" = "$DEPLOY_REPOSITORY_URL" || { echo "Staging directory is not the configured Atelier repository." >&2; exit 1; }
             git fetch --no-tags origin "${{ github.sha }}"

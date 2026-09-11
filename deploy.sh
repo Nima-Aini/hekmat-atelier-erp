@@ -212,11 +212,11 @@ install_build_dependencies
 npm run postgres:check
 npm run build
 
+log "Creating and verifying a pre-migration native PostgreSQL backup"
+BACKUP_NOTES="Pre-deploy backup for ${TARGET_SHA}" npm run backup:create
+
 log "Applying lock-safe additive migrations"
 npm run db:migrate
-
-log "Creating and verifying a native PostgreSQL backup"
-BACKUP_NOTES="Pre-deploy backup for ${TARGET_SHA}" npm run backup:create
 
 log "Reloading PM2 application on port $PORT"
 start_application
