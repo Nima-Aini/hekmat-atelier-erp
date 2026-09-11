@@ -53,6 +53,7 @@ describe("deployment target safety", () => {
   it("only tolerates Next generated state when it exactly matches the target SHA", () => {
     expect(deployScript).toContain('DIRTY_TRACKED_PATHS" != "next-env.d.ts"');
     expect(deployScript).toContain('git show "${TARGET_SHA}:next-env.d.ts" | cmp -s - next-env.d.ts');
+    expect(deployScript).toContain('git restore --source="$TARGET_SHA" --staged --worktree -- next-env.d.ts');
     expect(deployScript).toContain("git diff --cached --quiet");
     expect(nextEnvironment).toContain('import "./.next/types/routes.d.ts";');
     expect(nextEnvironment).not.toContain("/.next/dev/types/");

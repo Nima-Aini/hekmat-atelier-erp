@@ -182,6 +182,7 @@ if ! git diff --quiet; then
     exit 1
   fi
   log "Accepting generated next-env.d.ts because it exactly matches the target SHA"
+  git restore --source="$TARGET_SHA" --staged --worktree -- next-env.d.ts
 fi
 
 PREVIOUS_SHA="$(git rev-parse HEAD)"
