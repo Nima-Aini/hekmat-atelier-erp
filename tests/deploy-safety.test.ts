@@ -6,6 +6,7 @@ import path from "node:path";
 const script = path.join(process.cwd(), "scripts", "validate-deploy-config.sh");
 const deployScript = readFileSync(path.join(process.cwd(), "deploy.sh"), "utf8");
 const stagingWorkflow = readFileSync(path.join(process.cwd(), ".github", "workflows", "deploy-staging.yml"), "utf8");
+const nextEnvironment = readFileSync(path.join(process.cwd(), "next-env.d.ts"), "utf8");
 const valid = {
   DEPLOY_PATH: "/var/www/hekmat-atelier-staging",
   PM2_APP_NAME: "hekmat-atelier-staging",
@@ -47,5 +48,13 @@ describe("deployment target safety", () => {
     const migration = deployScript.indexOf("npm run db:migrate");
     expect(backup).toBeGreaterThan(-1);
     expect(migration).toBeGreaterThan(backup);
+  });
+
+  it("only tolerates Next generated state when it exactly matches the target SHA", () => {
+    expect(deployScript).toContain('DIRTY_TRACKED_PATHS" != "next-env.d.ts"');
+    expect(deployScript).toContain('git show "${TARGET_SHA}:next-env.d.ts" | cmp -s - next-env.d.ts');
+    expect(deployScript).toContain("git diff --cached --quiet");
+    expect(nextEnvironment).toContain('import "./.next/types/routes.d.ts";');
+    expect(nextEnvironment).not.toContain("/.next/dev/types/");
   });
 });

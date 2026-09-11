@@ -156,11 +156,32 @@ if ! grep -q '^DATABASE_URL=' .env; then
   exit 1
 fi
 
-# Refuse to erase manual tracked-file edits made directly on the server.
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "Tracked files have local changes. Commit or remove them before deployment."
+if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Target must be a full 40-character commit SHA: $TARGET_SHA"
+  exit 1
+fi
+if ! git cat-file -e "${TARGET_SHA}^{commit}" 2>/dev/null; then
+  echo "Requested commit does not exist: $TARGET_SHA"
+  exit 1
+fi
+
+# Refuse to erase manual tracked-file edits made directly on the server. A
+# previous Next.js production build may have generated next-env.d.ts from its
+# tracked development form. Permit that one-time transition only when the
+# working file is byte-identical to the exact target commit.
+if ! git diff --cached --quiet; then
+  echo "Staged tracked changes are forbidden during deployment."
   git status --short
   exit 1
+fi
+if ! git diff --quiet; then
+  DIRTY_TRACKED_PATHS="$(git diff --name-only)"
+  if [ "$DIRTY_TRACKED_PATHS" != "next-env.d.ts" ] || ! git show "${TARGET_SHA}:next-env.d.ts" | cmp -s - next-env.d.ts; then
+    echo "Tracked files have local changes. Commit or remove them before deployment."
+    git status --short
+    exit 1
+  fi
+  log "Accepting generated next-env.d.ts because it exactly matches the target SHA"
 fi
 
 PREVIOUS_SHA="$(git rev-parse HEAD)"
@@ -196,16 +217,10 @@ if ! pm2 describe "$APP_NAME" >/dev/null 2>&1 && ss -H -ltn "sport = :$PORT" | g
 fi
 
 log "Selecting the exact verified revision"
-if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-  echo "Target must be a full 40-character commit SHA: $TARGET_SHA"
-  exit 1
-fi
-if ! git cat-file -e "${TARGET_SHA}^{commit}" 2>/dev/null; then
-  echo "Requested commit does not exist: $TARGET_SHA"
-  exit 1
-fi
 git checkout --detach "$TARGET_SHA"
 test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+git diff --quiet
+git diff --cached --quiet
 
 log "Installing dependencies and building production frontend/server"
 install_build_dependencies
