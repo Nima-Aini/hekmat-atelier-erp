@@ -62,9 +62,9 @@ export default function EmployeeLoginPage() {
           <div className="inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-purple-600 text-white shadow-xl shadow-purple-900/30 mb-2">
             <ShieldCheck className="h-7 w-7" />
           </div>
-          <h1 className="text-2xl font-black text-white tracking-tight">سامانه جامع مدیریت حکمت آکما</h1>
+          <h1 className="text-2xl font-black text-white tracking-tight">حکمت آتلیه</h1>
           <p className="text-xs text-slate-400">
-            ورود اختصاصی مدیران، ویزیتورها و حسابداران سیستم
+            سیستم یکپارچه مدیریت آتلیه، پروژه، مشتری و امور مالی
           </p>
         </div>
 
@@ -120,7 +120,7 @@ export default function EmployeeLoginPage() {
         {/* Security notice */}
         <div className="rounded-2xl border border-slate-800/80 bg-slate-900/50 p-4 space-y-2.5">
           <p className="text-[11px] text-slate-400 text-center font-medium">
-            نکته امنیتی: حساب‌های پیش‌فرض فقط از طریق متغیرهای محیطی INITIAL_ADMIN_USERNAME و INITIAL_ADMIN_PASSWORD قابل ایجاد هستند. برای ورود سریع در محیط توسعه، این مقادیر را در فایل .env تنظیم کنید.
+            ورود فقط برای اعضای مجاز تیم آتلیه است. اطلاعات حساب را با دیگران به اشتراک نگذارید.
           </p>
         </div>
       </div>

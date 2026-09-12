@@ -62,10 +62,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   const [isSearching, setIsSearching] = useState(false);
 
   const loadProjects = () => {
-    fetch("/api/projects")
+    fetch("/api/studio/projects?pageSize=100")
       .then((r) => r.json())
       .then((data) => {
-        if (data.success) setProjects(data.projects || []);
+        if (data.success) setProjects((data.projects || []).map((p: any) => ({ id: p.projectId, name: p.title, code: p.projectNumber })));
       })
       .catch((err) => console.error("Error loading projects:", err));
   };
@@ -124,38 +124,28 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   };
 
   const navItems = [
-    { id: "dashboard", label: "داشبورد مدیریت", icon: LayoutDashboard },
-    { id: "invoices", label: "فروش و فاکتورها", icon: ShoppingBag },
-    { id: "orders", label: "سفارشات", icon: ClipboardList },
-    { id: "raw_materials", label: "مواد اولیه و قطعات", icon: Package },
-    { id: "products", label: "محصولات و BOM", icon: Layers },
-    { id: "production", label: "بچ‌های تولید", icon: Factory },
-    { id: "inventory", label: "انبار و موجودی", icon: Layers },
-    { id: "customers", label: "مشتریان و CRM", icon: Users },
-    { id: "customer_map", label: "نقشه مشتریان", icon: MapPin },
-    { id: "purchases", label: "تامین‌کنندگان و خرید", icon: ShoppingCart },
-    { id: "financial", label: "حسابداری و نقدینگی", icon: DollarSign },
-    { id: "employees", label: "همکاران و ویزیتورها", icon: UserCheck },
-    { id: "studio_crm", label: "CRM و پایپ‌لاین آتلیه", icon: FolderKanban },
-    { id: "studio_personnel", label: "عوامل و پرسنل آتلیه", icon: Users },
-    { id: "studio_equipment", label: "تجهیزات و رنتال آتلیه", icon: Camera },
-    { id: "projects", label: "پروژه‌ها و Scope", icon: FolderKanban },
-    { id: "reports", label: "مرکز گزارشات و سود", icon: BarChart2 },
-    { id: "tax_declaration", label: "گزارش آماده‌سازی مالیاتی", icon: FileSpreadsheet },
-    { id: "alerts", label: "مرکز اعلانات", icon: AlertTriangle },
-    { id: "notes", label: "یادداشت‌ها", icon: StickyNote },
-    { id: "audit_logs", label: "لاگ فعالیت‌ها", icon: ScrollText },
-    { id: "ai", label: "مشاور هوش مصنوعی", icon: Bot },
-    { id: "backup", label: "پشتیبان‌گیری دیتابیس", icon: Database },
-    { id: "settings", label: "تنظیمات سیستم", icon: Settings, permission: "settings.view" },
+    { id: "dashboard", label: "داشبورد", icon: LayoutDashboard },
+    { id: "studio_crm", label: "سرنخ‌ها و CRM", icon: FolderKanban },
+    { id: "projects", label: "پروژه‌ها", icon: Camera },
+    { id: "calendar", label: "تقویم و برنامه", icon: ClipboardList },
+    { id: "tasks", label: "کارها و گردش‌کار", icon: Layers },
+    { id: "customers", label: "مشتریان", icon: Users },
+    { id: "catalog", label: "خدمات و پکیج‌ها", icon: Package },
+    { id: "studio_personnel", label: "تیم و عوامل", icon: UserCheck },
+    { id: "studio_equipment", label: "تجهیزات", icon: Video },
+    { id: "financial", label: "مالی", icon: DollarSign },
+    { id: "vendors", label: "همکاران و تأمین‌کنندگان", icon: ShoppingCart },
+    { id: "reports", label: "گزارش‌ها", icon: BarChart2 },
+    { id: "alerts", label: "اعلانات", icon: AlertTriangle },
+    { id: "audit_logs", label: "حسابرسی", icon: ScrollText },
+    { id: "backup", label: "پشتیبان‌گیری", icon: Database },
+    { id: "settings", label: "تنظیمات", icon: Settings },
+    { id: "ai", label: "دستیار", icon: Bot },
   ];
-
   const permissionByTab: Record<string, string> = {
-    invoices: "invoices.view", orders: "orders.view", raw_materials: "raw_materials.view", products: "products.view", special_products: "products.view", production: "production.view",
-    inventory: "inventory.view", customers: "customers.view", customer_map: "customers.view", purchases: "purchases.view",
-    financial: "financial.view", employees: "employees.view", studio_crm: "studio.view", studio_personnel: "studio.view", studio_equipment: "studio.view", projects: "projects.view", reports: "reports.view",
-    tax_declaration: "reports.view",
-    alerts: "alerts.view", notes: "notes.view", audit_logs: "audit.view", ai: "ai.view", backup: "backup.view", settings: "settings.view",
+    studio_crm: "studio.view", projects: "studio.view", calendar: "studio.view", tasks: "studio.view", customers: "studio.view", catalog: "studio.view",
+    studio_personnel: "studio.view", studio_equipment: "studio.view", financial: "studio.finance.view", vendors: "suppliers.view", reports: "studio.profitability.view",
+    alerts: "studio.view", audit_logs: "audit.view", ai: "ai.view", backup: "backup.view", settings: "settings.view",
   };
   const perms = new Set<string>(me?.navigationPermissions || me?.permissions || []);
   const canSee = (id: string) => id === "dashboard" || perms.has("*") || perms.has(permissionByTab[id] || "");
@@ -178,11 +168,11 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-purple-600 text-xs font-bold text-white shadow-lg shadow-blue-500/20 sm:text-sm">
-              آکما
+              آتلیه
             </div>
             <div className="min-w-0">
-              <h1 className="truncate text-xs font-extrabold tracking-tight text-white sm:text-sm">سیستم عملیاتی حکمت آکما</h1>
-              <p className="hidden text-[10px] text-slate-400 xl:block">نسخه ۲.۰ - سیستم مدیریت و حسابداری یکپارچه</p>
+              <h1 className="truncate text-xs font-extrabold tracking-tight text-white sm:text-sm">حکمت آتلیه</h1>
+              <p className="hidden text-[10px] text-slate-400 xl:block">سیستم یکپارچه مدیریت آتلیه، پروژه، مشتری و امور مالی</p>
             </div>
           </div>
         </div>
@@ -208,14 +198,14 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
         <div className="hidden md:flex items-center gap-3">
           <div className="flex items-center gap-2 rounded-xl bg-slate-900 border border-slate-800 px-3 py-1.5 text-xs">
             <Folder className="h-4 w-4 text-blue-400" />
-            <span className="text-slate-400">اسکوپ پروژه:</span>
+            <span className="text-slate-400">پروژهٔ جاری:</span>
             <select
               value={selectedProjectId || ""}
               onChange={(e) => setSelectedProjectId(e.target.value ? e.target.value : null)}
               className="bg-transparent font-bold text-white outline-none cursor-pointer"
             >
               <option value="" className="bg-slate-900 text-white">
-                تمام پروژه‌ها (اسکوپ عمومی)
+                همهٔ پروژه‌های مجاز
               </option>
               {projects.map((p) => (
                 <option key={p.id} value={p.id} className="bg-slate-900 text-white">
@@ -232,7 +222,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
             <Search className="absolute right-3 top-2.5 h-4 w-4 text-slate-400" />
             <input
               type="text"
-              placeholder="جستجوی سریع در سیستم..."
+              placeholder="مشتری، پروژه، موبایل، قرارداد، عامل یا تجهیزات…"
               value={searchQuery}
               onChange={(e) => handleSearch(e.target.value)}
               className="w-full rounded-xl border border-slate-800 bg-slate-900 py-2 pr-9 pl-4 text-base text-white placeholder-slate-500 focus:border-blue-500 focus:outline-none md:py-1.5 md:text-xs"
@@ -248,23 +238,19 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
                   onClick={() => {
                     setSearchResults([]);
                     setSearchQuery("");
-                    if (item.type === "employee") {
-                      setActiveTab("employees");
-                    } else if (item.type === "raw_material") {
-                      setActiveTab("raw_materials");
-                    } else if (item.type === "invoice") {
-                      setActiveTab("invoices");
-                    } else if (item.type === "customer") {
+                    if (item.type === "studio_personnel") {
+                      setActiveTab("studio_personnel");
+                    } else if (item.type === "studio_customer") {
                       setActiveTab("customers");
-                    } else if (item.type === "product") {
-                      setActiveTab("products");
-                    } else if (item.type === "supplier") {
-                      setActiveTab("purchases");
-                    } else if (item.type === "account") {
-                      setActiveTab("financial");
-                    } else if (item.type === "project") {
-                      setSelectedProjectId(item.id);
+                    } else if (item.type === "studio_vendor") {
+                      setActiveTab("vendors");
+                    } else if (item.type === "studio_project" || item.type === "studio_contract") {
+                      if (item.coreProjectId) setSelectedProjectId(item.coreProjectId);
                       setActiveTab("projects");
+                    } else if (item.type === "studio_task") {
+                      setActiveTab("tasks");
+                    } else if (item.type === "studio_equipment") {
+                      setActiveTab("studio_equipment");
                     }
 
                     // Dispatch global event so sub-views can highlight or open item details
@@ -321,7 +307,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           <div className="mb-4 rounded-xl border border-slate-800 bg-slate-900 p-3 lg:hidden">
             <label htmlFor="mobile-project-scope" className="mb-2 flex items-center gap-2 text-xs text-slate-400">
               <Folder className="h-4 w-4 text-blue-400" />
-              اسکوپ پروژه
+              پروژهٔ جاری
             </label>
             <select
               id="mobile-project-scope"
@@ -332,7 +318,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
               }}
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-base font-bold text-white outline-none"
             >
-              <option value="">تمام پروژه‌ها (عمومی)</option>
+              <option value="">همهٔ پروژه‌های مجاز</option>
               {projects.map((project) => (
                 <option key={project.id} value={project.id}>{project.name} ({project.code})</option>
               ))}
@@ -343,9 +329,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
             {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
-              const isAiAdvisor = item.id === "ai";
+              const isAiAdvisor = false;
               return (
-                <div key={item.id} className={`relative isolate rounded-xl ${isAiAdvisor ? "my-2" : ""}`}>
+                <div key={item.id} className={`relative isolate rounded-xl ${item.id === "audit_logs" ? "border-t border-slate-800 pt-4 mt-4" : ""} ${isAiAdvisor ? "my-2" : ""}`}>
                   {isAiAdvisor && (
                     <>
                       <span

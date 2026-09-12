@@ -10,8 +10,8 @@ const vazirmatn = Vazirmatn({
 });
 
 export const metadata: Metadata = {
-  title: "Hekmat Akma Management System",
-  description: "سیستم یکپارچه مدیریت عملیات، حسابداری، انبار و CRM حکمت آکما",
+  title: "حکمت آتلیه | Hekmat Atelier",
+  description: "سیستم یکپارچه مدیریت آتلیه، پروژه، مشتری و امور مالی",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

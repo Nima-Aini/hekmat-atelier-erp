@@ -12,15 +12,15 @@ export async function PATCH(
     const { actor } = await requireStudioResourceAccess("reservation", id, "studio.equipment.reserve");
     const body = await req.json();
 
-    const action = body.action as "checkout" | "checkin" | "cancel" | "confirm";
-    if (!["checkout", "checkin", "cancel", "confirm"].includes(action)) {
+    const action = body.action as "checkout" | "checkin" | "damage" | "cancel" | "confirm";
+    if (!["checkout", "checkin", "damage", "cancel", "confirm"].includes(action)) {
       return NextResponse.json(
         { success: false, error: "عملیات ارسالی برای تغییر وضعیت رزرو نامعتبر است." },
         { status: 400 }
       );
     }
 
-    const updated = await updateReservationStatus(id, action, actor);
+    const updated = await updateReservationStatus(id, action, actor, { condition: body.condition, notes: body.notes });
     return NextResponse.json({ success: true, reservation: updated });
   } catch (error) {
     return apiError(error, "تغییر وضعیت رزرو تجهیز");

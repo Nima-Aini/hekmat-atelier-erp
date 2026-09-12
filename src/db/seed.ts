@@ -39,7 +39,7 @@ export async function seedDatabase() {
   // 1. System Settings
   await db.insert(systemSettings).values({
     id: "main_config",
-    businessName: "سازمان و سیستم عملیاتی حکمت آکما",
+    businessName: "حکمت آتلیه",
     taxNumber: "10103482910",
     currency: "تومان",
     numberFormat: "fa-IR",

@@ -350,6 +350,11 @@ export async function createStudioPersonnel(input: CreatePersonnelInput) {
   const experienceYears = input.experienceYears !== undefined ? Math.max(0, Number(input.experienceYears)) : 1;
 
   return db.transaction(async (tx) => {
+    if (input.employeeId) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`studio-personnel:${input.employeeId}`}, 0))`);
+      const [linked] = await tx.select({ id: studioPersonnel.id }).from(studioPersonnel).where(eq(studioPersonnel.employeeId, input.employeeId)).limit(1);
+      if (linked) throw new ApiError(409, "این حساب سازمانی قبلاً به یک پرونده تیم آتلیه متصل شده است.");
+    }
     const [inserted] = await tx
       .insert(studioPersonnel)
       .values({
@@ -415,6 +420,8 @@ export async function updateStudioPersonnel(id: string, input: UpdatePersonnelIn
       assertUuid(input.employeeId);
       const [emp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, input.employeeId)).limit(1);
       if (!emp) throw new ApiError(404, "کارمند سازمانی یافت نشد.");
+      const [linked] = await db.select({ id: studioPersonnel.id }).from(studioPersonnel).where(eq(studioPersonnel.employeeId, input.employeeId)).limit(1);
+      if (linked && linked.id !== id) throw new ApiError(409, "این حساب سازمانی قبلاً به پرونده دیگری متصل شده است.");
       updateData.employeeId = input.employeeId;
     } else {
       updateData.employeeId = null;

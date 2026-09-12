@@ -32,6 +32,7 @@ import {
   Radio,
 } from "lucide-react";
 import { formatMoney, toJalaliDate } from "@/lib/dateUtils";
+import { EquipmentReservationsPanel } from "@/components/studio/equipment/EquipmentReservationsPanel";
 
 const CATEGORIES = [
   { id: "all", label: "همه تجهیزات", icon: Layers },
@@ -53,7 +54,7 @@ const STATUSES = [
 
 export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string) => void }) {
   // Main Tab: "studio_equipment" vs "rental_equipment"
-  const [activeMainTab, setActiveMainTab] = useState<"inventory" | "rentals">("inventory");
+  const [activeMainTab, setActiveMainTab] = useState<"inventory" | "reservations" | "rentals">("inventory");
 
   // Equipment List State
   const [equipmentList, setEquipmentList] = useState<any[]>([]);
@@ -413,7 +414,7 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
               <Plus className="w-4 h-4" />
               <span>ثبت تجهیز جدید</span>
             </button>
-          ) : (
+          ) : activeMainTab === "rentals" ? (
             <button
               onClick={() => {
                 setEditingRental(null);
@@ -436,7 +437,7 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
               <Plus className="w-4 h-4" />
               <span>ثبت تجهیز اجاره‌ای جدید (Rental)</span>
             </button>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -455,6 +456,14 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
           <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">
             {equipmentList.length}
           </span>
+        </button>
+
+        <button
+          onClick={() => setActiveMainTab("reservations")}
+          className={`pb-3 text-sm font-bold border-b-2 flex items-center gap-2 transition ${activeMainTab === "reservations" ? "border-emerald-500 text-emerald-400" : "border-transparent text-slate-400 hover:text-slate-200"}`}
+        >
+          <CheckCircle2 className="w-4 h-4" />
+          <span>تحویل و عودت</span>
         </button>
 
         <button
@@ -687,6 +696,8 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
           )}
         </div>
       )}
+
+      {activeMainTab === "reservations" && <EquipmentReservationsPanel />}
 
       {/* ========================================================================= */}
       {/* SECTION 2: RENTAL EQUIPMENT (تجهیزات اجاره‌ای) */}

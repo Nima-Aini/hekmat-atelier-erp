@@ -1,0 +1,5 @@
+import { NextRequest,NextResponse } from "next/server";
+import { db } from "@/db";import { studioCatalog,studioWorkflowTemplates } from "@/db/schema";import { asc } from "drizzle-orm";
+import { apiError } from "@/lib/apiError";import { requirePermission } from "@/services/access";import { saveCatalog } from "@/services/studio/catalog";
+export async function GET(){try{await requirePermission("studio.view");const[items,templates]=await Promise.all([db.select().from(studioCatalog).orderBy(asc(studioCatalog.kind),asc(studioCatalog.name)),db.select().from(studioWorkflowTemplates).orderBy(asc(studioWorkflowTemplates.name))]);return NextResponse.json({success:true,items,templates});}catch(error){return apiError(error,"دریافت کاتالوگ آتلیه");}}
+export async function POST(req:NextRequest){try{const actor=await requirePermission("studio.catalog.manage");return NextResponse.json({success:true,item:await saveCatalog(actor,await req.json())},{status:201});}catch(error){return apiError(error,"ثبت خدمت یا پکیج");}}

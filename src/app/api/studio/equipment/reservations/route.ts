@@ -58,6 +58,8 @@ export async function GET(req: NextRequest) {
         status: equipmentReservations.status,
         checkoutTime: equipmentReservations.checkoutTime,
         checkinTime: equipmentReservations.checkinTime,
+        conditionOnCheckout: equipmentReservations.conditionOnCheckout,
+        conditionOnReturn: equipmentReservations.conditionOnReturn,
         notes: equipmentReservations.notes,
         createdAt: equipmentReservations.createdAt,
       })
