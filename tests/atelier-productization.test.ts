@@ -96,11 +96,13 @@ describe("Atelier product domains", () => {
     expect(allocations.reduce((sum, row) => sum + Number(row.amount), 0)).toBe(40_000_000);
     const refreshed = await getStudioProjectById(project.projectId);
     expect(refreshed.installments.map(row => row.status)).toEqual(["paid", "partial", "pending"]);
-    const dashboard = await getStudioDashboard(null, true, actorId, true);
-    const reports = await getAtelierReports(null, actorId, true);
+    const [storedProject] = await db.select().from(studioProjects).where(eq(studioProjects.id, project.projectId));
+    const projectScope = [storedProject.projectId!];
+    const dashboard = await getStudioDashboard(projectScope, true, actorId, true);
+    const reports = await getAtelierReports(projectScope, actorId, true);
     expect(dashboard.finance).toMatchObject({ contracted: 115_000_000, collected: 40_000_000, outstanding: 75_000_000 });
     expect(reports.finance).toMatchObject({ contracted: 115_000_000, collected: 40_000_000, outstanding: 75_000_000 });
-    const redacted = await getAtelierReports(null, actorId, true, { finance: false, wages: false });
+    const redacted = await getAtelierReports(projectScope, actorId, true, { finance: false, wages: false });
     expect(redacted.finance).toBeNull();
     expect(redacted.personnel.every(row => row.wages === null && row.outstanding === null)).toBe(true);
   });
