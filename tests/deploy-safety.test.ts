@@ -45,8 +45,10 @@ describe("deployment target safety", () => {
 
   it("creates a verified native backup before applying migrations", () => {
     const backup = deployScript.indexOf("npm run backup:create");
+    const targetCheckout = deployScript.indexOf('git checkout --detach "$TARGET_SHA"');
     const migration = deployScript.indexOf("npm run db:migrate");
     expect(backup).toBeGreaterThan(-1);
+    expect(targetCheckout).toBeGreaterThan(backup);
     expect(migration).toBeGreaterThan(backup);
   });
 

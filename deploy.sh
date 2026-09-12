@@ -217,6 +217,16 @@ if ! pm2 describe "$APP_NAME" >/dev/null 2>&1 && ss -H -ltn "sport = :$PORT" | g
   exit 1
 fi
 
+# The active database still has the schema expected by PREVIOUS_SHA. Create
+# the safety backup with that already-running revision before selecting code
+# that may require a newer migration. This preserves the backup service's
+# migration-completeness gate instead of bypassing it during an upgrade.
+log "Verifying PostgreSQL tooling with the currently deployed revision"
+npm run postgres:check
+
+log "Creating and verifying a pre-migration native PostgreSQL backup"
+BACKUP_NOTES="Pre-deploy backup before ${TARGET_SHA}" npm run backup:create
+
 log "Selecting the exact verified revision"
 git checkout --detach "$TARGET_SHA"
 test "$(git rev-parse HEAD)" = "$TARGET_SHA"
@@ -227,9 +237,6 @@ log "Installing dependencies and building production frontend/server"
 install_build_dependencies
 npm run postgres:check
 npm run build
-
-log "Creating and verifying a pre-migration native PostgreSQL backup"
-BACKUP_NOTES="Pre-deploy backup for ${TARGET_SHA}" npm run backup:create
 
 log "Applying lock-safe additive migrations"
 npm run db:migrate
