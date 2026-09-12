@@ -426,7 +426,16 @@ describe("Hekmat Atelier (حکمت آتلیه) - Backend Services & Workflows", 
 
       // Verify production workflow was initialized
       expect(project360.productionPlan).toBeDefined();
-      expect(project360.productionPlan?.steps.length).toBe(6);
+      expect(project360.productionPlan?.steps.length).toBe(11);
+      expect((project360.productionPlan?.workflowSnapshot as Array<{ stage: string }>).map((step) => step.stage)).toEqual(expect.arrayContaining([
+        "consultation",
+        "raw_backup",
+        "retouch",
+        "video_edit",
+        "album_print",
+        "final_qc",
+        "delivery",
+      ]));
 
       // Canonical ERP accounting is authoritative: a deposit field is not a
       // receipt, and a pending wage is not posted until a real payment exists.

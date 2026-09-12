@@ -6,7 +6,9 @@ import * as studioAuthorizationAudit from "./003_studio_authorization_audit";
 import * as studioConstraintsIndexes from "./004_studio_constraints_indexes";
 import * as backupRecovery from "./005_backup_recovery";
 
-const migrations = [studioFinancialLinks, studioReconciliationIndexes, studioAuthorizationAudit, studioConstraintsIndexes, backupRecovery] as const;
+import * as atelierProduct from "./006_atelier_product";
+
+const migrations = [studioFinancialLinks, studioReconciliationIndexes, studioAuthorizationAudit, studioConstraintsIndexes, backupRecovery, atelierProduct] as const;
 export const requiredMigrationIds = migrations.map((migration) => migration.id);
 
 function rowCount(result: unknown) {

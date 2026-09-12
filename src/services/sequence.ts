@@ -9,7 +9,7 @@ export type SequenceType = "product" | "special_product" | "studio_project" | "s
  * studio projects (STU-0001), studio contracts (CTR-0001), or equipment (EQ-0001).
  * Monotonically increasing, atomic, and guarantees that deleted items do not reuse existing numbers.
  */
-export async function getNextSequenceCode(type: SequenceType): Promise<string> {
+export async function getNextSequenceCode(type: SequenceType, client: typeof db | import("./product").Transaction = db): Promise<string> {
   const prefixMap: Record<SequenceType, string> = {
     product: "PRD-",
     special_product: "SPC-",
@@ -22,14 +22,14 @@ export async function getNextSequenceCode(type: SequenceType): Promise<string> {
 
   try {
     // 1. Ensure row exists in code_sequences
-    await db.execute(sql`
+    await client.execute(sql`
       INSERT INTO code_sequences (id, last_value, prefix, updated_at)
       VALUES (${typeId}, 0, ${prefix}, NOW())
       ON CONFLICT (id) DO NOTHING;
     `);
 
     // 2. Fetch current max from table if last_value is 0 to initialize properly
-    const currentSeq = await db
+    const currentSeq = await client
       .select()
       .from(codeSequences)
       .where(eq(codeSequences.id, typeId))
@@ -40,7 +40,7 @@ export async function getNextSequenceCode(type: SequenceType): Promise<string> {
     if (baseCounter === 0) {
       // Find highest existing code in database
       if (type === "product") {
-        const existing = await db.select({ code: products.code }).from(products);
+        const existing = await client.select({ code: products.code }).from(products);
         for (const item of existing) {
           const match = item.code.match(/PRD-(\d+)/i);
           if (match) {
@@ -51,8 +51,8 @@ export async function getNextSequenceCode(type: SequenceType): Promise<string> {
           }
         }
       } else {
-        const existingSp = await db.select({ code: specialProducts.code }).from(specialProducts);
-        const existingPrdSp = await db.select({ code: products.code }).from(products).where(eq(products.isSpecial, true));
+        const existingSp = await client.select({ code: specialProducts.code }).from(specialProducts);
+        const existingPrdSp = await client.select({ code: products.code }).from(products).where(eq(products.isSpecial, true));
         const existing = [...existingSp, ...existingPrdSp];
         for (const item of existing) {
           const match = item.code.match(/SPC-(\d+)/i);
@@ -67,7 +67,7 @@ export async function getNextSequenceCode(type: SequenceType): Promise<string> {
     }
 
     // 3. Atomically increment the sequence counter
-    const result = await db.execute(sql`
+    const result = await client.execute(sql`
       UPDATE code_sequences
       SET last_value = GREATEST(last_value, ${baseCounter}) + 1,
           updated_at = NOW()

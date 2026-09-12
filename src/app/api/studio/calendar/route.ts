@@ -7,7 +7,7 @@ import {
   studioProjects,
   studioPersonnel,
 } from "@/db/schema";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import { requireStudioGlobalAccess, requireStudioProjectAccess } from "@/services/studio/access";
 import { assertPersonnelScheduleAvailable, lockScheduleResources } from "@/services/studio/scheduling";
 import { logAuditEvent } from "@/services/audit";
@@ -15,7 +15,7 @@ import { logProjectTimeline } from "@/services/studio/projectService";
 
 export async function GET(req: NextRequest) {
   try {
-    await requireStudioGlobalAccess("studio.view");
+    const actor = await requireStudioGlobalAccess("studio.view");
     const allowedCoreProjectIds = await getScopedProjectIds();
     const { searchParams } = new URL(req.url);
 
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
     const projectId = searchParams.get("projectId");
 
     const conditions = [];
-    if (allowedCoreProjectIds !== null) conditions.push(allowedCoreProjectIds.length ? inArray(studioProjects.projectId, allowedCoreProjectIds) : sql`false`);
+    if (allowedCoreProjectIds !== null) conditions.push(or(allowedCoreProjectIds.length ? inArray(studioProjects.projectId, allowedCoreProjectIds) : sql`false`, eq(studioCalendarEvents.ownerEmployeeId, actor.employeeId))!);
 
     if (projectId) {
       assertUuid(projectId);
@@ -45,6 +45,7 @@ export async function GET(req: NextRequest) {
     const events = await db
       .select({
         id: studioCalendarEvents.id,
+        ownerEmployeeId: studioCalendarEvents.ownerEmployeeId,
         studioProjectId: studioCalendarEvents.studioProjectId,
         title: studioCalendarEvents.title,
         eventType: studioCalendarEvents.eventType,
@@ -107,6 +108,7 @@ export async function POST(req: NextRequest) {
       }
       for (const personnelId of personnelIds) await assertPersonnelScheduleAvailable(tx, personnelId, startTime, endTime);
       const [saved] = await tx.insert(studioCalendarEvents).values({
+        ownerEmployeeId: actor.employeeId,
         studioProjectId: body.studioProjectId || null,
         title: body.title.trim(),
         eventType,

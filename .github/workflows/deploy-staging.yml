@@ -106,7 +106,7 @@ jobs:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
           EXPECTED_GIT_SHA: ${{ github.sha }}
           EXPECTED_APP_ENV: staging
-          EXPECTED_SCHEMA_VERSION: 005_backup_recovery
+          EXPECTED_SCHEMA_VERSION: 006_atelier_product
 
   restore-drill:
     runs-on: ubuntu-latest

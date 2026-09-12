@@ -1,3 +1,6 @@
+import { instantiateWorkflow } from "./workflow";
+import { priceSnapshot } from "./catalog";
+import type { Transaction } from "@/services/product";
 import { db } from "@/db";
 import crypto from "node:crypto";
 import {
@@ -17,6 +20,9 @@ import {
   studioProjectTimelines,
   studioProjectPayments,
   studioProjectExpenses,
+  studioInstallments,
+  studioInstallmentAllocations,
+  studioDeliverables,
   employees,
   suppliers,
   projects,
@@ -25,7 +31,7 @@ import {
   payments as corePayments,
   expenses as coreExpenses,
 } from "@/db/schema";
-import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { ApiError, assertUuid, decimal, pageNumber } from "@/lib/apiError";
 import { getNextSequenceCode } from "@/services/sequence";
 import { assertEquipmentScheduleAvailable, assertPersonnelScheduleAvailable, lockScheduleResources } from "./scheduling";
@@ -39,6 +45,7 @@ import { toJalaliDate } from "@/lib/dateUtils";
 // ==========================================
 
 export interface CreateProjectInput {
+  catalogItemId?: string | null;
   studioCustomerId: string;
   title: string;
   eventType?: string | null;
@@ -73,7 +80,11 @@ export interface UpdateProjectInput {
 }
 
 export interface CreateContractInput {
-  totalAmount: number | string;
+  totalAmount?: number | string;
+  packageId?: string | null;
+  addons?: Array<{ id: string; quantity: number }>;
+  discount?: number | string;
+  installmentSchedule?: Array<{ title: string; amount: number | string; dueDate: Date | string }>;
   depositAmount?: number | string | null;
   installmentsCount?: number;
   contractDate?: Date | string | null;
@@ -199,6 +210,7 @@ export const VALID_PROJECT_STATUSES = [
   "approved",
   "delivered",
   "completed",
+  "archived",
   "cancelled",
 ] as const;
 
@@ -624,6 +636,13 @@ export async function getStudioProjectById(id: string) {
     .where(eq(studioContracts.studioProjectId, id))
     .orderBy(desc(studioContracts.createdAt));
 
+  const installmentRows = contracts.length ? await db.select().from(studioInstallments).where(inArray(studioInstallments.contractId, contracts.map(row => row.id))).orderBy(studioInstallments.dueDate) : [];
+  const allocationRows = installmentRows.length ? await db.select().from(studioInstallmentAllocations).where(inArray(studioInstallmentAllocations.installmentId, installmentRows.map(row => row.id))) : [];
+  const installments = installmentRows.map(row => {
+    const paidAmount = allocationRows.filter(item => item.installmentId === row.id).reduce((sum, item) => sum + Number(item.amount), 0);
+    return { ...row, paidAmount: paidAmount.toFixed(2), status: paidAmount >= Number(row.amount) ? "paid" : paidAmount > 0 ? "partial" : row.dueDate < new Date() ? "overdue" : "pending" };
+  });
+
   // 2. Payments (دریافتی‌ها)
   const payments = await db
     .select()
@@ -748,17 +767,23 @@ export async function getStudioProjectById(id: string) {
     .select({
       id: studioTasks.id,
       title: studioTasks.title,
+      description: studioTasks.description,
       stage: studioTasks.stage,
       assignedPersonnelId: studioTasks.assignedPersonnelId,
       personnelName: studioPersonnel.fullName,
       priority: studioTasks.priority,
       status: studioTasks.status,
       dueDate: studioTasks.dueDate,
+      blocker: studioTasks.blocker,
+      dependencyId: studioTasks.dependencyId,
+      position: studioTasks.position,
     })
     .from(studioTasks)
     .leftJoin(studioPersonnel, eq(studioTasks.assignedPersonnelId, studioPersonnel.id))
     .where(eq(studioTasks.studioProjectId, id))
     .orderBy(studioTasks.dueDate);
+
+  const deliverables = await db.select().from(studioDeliverables).where(eq(studioDeliverables.studioProjectId, id)).orderBy(studioDeliverables.dueDate);
 
   // Canonical ERP accounting is authoritative; Studio rows are metadata only.
   const canonicalInvoices = project.projectId ? await db.select().from(invoices).where(and(eq(invoices.projectId, project.projectId), eq(invoices.status, "issued"))) : [];
@@ -786,6 +811,8 @@ export async function getStudioProjectById(id: string) {
     timelines,
     calendarEvents,
     tasks,
+    deliverables,
+    installments,
     financialSummary: {
       source: "erp",
       invoicedRevenue: contractTotal,
@@ -811,13 +838,14 @@ export async function getStudioProjectById(id: string) {
 // CREATE & UPDATE PROJECT
 // ==========================================
 
-export async function createStudioProject(input: CreateProjectInput) {
+export async function createStudioProject(input: CreateProjectInput, transaction?: Transaction) {
+  const client = transaction || db;
   assertUuid(input.studioCustomerId);
   if (!input.title || !input.title.trim()) {
     throw new ApiError(400, "عنوان پروژه الزامی است.");
   }
 
-  const [customer] = await db
+  const [customer] = await client
     .select({
       id: studioCustomers.id,
       customerId: studioCustomers.customerId,
@@ -835,21 +863,23 @@ export async function createStudioProject(input: CreateProjectInput) {
 
   if (input.managerEmployeeId) {
     assertUuid(input.managerEmployeeId);
-    const [emp] = await db.select({ id: employees.id }).from(employees).where(eq(employees.id, input.managerEmployeeId)).limit(1);
+    const [emp] = await client.select({ id: employees.id }).from(employees).where(eq(employees.id, input.managerEmployeeId)).limit(1);
     if (!emp) throw new ApiError(404, "مدیر پروژه یافت نشد.");
   }
 
-  const projectNumber = await getNextSequenceCode("studio_project");
+  const projectNumber = await getNextSequenceCode("studio_project", client);
   const contractVal = input.totalContractValue !== undefined && input.totalContractValue !== null
     ? decimal(input.totalContractValue, "مبلغ قرارداد", 2)
     : "0.00";
 
   const eventDate = input.eventDate ? new Date(input.eventDate) : new Date();
+  // Keep the historical service default for compatibility. CRM conversion always
+  // supplies `booked` explicitly, so a converted inquiry never becomes a duplicate lead.
   const initialStatus = input.status || "lead";
   if (Number.isNaN(eventDate.getTime())) throw new ApiError(400, "تاریخ رویداد نامعتبر است.");
   if (!VALID_PROJECT_STATUSES.includes(initialStatus as any)) throw new ApiError(400, "وضعیت پروژه نامعتبر است.");
 
-  return db.transaction(async (tx) => {
+  const create = async (tx: Transaction) => {
     let coreProjectId = input.coreProjectId || null;
     if (coreProjectId) {
       assertUuid(coreProjectId);
@@ -864,6 +894,7 @@ export async function createStudioProject(input: CreateProjectInput) {
       .insert(studioProjects)
       .values({
         projectNumber,
+        catalogItemId: input.catalogItemId || null,
         studioCustomerId: input.studioCustomerId,
         projectId: coreProjectId,
         title: input.title.trim(),
@@ -903,37 +934,11 @@ export async function createStudioProject(input: CreateProjectInput) {
       status: initialStatus,
     }, { userId: input.actorId, employeeId: input.actorId, userName: input.authorName || undefined }, tx);
 
-    // Initialize production plan
-    const targetDelivery = new Date(eventDate.getTime() + 30 * 24 * 60 * 60 * 1000);
-    const [plan] = await tx
-      .insert(studioProductionPlans)
-      .values({
-        studioProjectId: project.id,
-        targetDeliveryDate: targetDelivery,
-        currentStage: "raw_backup",
-      })
-      .returning();
-
-    const standardSteps = [
-      "پیش‌تولید و هماهنگی لوکیشن‌ها",
-      "تصویربرداری و عکاسی مراسم",
-      "انتقال داده‌ها و بک‌آپ آرشیو",
-      "انتخاب شات‌ها و رتوش ژورنال",
-      "تدوین تیزر و فیلم کامل (Edit & Color)",
-      "چاپ، صحافی و تحویل نهایی به مشتری",
-    ];
-
-    for (const name of standardSteps) {
-      await tx.insert(studioProductionSteps).values({
-        planId: plan.id,
-        stepName: name,
-        status: "pending",
-        deadline: targetDelivery,
-      });
-    }
+    await instantiateWorkflow(tx, project.id, project.eventType, eventDate, input.catalogItemId);
 
     return project;
-  });
+  };
+  return transaction ? create(transaction) : db.transaction(create);
 }
 
 export async function updateStudioProject(id: string, input: UpdateProjectInput) {
@@ -986,6 +991,7 @@ export async function updateStudioProject(id: string, input: UpdateProjectInput)
       if (!VALID_PROJECT_STATUSES.includes(input.status as any)) throw new ApiError(400, "وضعیت پروژه نامعتبر است.");
       changes.push(`وضعیت: ${getStageTitle(input.status)}`);
       updateData.status = input.status;
+      updateData.archivedAt = input.status === "archived" ? new Date() : null;
     }
 
     if (input.managerEmployeeId !== undefined) {
@@ -1052,12 +1058,7 @@ export async function createStudioContract(projectId: string, input: CreateContr
   assertUuid(projectId);
   const idempotencyKey = input.idempotencyKey?.trim() || crypto.randomUUID();
 
-  const total = Number(decimal(input.totalAmount, "مبلغ قرارداد", 2, true));
   const deposit = input.depositAmount ? Number(decimal(input.depositAmount, "مبلغ بیعانه", 2)) : 0;
-
-  if (deposit > total) {
-    throw new ApiError(400, "مبلغ بیعانه نمی‌تواند از مبلغ کل قرارداد بیشتر باشد.");
-  }
 
   const installments = Math.max(1, Number(input.installmentsCount || 1));
   const contractDate = input.contractDate ? new Date(input.contractDate) : new Date();
@@ -1069,6 +1070,9 @@ export async function createStudioContract(projectId: string, input: CreateContr
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${idempotencyKey}, 0))`);
     const [prior] = await tx.select().from(studioContracts).where(eq(studioContracts.idempotencyKey, idempotencyKey)).limit(1);
     if (prior) return { ...prior, remainingBalance: (Number(prior.totalAmount) - Number(prior.depositAmount)).toFixed(2) };
+    const packageSnapshot = input.packageId ? await priceSnapshot(tx, input.packageId, input.addons, input.discount) : null;
+    const total = packageSnapshot?.total ?? Number(decimal(input.totalAmount, "مبلغ قرارداد", 2, true));
+    if (deposit > total) throw new ApiError(400, "مبلغ بیعانه نمی‌تواند از مبلغ کل قرارداد بیشتر باشد.");
     const [project] = await tx
       .select({ id: studioProjects.id, title: studioProjects.title, status: studioProjects.status, projectId: studioProjects.projectId, customerId: studioCustomers.customerId })
       .from(studioProjects)
@@ -1088,6 +1092,7 @@ export async function createStudioContract(projectId: string, input: CreateContr
         invoiceId: invoice.id,
         idempotencyKey,
         financialStatus: "posted",
+        packageSnapshot,
         totalAmount: total.toFixed(2),
         depositAmount: deposit.toFixed(2),
         installmentsCount: installments,
@@ -1098,6 +1103,23 @@ export async function createStudioContract(projectId: string, input: CreateContr
         status: contractStatus,
       })
       .returning();
+
+    if (total > deposit) {
+      if (input.installmentSchedule && input.installmentSchedule.length > 24) throw new ApiError(400, "حداکثر ۲۴ قسط مجاز است.");
+      const autoRows = Array.from({ length: installments }, (_, position) => {
+        const cents = Math.round((total - deposit) * 100), base = Math.floor(cents / installments), amount = (base + (position === installments - 1 ? cents - base * installments : 0)) / 100;
+        return { title: `قسط ${position + 1}`, amount, dueDate: new Date(contractDate.getTime() + ((deliveryDate.getTime() - contractDate.getTime()) * (position + 1)) / installments) };
+      });
+      const rows = (input.installmentSchedule?.length ? input.installmentSchedule : autoRows).map((row, position) => {
+        const amount = Number(decimal(row.amount, "مبلغ قسط", 2, true));
+        const dueDate = new Date(row.dueDate);
+        if (!Number.isFinite(dueDate.getTime())) throw new ApiError(400, "تاریخ سررسید قسط معتبر نیست.");
+        return { contractId: contract.id, title: row.title?.trim() || `قسط ${position + 1}`, amount: amount.toFixed(2), dueDate, position };
+      });
+      const scheduled = rows.reduce((sum, row) => sum + Number(row.amount), 0);
+      if (Math.abs(scheduled - (total - deposit)) > 0.001) throw new ApiError(400, "جمع اقساط باید برابر ماندهٔ قرارداد باشد.");
+      await tx.insert(studioInstallments).values(rows);
+    }
 
     // Advance project status if it was in lead/contact/proposal
     const newStatus = ["lead", "contact", "proposal"].includes(project.status)
@@ -1273,6 +1295,25 @@ export async function createStudioPayment(projectId: string, input: CreatePaymen
         notes: input.notes?.trim() || null,
       })
       .returning();
+
+    // Installments are operational projections only. Allocation references this
+    // exact canonical receipt-backed Studio payment and never posts money twice.
+    if (input.paymentType !== "deposit") {
+      const [contract] = await tx.select({ id: studioContracts.id }).from(studioContracts).where(and(eq(studioContracts.studioProjectId, projectId), eq(studioContracts.invoiceId, invoiceId))).limit(1);
+      if (contract) {
+        const dueInstallments = await tx.select().from(studioInstallments).where(eq(studioInstallments.contractId, contract.id)).orderBy(asc(studioInstallments.position));
+        const existingAllocations = dueInstallments.length ? await tx.select().from(studioInstallmentAllocations).where(inArray(studioInstallmentAllocations.installmentId, dueInstallments.map(row => row.id))) : [];
+        let remaining = amount;
+        for (const installment of dueInstallments) {
+          const allocated = existingAllocations.filter(row => row.installmentId === installment.id).reduce((sum, row) => sum + Number(row.amount), 0);
+          const available = Math.max(0, Number(installment.amount) - allocated);
+          const applied = Math.min(remaining, available);
+          if (applied > 0) await tx.insert(studioInstallmentAllocations).values({ installmentId: installment.id, studioPaymentId: payment.id, amount: applied.toFixed(2) });
+          remaining -= applied;
+          if (remaining <= 0) break;
+        }
+      }
+    }
 
     // Log to Timeline
     const typeLabel = input.paymentType === "deposit"

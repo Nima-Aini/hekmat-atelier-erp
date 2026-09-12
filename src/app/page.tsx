@@ -3,30 +3,21 @@
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AppLayout } from "@/components/layout/AppLayout";
-import { DashboardView } from "@/components/views/DashboardView";
-import { RawMaterialsView } from "@/components/views/RawMaterialsView";
-import { ProductsView } from "@/components/views/ProductsView";
-import { InvoicesView } from "@/components/views/InvoicesView";
-import { CustomersView } from "@/components/views/CustomersView";
-import { CustomerMapView } from "@/components/views/CustomerMapView";
-import { ProductionView } from "@/components/views/ProductionView";
-import { InventoryView } from "@/components/views/InventoryView";
-import { PurchasesView } from "@/components/views/PurchasesView";
-import { FinancialView } from "@/components/views/FinancialView";
-import { EmployeesView } from "@/components/views/EmployeesView";
-import { ProjectManagementView } from "@/components/views/ProjectManagementView";
-import { ReportsView } from "@/components/views/ReportsView";
-import { AlertsView } from "@/components/views/AlertsView";
+import { StudioDashboard } from "@/components/studio/dashboard/StudioDashboard";
 import { AiAssistantView } from "@/components/views/AiAssistantView";
 import { BackupView } from "@/components/views/BackupView";
 import { SettingsView } from "@/components/views/SettingsView";
-import { OrdersView } from "@/components/views/OrdersView";
-import { NotesView } from "@/components/views/NotesView";
 import { AuditLogsView } from "@/components/views/AuditLogsView";
-import { TaxDeclarationView } from "@/components/views/TaxDeclarationView";
 import { StudioPersonnelView } from "@/components/views/StudioPersonnelView";
 import { StudioEquipmentView } from "@/components/views/StudioEquipmentView";
 import { StudioCRMView } from "@/components/views/StudioCRMView";
+import { LeadPipeline } from "@/components/studio/crm/LeadPipeline";
+import { StudioWorkboard } from "@/components/studio/tasks/StudioWorkboard";
+import { StudioCatalogView } from "@/components/studio/catalog/StudioCatalogView";
+import { AtelierFinancialCenter } from "@/components/studio/finance/AtelierFinancialCenter";
+import { AtelierReportsView } from "@/components/studio/reports/AtelierReportsView";
+import { StudioNotificationsView } from "@/components/studio/notifications/StudioNotificationsView";
+import { StudioVendorsView } from "@/components/studio/vendors/StudioVendorsView";
 
 export default function HomePage() {
   const router = useRouter();
@@ -35,51 +26,38 @@ export default function HomePage() {
   useEffect(() => { fetch("/api/auth/employee-me").then((r) => r.json()).then((data) => { if (!data.success) router.replace("/employee-login"); else setMe(data); setAuthReady(true); }).catch(() => router.replace("/employee-login")); }, [router]);
   const [activeTab, setActiveTab] = useState("dashboard");
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedStudioProjectId, setSelectedStudioProjectId] = useState<string | null>(null);
 
   const renderActiveView = () => {
     switch (activeTab) {
       case "dashboard":
-        return <DashboardView selectedProjectId={selectedProjectId} onNavigate={setActiveTab} />;
+        return <StudioDashboard onNavigate={setActiveTab} />;
       case "studio_crm":
-        return <StudioCRMView onNavigate={setActiveTab} />;
-      case "raw_materials":
-        return <RawMaterialsView />;
-      case "products":
-        return <ProductsView />;
-      case "invoices":
-        return <InvoicesView selectedProjectId={selectedProjectId} />;
-      case "orders":
-        return <OrdersView selectedProjectId={selectedProjectId} permissions={me?.navigationPermissions || me?.permissions} />;
-      case "notes":
-        return <NotesView selectedProjectId={selectedProjectId} permissions={me?.navigationPermissions || me?.permissions} />;
+        return <LeadPipeline onOpenProject={(id) => { setSelectedStudioProjectId(id); setActiveTab("projects"); }} />;
       case "audit_logs":
         return <AuditLogsView selectedProjectId={selectedProjectId} onNavigate={setActiveTab} />;
       case "customers":
-        return <CustomersView selectedProjectId={selectedProjectId} />;
-      case "customer_map":
-        return <CustomerMapView />;
-      case "production":
-        return <ProductionView selectedProjectId={selectedProjectId} />;
-      case "inventory":
-        return <InventoryView />;
-      case "purchases":
-        return <PurchasesView />;
+        return <StudioCRMView key="customers" initialTab="customers" onNavigate={setActiveTab} />;
+      case "calendar":
+        return <StudioCRMView key="calendar" initialTab="execution" onNavigate={setActiveTab} />;
+      case "tasks":
+        return <StudioWorkboard />;
+      case "catalog":
+        return <StudioCatalogView />;
       case "financial":
-        return <FinancialView />;
-      case "employees":
-        return <EmployeesView />;
+        return <AtelierFinancialCenter selectedProjectId={selectedProjectId} />;
+      case "vendors":
+        return <StudioVendorsView />;
       case "studio_personnel":
         return <StudioPersonnelView onNavigate={setActiveTab} />;
       case "studio_equipment":
         return <StudioEquipmentView onNavigate={setActiveTab} />;
       case "projects":
-        return <ProjectManagementView />;
+        return <StudioCRMView key="projects" initialProjectId={selectedStudioProjectId} initialTab="projects" onNavigate={setActiveTab} />;
       case "reports":
-        return <ReportsView selectedProjectId={selectedProjectId} />;
-      case "tax_declaration":
-        return <TaxDeclarationView selectedProjectId={selectedProjectId} />;
+        return <AtelierReportsView />;
       case "alerts":
-        return <AlertsView selectedProjectId={selectedProjectId} onNavigate={setActiveTab} />;
+        return <StudioNotificationsView />;
       case "ai":
         return <AiAssistantView selectedProjectId={selectedProjectId} />;
       case "backup":
@@ -87,7 +65,7 @@ export default function HomePage() {
       case "settings":
         return <SettingsView />;
       default:
-        return <DashboardView selectedProjectId={selectedProjectId} onNavigate={setActiveTab} />;
+        return <StudioDashboard onNavigate={setActiveTab} />;
     }
   };
 

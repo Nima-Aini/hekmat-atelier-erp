@@ -2,7 +2,7 @@ name: Verify pull request
 run-name: Verify exact head SHA ${{ github.event.pull_request.head.sha }}
 on:
   pull_request:
-    branches: [main]
+    branches: [main, codex/phase2-hardening]
 permissions:
   contents: read
 jobs:

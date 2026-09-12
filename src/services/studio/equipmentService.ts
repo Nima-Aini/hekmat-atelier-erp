@@ -554,8 +554,9 @@ export async function reserveStudioEquipment(input: ReserveEquipmentInput) {
 
 export async function updateReservationStatus(
   reservationId: string,
-  action: "checkout" | "checkin" | "cancel" | "confirm",
+  action: "checkout" | "checkin" | "damage" | "cancel" | "confirm",
   actor?: { employeeId?: string; employeeName?: string },
+  details?: { condition?: string; notes?: string },
 ) {
   assertUuid(reservationId);
 
@@ -582,12 +583,22 @@ export async function updateReservationStatus(
       case "checkout":
         updateData.status = "checked_out";
         updateData.checkoutTime = now;
+        updateData.conditionOnCheckout = details?.condition?.trim() || null;
         equipUpdate.locationType = "on_set";
         break;
       case "checkin":
         updateData.status = "returned";
         updateData.checkinTime = now;
+        updateData.conditionOnReturn = details?.condition?.trim() || null;
         equipUpdate.locationType = "in_studio";
+        break;
+      case "damage":
+        updateData.status = "damaged";
+        updateData.checkinTime = now;
+        updateData.conditionOnReturn = details?.condition?.trim() || details?.notes?.trim() || "آسیب هنگام عودت گزارش شد";
+        updateData.notes = [reservation.notes, details?.notes].filter(Boolean).join("\n") || null;
+        equipUpdate.locationType = "maintenance";
+        equipUpdate.currentHealthStatus = "damaged";
         break;
       case "cancel":
         updateData.status = "cancelled";

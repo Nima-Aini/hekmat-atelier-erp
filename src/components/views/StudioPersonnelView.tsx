@@ -61,12 +61,13 @@ interface SalaryRecord {
 interface PersonnelDetail {
   id: string;
   code: string;
+  employeeId?: string | null;
   fullName: string;
   mobile: string;
-  type: "employee" | "freelancer";
+  personnelType: "employee" | "temporary_worker";
   primaryRole?: string | null;
   status: "active" | "on_leave" | "inactive";
-  yearsOfExperience?: number | null;
+  experienceYears?: number | null;
   rating?: number | null;
   portfolioUrl?: string | null;
   notes?: string | null;
@@ -153,17 +154,19 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
   const [createForm, setCreateForm] = useState({
     fullName: "",
     mobile: "",
-    type: "freelancer",
+    employeeId: "",
+    personnelType: "temporary_worker",
     primaryRole: "عکاس آتلیه و عمارت",
-    yearsOfExperience: 3,
+    experienceYears: 3,
     portfolioUrl: "",
     notes: "",
-    initialSkills: ["Photography (عکاسی آتلیه و فضای باز)"],
+    skills: [{ skillTitle: "Photography (عکاسی آتلیه و فضای باز)", skillCategory: "shooting", proficiencyLevel: "senior" }],
   });
   const [creatingPersonnel, setCreatingPersonnel] = useState(false);
 
   // Studio projects list for selector
   const [projects, setProjects] = useState<any[]>([]);
+  const [employeesList, setEmployeesList] = useState<any[]>([]);
 
   // Load Personnel List
   const loadPersonnel = async () => {
@@ -201,6 +204,13 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
   }, []);
 
   useEffect(() => {
+    fetch("/api/employees?status=active")
+      .then((r) => r.json())
+      .then((d) => { if (d.success) setEmployeesList(d.employees || []); })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     fetch("/api/accounts").then((r) => r.json()).then((d) => { if (d.success) setFinancialAccounts(d.accounts || []); }).catch(() => {});
   }, []);
 
@@ -215,10 +225,11 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
         setEditInfo({
           fullName: data.personnel.fullName,
           mobile: data.personnel.mobile,
+          employeeId: data.personnel.employeeId || "",
           primaryRole: data.personnel.primaryRole || "",
-          type: data.personnel.type,
+          personnelType: data.personnel.personnelType,
           status: data.personnel.status,
-          yearsOfExperience: data.personnel.yearsOfExperience || 0,
+          experienceYears: data.personnel.experienceYears || 0,
           rating: data.personnel.rating || 5,
           portfolioUrl: data.personnel.portfolioUrl || "",
           notes: data.personnel.notes || "",
@@ -410,12 +421,13 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
         setCreateForm({
           fullName: "",
           mobile: "",
-          type: "freelancer",
+          employeeId: "",
+          personnelType: "temporary_worker",
           primaryRole: "عکاس آتلیه و عمارت",
-          yearsOfExperience: 3,
+          experienceYears: 3,
           portfolioUrl: "",
           notes: "",
-          initialSkills: ["Photography (عکاسی آتلیه و فضای باز)"],
+          skills: [{ skillTitle: "Photography (عکاسی آتلیه و فضای باز)", skillCategory: "shooting", proficiencyLevel: "senior" }],
         });
         await loadPersonnel();
         if (data.personnel?.id) {
@@ -444,8 +456,8 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
   const stats = useMemo(() => {
     const total = personnelList.length;
     const active = personnelList.filter((p) => p.status === "active").length;
-    const freelancers = personnelList.filter((p) => p.type === "freelancer").length;
-    const employees = personnelList.filter((p) => p.type === "employee").length;
+    const freelancers = personnelList.filter((p) => p.personnelType === "temporary_worker").length;
+    const employees = personnelList.filter((p) => p.personnelType === "employee").length;
     return { total, active, freelancers, employees };
   }, [personnelList]);
 
@@ -633,7 +645,7 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
                   </span>
                   <span className="text-slate-600">•</span>
                   <span className="px-2 py-0.5 rounded bg-slate-800 text-[11px] text-slate-300">
-                    {p.type === "employee" ? "استخدامی ثابت" : "آزادکار / پروژه‌ای"}
+                    {p.personnelType === "employee" ? "استخدامی ثابت" : "آزادکار / پروژه‌ای"}
                   </span>
                 </div>
 
@@ -818,14 +830,24 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
                         <div>
                           <label className="block text-xs text-slate-400 mb-1.5 font-medium">نوع همکاری</label>
                           <select
-                            value={editInfo.type}
-                            onChange={(e) => setEditInfo({ ...editInfo, type: e.target.value })}
+                            value={editInfo.personnelType}
+                            onChange={(e) => setEditInfo({ ...editInfo, personnelType: e.target.value })}
                             className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500"
                           >
-                            <option value="freelancer">آزادکار / پروژه‌ای (Freelancer)</option>
+                            <option value="temporary_worker">آزادکار / پروژه‌ای (Freelancer)</option>
                             <option value="employee">پرسنل استخدامی ثابت (Full-time)</option>
                           </select>
                         </div>
+
+                        {employeesList.length > 0 && (
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1.5 font-medium">حساب سازمانی / دسترسی سیستم</label>
+                            <select value={editInfo.employeeId || ""} onChange={(e) => setEditInfo({ ...editInfo, employeeId: e.target.value })} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500">
+                              <option value="">بدون حساب ورود</option>
+                              {employeesList.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} — {employee.mobile}</option>)}
+                            </select>
+                          </div>
+                        )}
 
                         <div>
                           <label className="block text-xs text-slate-400 mb-1.5 font-medium">سابقه کار تخصصی (سال)</label>
@@ -833,8 +855,8 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
                             type="number"
                             min="0"
                             max="40"
-                            value={editInfo.yearsOfExperience}
-                            onChange={(e) => setEditInfo({ ...editInfo, yearsOfExperience: Number(e.target.value) })}
+                            value={editInfo.experienceYears}
+                            onChange={(e) => setEditInfo({ ...editInfo, experienceYears: Number(e.target.value) })}
                             className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500"
                           />
                         </div>
@@ -1397,15 +1419,29 @@ export function StudioPersonnelView({ onNavigate }: { onNavigate?: (tab: string)
                 <div>
                   <label className="block text-xs text-slate-400 mb-1 font-medium">نوع همکاری</label>
                   <select
-                    value={createForm.type}
-                    onChange={(e) => setCreateForm({ ...createForm, type: e.target.value })}
+                    value={createForm.personnelType}
+                    onChange={(e) => setCreateForm({ ...createForm, personnelType: e.target.value })}
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
                   >
-                    <option value="freelancer">آزادکار / پروژه‌ای</option>
+                    <option value="temporary_worker">آزادکار / پروژه‌ای</option>
                     <option value="employee">پرسنل استخدامی ثابت</option>
                   </select>
                 </div>
               </div>
+
+              {employeesList.length > 0 && (
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1 font-medium">حساب سازمانی مرتبط (اختیاری)</label>
+                  <select
+                    value={createForm.employeeId}
+                    onChange={(e) => setCreateForm({ ...createForm, employeeId: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="">بدون حساب ورود</option>
+                    {employeesList.map((employee) => <option key={employee.id} value={employee.id}>{employee.name} — {employee.mobile}</option>)}
+                  </select>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs text-slate-400 mb-1 font-medium">نقش اصلی</label>

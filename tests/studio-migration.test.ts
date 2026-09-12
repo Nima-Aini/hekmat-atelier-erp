@@ -67,7 +67,7 @@ describe("Hekmat Atelier (حکمت آتلیه) Database Migration & Schema Verif
     expect(rows.filter((row) => row.role === "admin").map((row) => row.permission)).toEqual(expect.arrayContaining(["backup.create", "backup.download", "backup.verify", "backup.restore", "backup.delete"]));
   });
 
-  it("records all versioned migrations through Phase 3", async () => {
+  it("records every versioned migration through Atelier productization", async () => {
     const rows = await db.select({ id: sql<string>`id` }).from(sql`app_migrations`).orderBy(sql`id`);
     expect(rows.map((row: any) => row.id)).toEqual([
       "001_studio_financial_links",
@@ -75,6 +75,7 @@ describe("Hekmat Atelier (حکمت آتلیه) Database Migration & Schema Verif
       "003_studio_authorization_audit",
       "004_studio_constraints_indexes",
       "005_backup_recovery",
+      "006_atelier_product",
     ]);
   });
 

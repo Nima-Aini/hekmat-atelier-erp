@@ -1,260 +1,65 @@
 import { GoogleGenAI } from "@google/genai";
-import { getDashboardKPIs } from "./reporting";
-import { getActiveAlerts } from "./alerts";
 import { db } from "@/db";
 import { systemSettings } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { getProjectDashboard } from "@/services/partner";
-import { AIActionPayload, executeAIAction } from "./aiDataModifier";
+import { getAtelierReports } from "@/services/studio/reports";
+import { getStudioDashboard } from "@/services/studio/dashboard";
 
 export interface AIAnalysisResult {
   answer: string;
   facts: string[];
-  calculatedMetrics: Record<string, any>;
+  calculatedMetrics: Record<string, unknown>;
   assumptions: string[];
   recommendations: string[];
-  proposalAction?: {
-    actionType: string;
-    description: string;
-    payload: Record<string, any>;
-    requiresUserApproval: boolean;
-  } | null;
+  proposalAction: null;
 }
+export interface ChatMessage { role: "user" | "model" | "assistant"; content: string; }
+const CANDIDATE_GEMINI_MODELS = ["gemini-2.5-flash", "gemini-3.1-flash-lite", "gemini-3.7-flash", "gemini-flash-latest"];
 
-export interface ChatMessage {
-  role: "user" | "model" | "assistant";
-  content: string;
-  actionProposal?: AIActionPayload | null;
-}
-
-// Approved Gemini models from gemini-api skill with fallback order for free-tier resilience
-const CANDIDATE_GEMINI_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-3.1-flash-lite",
-  "gemini-3.7-flash",
-  "gemini-flash-latest",
-];
-
-async function getGeminiApiKey(): Promise<string> {
-  const [settings] = await db
-    .select()
-    .from(systemSettings)
-    .where(eq(systemSettings.id, "main_config"))
-    .limit(1);
-
+async function getGeminiApiKey() {
+  const [settings] = await db.select().from(systemSettings).where(eq(systemSettings.id, "main_config")).limit(1);
   const key = process.env.GEMINI_API_KEY || settings?.openaiApiKey;
-  if (!key) {
-    throw new Error(
-      "کلید Gemini تنظیم نشده است. لطفاً مقدار GEMINI_API_KEY را در Environment Variables یا تنظیمات وارد نمایید."
-    );
-  }
+  if (!key) throw new Error("کلید Gemini تنظیم نشده است. مقدار GEMINI_API_KEY را فقط در محیط اجرا یا تنظیمات امن وارد کنید.");
   return key;
 }
-
 function parseGeminiJson(text: string): Record<string, any> {
   const cleaned = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed;
-    }
-  } catch {
-    // If JSON parsing fails, return null
+  try { const parsed = JSON.parse(cleaned); if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed; } catch { /* prose fallback */ }
+  return { answer: text, reply: text, facts: [], recommendations: [], assumptions: [] };
+}
+async function atelierContext(coreIds: string[] | null, actorId: string, unscoped: boolean, access: { finance: boolean; wages: boolean }) {
+  const [reports, dashboard] = await Promise.all([getAtelierReports(coreIds, actorId, unscoped, access), getStudioDashboard(coreIds, access.finance, actorId, unscoped)]);
+  return { reports, dashboard };
+}
+async function generate(prompt: string, systemInstruction: string) {
+  const ai = new GoogleGenAI({ apiKey: await getGeminiApiKey(), httpOptions: { headers: { "User-Agent": "hekmat-atelier" } } });
+  let lastError = "";
+  for (const model of CANDIDATE_GEMINI_MODELS) {
+    try {
+      const response = await ai.models.generateContent({ model, contents: prompt, config: { systemInstruction, responseMimeType: "application/json" } });
+      if (response.text) return { content: parseGeminiJson(response.text), model };
+    } catch (cause) { lastError = cause instanceof Error ? `Model ${model}: ${cause.message}` : String(cause); }
   }
-  return { answer: text, facts: [], recommendations: [], assumptions: [] };
+  throw new Error(`پاسخی از هوش مصنوعی دریافت نشد. ${lastError}`);
 }
 
-/**
- * Deep Business Analysis Query
- */
-export async function queryAIAssistant(
-  question: string,
-  projectId?: string | null
-): Promise<AIAnalysisResult> {
-  const apiKey = await getGeminiApiKey();
-  const kpis = await getDashboardKPIs({ projectId });
-  const activeAlerts = await getActiveAlerts(projectId);
-  const projectContext = projectId ? await getProjectDashboard(projectId) : null;
-
+export async function queryAIAssistant(question: string, coreIds: string[] | null, actorId: string, unscoped: boolean, access: { finance: boolean; wages: boolean }): Promise<AIAnalysisResult> {
+  const context = await atelierContext(coreIds, actorId, unscoped, access);
   const facts = [
-    `مبلغ کل فروش: ${kpis.totalSales.toLocaleString("fa-IR")} تومان`,
-    `سود ناخالص عملیاتی: ${kpis.totalGrossProfit.toLocaleString("fa-IR")} تومان (حاشیه سود ناخالص: ${kpis.grossMarginPercent}%)`,
-    `سود خالص کسب‌وکار: ${kpis.netProfit.toLocaleString("fa-IR")} تومان (حاشیه سود خالص: ${kpis.netMarginPercent}%)`,
-    `مجموع مطالبات (دریافتنی): ${kpis.totalReceivable.toLocaleString("fa-IR")} تومان`,
-    `موجودی نقدینگی و بانک: ${kpis.totalLiquidity.toLocaleString("fa-IR")} تومان`,
-    `تعداد اعلان‌های فعال سیستم: ${activeAlerts.length} عدد`,
+    `پروژه فعال: ${context.reports.projects.active}`,
+    `کار عقب‌افتاده: ${context.dashboard.attention.overdue.length}`,
+    ...(context.reports.finance ? [`درآمد قراردادی: ${context.reports.finance.contracted.toLocaleString("fa-IR")} تومان`, `وصول: ${context.reports.finance.collected.toLocaleString("fa-IR")} تومان`, `مطالبات: ${context.reports.finance.outstanding.toLocaleString("fa-IR")} تومان`, `سود پروژه‌ها: ${context.reports.finance.profit.toLocaleString("fa-IR")} تومان`] : []),
   ];
-
-  const calculatedMetrics = {
-    totalSales: kpis.totalSales,
-    totalGrossProfit: kpis.totalGrossProfit,
-    grossMarginPercent: kpis.grossMarginPercent,
-    netProfit: kpis.netProfit,
-    netMarginPercent: kpis.netMarginPercent,
-    totalReceivable: kpis.totalReceivable,
-    totalLiquidity: kpis.totalLiquidity,
-    healthBreakdown: kpis.healthBreakdown,
-  };
-
-  const assumptions = [
-    "تحلیل بر اساس داده‌های ثبت شده عملیاتی تا زمان حاضر انجام گرفته است.",
-    "نرخ‌های بهای تمام شده بر اساس فرمول ساخت BOM و قیمت‌های خرید جاری محاسبه شده‌اند.",
-  ];
-
-  const systemInstruction = `شما مشاور ارشد و تحلیل‌گر هوشمند کسب‌وکار سیستم «حکمت آکما» هستید.
-پاسخ‌های شما باید کاربردی، دقیق، واقع‌بینانه و به زبان فارسی روان باشند.
-پاسخ را در قالب یک آبجکت JSON معتبر شامل کلیدهای زیر بازگردانید:
-{
-  "answer": "پاسخ کامل، تحلیلی و راهنمای تفصیلی به سوال کاربر",
-  "facts": ["فهرستی از حقایق کلیدی مستخرج از داده‌های دیتابیس"],
-  "recommendations": ["راهکارهای عملیاتی و راهبردی بهبود سود یا مدیریت"],
-  "assumptions": ["فرضیات مورد استفاده در تحلیل"],
-  "proposalAction": null
-}`;
-
-  const userPrompt = `پرسش یا موضوع تحلیل:
-${question.trim()}
-
-داده‌های واقعی مالی و عملیاتی فعلی سیستم:
-${facts.join("\n")}
-
-شاخص‌های دقیق سیستم:
-${JSON.stringify(calculatedMetrics)}
-
-اطلاعات پروژه منتخب:
-${JSON.stringify(projectContext)}
-
-اعلان‌های مهم اخیر:
-${JSON.stringify(activeAlerts.slice(0, 10))}`;
-
-  const ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        "User-Agent": "aistudio-build",
-      },
-    },
-  });
-
-  let lastError = "";
-
-  for (const model of CANDIDATE_GEMINI_MODELS) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: userPrompt,
-        config: {
-          systemInstruction,
-          responseMimeType: "application/json",
-        },
-      });
-
-      const responseText = response.text;
-      if (responseText) {
-        const content = parseGeminiJson(responseText);
-        return {
-          answer: typeof content.answer === "string" ? content.answer : responseText,
-          facts: Array.isArray(content.facts) && content.facts.length ? content.facts : facts,
-          calculatedMetrics,
-          assumptions: Array.isArray(content.assumptions) && content.assumptions.length ? content.assumptions : assumptions,
-          recommendations: Array.isArray(content.recommendations) ? content.recommendations : [],
-          proposalAction: content.proposalAction && typeof content.proposalAction === "object" ? content.proposalAction : null,
-        };
-      }
-    } catch (err: any) {
-      lastError = `Model ${model}: ${err.message || String(err)}`;
-      console.warn(`Gemini fallback from ${model}:`, err.message);
-    }
-  }
-
-  throw new Error(`خطا در ارتباط با هوش مصنوعی جمنای. آخرین پیغام: ${lastError}`);
+  const metrics = { projects: context.reports.projects, crm: context.reports.crm, finance: context.reports.finance, today: context.dashboard.today, attention: context.dashboard.attention };
+  const instruction = `شما دستیار تحلیلی read-only «حکمت آتلیه» هستید. درباره برنامه امروز، پروژه‌های عقب‌افتاده، تاریخچه مشتری، پیگیری سرنخ، چک‌لیست تولید و سودآوری توضیح دهید. هرگز ادعای تغییر داده، ارسال پیامک یا ثبت مالی نکنید و هیچ action/mutation پیشنهاد ندهید. پاسخ JSON با answer، facts، recommendations و assumptions باشد.`;
+  const result = await generate(`پرسش: ${question.trim()}\nحقایق: ${facts.join("\n")}\nداده scoped: ${JSON.stringify(metrics)}`, instruction);
+  return { answer: typeof result.content.answer === "string" ? result.content.answer : "پاسخی دریافت نشد.", facts: Array.isArray(result.content.facts) && result.content.facts.length ? result.content.facts : facts, calculatedMetrics: metrics, assumptions: Array.isArray(result.content.assumptions) ? result.content.assumptions : ["تحلیل فقط بر اساس داده‌های مجاز فعلی انجام شده است."], recommendations: Array.isArray(result.content.recommendations) ? result.content.recommendations : [], proposalAction: null };
 }
 
-/**
- * Direct Interactive Conversational Chat with AI with Data Modification Capability
- */
-export async function chatWithAI(
-  messages: ChatMessage[],
-  projectId?: string | null
-): Promise<{ reply: string; modelUsed: string; actionProposal?: AIActionPayload | null }> {
-  const apiKey = await getGeminiApiKey();
-  const kpis = await getDashboardKPIs({ projectId });
-  const activeAlerts = await getActiveAlerts(projectId);
-
-  const contextSummary = `شما دستیار هوش مصنوعی هوشمند سیستم مدیریت، تولید و حسابداری حکمت آکما هستید.
-شما علاوه بر پاسخگویی به سوالات، توانایی اعمال تغییرات در اطلاعات سیستم (Data Modification) را دارید.
-
-عملیات‌های قابل انجام توسط شما در دیتابیس سیستم:
-1. "APPLY_INFLATION_PRODUCTS": تغییر قیمت فروش محصولات بر اساس درصد تورم یا درصد اعلامی (پارامتر: percent مثلاً 10 یا -5). مثال: "تورم 10 درصد داشتیم روی محصولات اعمال کن".
-2. "APPLY_INFLATION_RAW_MATERIALS": تغییر هزینه خرید مواد اولیه بر اساس درصد تورم (پارامتر: percent).
-3. "UPDATE_VISITOR_COMMISSIONS": تغییر درصد پورسانت ویزیتورها (پارامتر: percent و در صورت درخواست commissionBase با مقادیر "sales_total" یا "net_profit").
-4. "CREATE_PRODUCT": ایجاد محصول جدید (پارامترها: name, basePrice, category).
-5. "CREATE_CUSTOMER": ثبت مشتری جدید (پارامترها: name, mobile, city, storeName).
-
-اطلاعات زنده سیستم:
-- فروش کل: ${kpis.totalSales.toLocaleString("fa-IR")} تومان
-- حاشیه سود خالص: ${kpis.netMarginPercent}%
-- مطالبات کل: ${kpis.totalReceivable.toLocaleString("fa-IR")} تومان
-- نقدینگی و بانک: ${kpis.totalLiquidity.toLocaleString("fa-IR")} تومان
-- تعداد اعلانات فعال: ${activeAlerts.length}
-
-قالب پاسخ دهی شما:
-پاسخ را همواره در ساختار JSON استاندارد زیر تولید کنید:
-{
-  "reply": "متن پاسخ فارسی محترمانه و دقیق به کاربر",
-  "actionProposal": null | {
-    "actionType": "APPLY_INFLATION_PRODUCTS" | "APPLY_INFLATION_RAW_MATERIALS" | "UPDATE_VISITOR_COMMISSIONS" | "CREATE_PRODUCT" | "CREATE_CUSTOMER",
-    "description": "توضیح کوتاه عملیاتی که انجام خواهد شد",
-    "parameters": { "percent": 10, ... }
-  }
-}
-اگر کاربر از شما خواست تغییری در سیستم یا قیمت‌ها یا تورم ایجاد کنید، حتماً actionProposal را با پارامترهای استخراج شده تکمیل کنید.`;
-
-  const ai = new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        "User-Agent": "aistudio-build",
-      },
-    },
-  });
-
-  const lastUserMsg = messages[messages.length - 1]?.content || "سلام";
-  const conversationHistory = messages
-    .slice(0, -1)
-    .map((m) => `${m.role === "user" ? "کاربر" : "هوش مصنوعی"}: ${m.content}`)
-    .join("\n");
-  const fullPrompt = `${conversationHistory ? `تاریخچه گفتگو:\n${conversationHistory}\n\n` : ""}پیام کاربر: ${lastUserMsg}`;
-
-  let lastError = "";
-
-  for (const model of CANDIDATE_GEMINI_MODELS) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: fullPrompt,
-        config: {
-          systemInstruction: contextSummary,
-          responseMimeType: "application/json",
-        },
-      });
-
-      if (response.text) {
-        const parsed = parseGeminiJson(response.text);
-        const reply = parsed.reply || (typeof parsed.answer === "string" ? parsed.answer : response.text);
-        const actionProposal = parsed.actionProposal || null;
-
-        return {
-          reply,
-          modelUsed: model,
-          actionProposal,
-        };
-      }
-    } catch (err: any) {
-      lastError = `Model ${model}: ${err.message || String(err)}`;
-      console.warn(`Chat Gemini fallback from ${model}:`, err.message);
-    }
-  }
-
-  throw new Error(`پاسخی از هوش مصنوعی دریافت نشد. خطا: ${lastError}`);
+export async function chatWithAI(messages: ChatMessage[], coreIds: string[] | null, actorId: string, unscoped: boolean, access: { finance: boolean; wages: boolean }): Promise<{ reply: string; modelUsed: string; actionProposal: null }> {
+  const context = await atelierContext(coreIds, actorId, unscoped, access);
+  const history = messages.slice(-12).map(message => `${message.role === "user" ? "کاربر" : "دستیار"}: ${message.content}`).join("\n");
+  const instruction = `شما دستیار read-only مدیریت آتلیه هستید. به فارسی و بر اساس داده‌های scoped پاسخ دهید. تمرکز: برنامه امروز، پروژه و workflow، مشتری، پیگیری، تیم، تجهیزات و سودآوری. تغییر داده یا عملیات مالی ممنوع است. پاسخ JSON با کلید reply و actionProposal:null باشد.`;
+  const result = await generate(`${history}\n\nداده عملیاتی: ${JSON.stringify({ today: context.dashboard.today, attention: context.dashboard.attention, projects: context.reports.projects, crm: context.reports.crm, finance: context.reports.finance })}`, instruction);
+  return { reply: typeof result.content.reply === "string" ? result.content.reply : result.content.answer || "پاسخی دریافت نشد.", modelUsed: result.model, actionProposal: null };
 }

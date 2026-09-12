@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import type { Transaction } from "@/services/product";
 import { db } from "@/db";
 import {
   studioCustomers,
@@ -197,7 +199,7 @@ export async function getStudioCustomerById(id: string) {
   };
 }
 
-export async function createStudioCustomer(input: CreateStudioCustomerInput) {
+export async function createStudioCustomer(input: CreateStudioCustomerInput, transaction?: Transaction, reuseExisting = false) {
   if (!input.name || !input.name.trim()) {
     throw new ApiError(400, "نام مشتری الزامی است.");
   }
@@ -210,7 +212,8 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput) {
     throw new ApiError(400, "فرمت شماره همراه معتبر نیست (مثال: 09121234567).");
   }
 
-  return db.transaction(async (tx) => {
+  const create = async (tx: Transaction) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${"atelier-client:" + cleanMobile}, 0))`);
     let baseCustomerId = input.customerId;
 
     if (baseCustomerId) {
@@ -229,7 +232,7 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput) {
         baseCustomerId = existingByMobile.id;
       } else {
         // Create new base customer
-        const code = `CUST-${Date.now().toString().slice(-6)}`;
+        const code = `CL-${crypto.randomUUID()}`;
         const [newCust] = await tx
           .insert(customers)
           .values({
@@ -247,12 +250,13 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput) {
 
     // Check if studio customer profile already exists for this customerId
     const [existingStudioCust] = await tx
-      .select({ id: studioCustomers.id })
+      .select()
       .from(studioCustomers)
       .where(eq(studioCustomers.customerId, baseCustomerId!))
       .limit(1);
 
     if (existingStudioCust) {
+      if (reuseExisting) return { ...existingStudioCust, name: input.name.trim(), mobile: cleanMobile };
       throw new ApiError(409, "پروفایل آتلیه برای این مشتری قبلاً ایجاد شده است.");
     }
 
@@ -283,7 +287,8 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput) {
       socialMedia: input.socialMedia?.trim() || null,
       referrer: input.referrer?.trim() || null,
     };
-  });
+  };
+  return transaction ? create(transaction) : db.transaction(create);
 }
 
 export async function updateStudioCustomer(id: string, input: UpdateStudioCustomerInput) {

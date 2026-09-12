@@ -223,6 +223,7 @@ export const suppliers = pgTable("suppliers", {
   email: text("email"),
   address: text("address"),
   city: text("city").default("تهران"),
+  partnerCategory: text("partner_category"),
   notes: text("notes"),
   payableBalance: numeric("payable_balance", { precision: 15, scale: 2 }).default("0"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -734,7 +735,7 @@ export const backups = pgTable("backups", {
 
 export const systemSettings = pgTable("system_settings", {
   id: text("id").primaryKey().default("main_config"),
-  businessName: text("business_name").default("سازمان و کسب‌وکار حکمت آکما"),
+  businessName: text("business_name").default("حکمت آتلیه"),
   taxNumber: text("tax_number"),
   economicCode: text("economic_code"),
   nationalId: text("national_id"),
@@ -871,6 +872,8 @@ export const studioCustomers = pgTable("studio_customers", {
 // 16.2. Studio Projects
 export const studioProjects = pgTable("studio_projects", {
   id: uuid("id").defaultRandom().primaryKey(),
+  catalogItemId: uuid("catalog_item_id"),
+  archivedAt: timestamp("archived_at"),
   projectNumber: text("project_number").notNull().unique(), // e.g. STU-1403-0001
   studioCustomerId: uuid("studio_customer_id").notNull().references(() => studioCustomers.id, { onDelete: "cascade" }),
   projectId: uuid("project_id").references(() => projects.id),
@@ -892,6 +895,7 @@ export const studioProjects = pgTable("studio_projects", {
 // 16.3. Studio Contracts
 export const studioContracts = pgTable("studio_contracts", {
   id: uuid("id").defaultRandom().primaryKey(),
+  packageSnapshot: jsonb("package_snapshot"),
   contractNumber: text("contract_number").notNull().unique(), // e.g. CTR-1403-0001
   studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id, { onDelete: "cascade" }),
   invoiceId: uuid("invoice_id").references(() => invoices.id),
@@ -1024,6 +1028,8 @@ export const rentalEquipment = pgTable("rental_equipment", {
 // 16.10. Production Plans & Production Steps
 export const studioProductionPlans = pgTable("studio_production_plans", {
   id: uuid("id").defaultRandom().primaryKey(),
+  workflowTemplateId: uuid("workflow_template_id"),
+  workflowSnapshot: jsonb("workflow_snapshot"),
   studioProjectId: uuid("studio_project_id").notNull().unique().references(() => studioProjects.id, { onDelete: "cascade" }),
   targetDeliveryDate: timestamp("target_delivery_date").notNull(),
   currentStage: text("current_stage").default("raw_backup").notNull(), // raw_backup, selection, retouch, video_edit, teaser, album_print, final_qc, delivered
@@ -1052,6 +1058,7 @@ export const studioProductionSteps = pgTable("studio_production_steps", {
 // 16.11. Calendar Events
 export const studioCalendarEvents = pgTable("studio_calendar_events", {
   id: uuid("id").defaultRandom().primaryKey(),
+  ownerEmployeeId: uuid("owner_employee_id").references(() => employees.id, { onDelete: "set null" }),
   studioProjectId: uuid("studio_project_id").references(() => studioProjects.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   eventType: text("event_type").default("shooting").notNull(), // shooting, consultation, selection_session, venue_visit, delivery, maintenance
@@ -1068,6 +1075,10 @@ export const studioCalendarEvents = pgTable("studio_calendar_events", {
 // 16.12. Studio Tasks
 export const studioTasks = pgTable("studio_tasks", {
   id: uuid("id").defaultRandom().primaryKey(),
+  productionStepId: uuid("production_step_id").references(() => studioProductionSteps.id),
+  dependencyId: uuid("dependency_id"),
+  blocker: text("blocker"),
+  position: integer("position").default(0).notNull(),
   studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id, { onDelete: "cascade" }),
   assignedPersonnelId: uuid("assigned_personnel_id").references(() => studioPersonnel.id, { onDelete: "set null" }),
   title: text("title").notNull(),
@@ -1337,3 +1348,80 @@ export const studioNotificationsRelations = relations(studioNotifications, ({ on
     references: [studioProjects.id],
   }),
 }));
+
+// Atelier product domain. Accounting remains in invoices/payments/expenses.
+export const studioWorkflowTemplates = pgTable("studio_workflow_templates", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  jobType: text("job_type").notNull(),
+  stages: jsonb("stages").notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const studioCatalog = pgTable("studio_catalog", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  kind: text("kind").notNull(),
+  parentId: uuid("parent_id"),
+  name: text("name").notNull(),
+  jobType: text("job_type").notNull(),
+  description: text("description"),
+  basePrice: numeric("base_price", { precision: 15, scale: 2 }).default("0").notNull(),
+  specifications: jsonb("specifications").default({}).notNull(),
+  workflowTemplateId: uuid("workflow_template_id").references(() => studioWorkflowTemplates.id),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const studioLeads = pgTable("studio_leads", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  mobile: text("mobile").notNull(),
+  source: text("source"),
+  eventType: text("event_type").default("wedding").notNull(),
+  desiredDate: timestamp("desired_date"),
+  location: text("location"),
+  budget: numeric("budget", { precision: 15, scale: 2 }),
+  stage: text("stage").default("lead").notNull(),
+  assignedEmployeeId: uuid("assigned_employee_id").references(() => employees.id),
+  nextFollowUp: timestamp("next_follow_up"),
+  lastContactAt: timestamp("last_contact_at"),
+  lostReason: text("lost_reason"),
+  notes: text("notes"),
+  catalogItemId: uuid("catalog_item_id").references(() => studioCatalog.id),
+  convertedProjectId: uuid("converted_project_id").references(() => studioProjects.id),
+  consultationEventId: uuid("consultation_event_id").references(() => studioCalendarEvents.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const studioDeliverables = pgTable("studio_deliverables", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id),
+  kind: text("kind").notNull(),
+  title: text("title").notNull(),
+  url: text("url"),
+  storageLocation: text("storage_location"),
+  status: text("status").default("pending").notNull(),
+  dueDate: timestamp("due_date"),
+  deliveredAt: timestamp("delivered_at"),
+  confirmedAt: timestamp("confirmed_at"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const studioInstallments = pgTable("studio_installments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  contractId: uuid("contract_id").notNull().references(() => studioContracts.id),
+  title: text("title").notNull(),
+  amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+  dueDate: timestamp("due_date").notNull(),
+  position: integer("position").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+export const studioInstallmentAllocations = pgTable("studio_installment_allocations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  installmentId: uuid("installment_id").notNull().references(() => studioInstallments.id),
+  studioPaymentId: uuid("studio_payment_id").notNull().references(() => studioProjectPayments.id),
+  amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_studio_installment_payment").on(t.installmentId, t.studioPaymentId)]);
