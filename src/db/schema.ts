@@ -758,6 +758,7 @@ export const systemSettings = pgTable("system_settings", {
   aiEnabled: boolean("ai_enabled").default(true),
   neshanApiKey: text("neshan_api_key"),
   autoBackupIntervalHours: integer("auto_backup_interval_hours").default(24),
+  atelierConfig: jsonb("atelier_config").default({}),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -892,6 +893,17 @@ export const studioProjects = pgTable("studio_projects", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [uniqueIndex("uq_studio_projects_core_project").on(t.projectId)]);
 
+export const studioProjectTypes = pgTable("studio_project_types", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  code: text("code").notNull().unique(),
+  title: text("title").notNull(),
+  active: boolean("active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  fieldSchema: jsonb("field_schema").default([]).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
 // 16.3. Studio Contracts
 export const studioContracts = pgTable("studio_contracts", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -909,9 +921,30 @@ export const studioContracts = pgTable("studio_contracts", {
   termsAndConditions: text("terms_and_conditions"),
   status: text("status").default("draft").notNull(), // draft, signed, in_progress, completed, cancelled
   signedDocumentUrl: text("signed_document_url"),
+  projectTypeId: uuid("project_type_id").references(() => studioProjectTypes.id, { onDelete: "set null" }),
+  typeMetadata: jsonb("type_metadata").default({}),
+  programDate: timestamp("program_date"),
+  programEndDate: timestamp("program_end_date"),
+  executionLocation: text("execution_location"),
+  notes: text("notes"),
+  approvedAt: timestamp("approved_at"),
+  approvedById: uuid("approved_by_id").references(() => employees.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [uniqueIndex("uq_studio_contracts_invoice").on(t.invoiceId), uniqueIndex("uq_studio_contracts_idempotency").on(t.idempotencyKey)]);
+
+export const studioContractItems = pgTable("studio_contract_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  contractId: uuid("contract_id").notNull().references(() => studioContracts.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  quantity: numeric("quantity", { precision: 10, scale: 2 }).default("1").notNull(),
+  unitPrice: numeric("unit_price", { precision: 15, scale: 2 }).default("0").notNull(),
+  notes: text("notes"),
+  position: integer("position").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [index("idx_studio_contract_items_contract").on(t.contractId)]);
 
 // 16.4. Studio Personnel (Employee & Temporary Worker)
 export const studioPersonnel = pgTable("studio_personnel", {
@@ -964,6 +997,29 @@ export const personnelSalaryRecords = pgTable("personnel_salary_records", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [uniqueIndex("uq_studio_salary_payment").on(t.paymentId), uniqueIndex("uq_studio_salary_idempotency").on(t.idempotencyKey)]);
 
+export const studioPersonnelDefaultWages = pgTable("studio_personnel_default_wages", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  personnelId: uuid("personnel_id").notNull().references(() => studioPersonnel.id, { onDelete: "cascade" }),
+  workTitle: text("work_title").notNull(),
+  amount: numeric("amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_personnel_default_wage").on(t.personnelId, t.workTitle)]);
+
+export const studioPlanningPersonnel = pgTable("studio_planning_personnel", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  contractItemId: uuid("contract_item_id").notNull().references(() => studioContractItems.id, { onDelete: "cascade" }),
+  personnelId: uuid("personnel_id").notNull().references(() => studioPersonnel.id, { onDelete: "restrict" }),
+  startsAt: timestamp("starts_at").notNull(),
+  endsAt: timestamp("ends_at").notNull(),
+  wageSnapshot: numeric("wage_snapshot", { precision: 15, scale: 2 }).default("0").notNull(),
+  salaryRecordId: uuid("salary_record_id").references(() => personnelSalaryRecords.id, { onDelete: "set null" }),
+  notes: text("notes"),
+  assignedById: uuid("assigned_by_id").references(() => employees.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_planning_personnel_item_person").on(t.contractItemId, t.personnelId), index("idx_planning_personnel_time").on(t.personnelId, t.startsAt, t.endsAt)]);
+
 // 16.7. Studio Equipment
 export const studioEquipment = pgTable("studio_equipment", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -989,6 +1045,7 @@ export const equipmentReservations = pgTable("equipment_reservations", {
   equipmentId: uuid("equipment_id").notNull().references(() => studioEquipment.id, { onDelete: "cascade" }),
   studioProjectId: uuid("studio_project_id").references(() => studioProjects.id, { onDelete: "cascade" }),
   assignedPersonnelId: uuid("assigned_personnel_id").references(() => studioPersonnel.id, { onDelete: "set null" }),
+  contractItemId: uuid("contract_item_id").references(() => studioContractItems.id, { onDelete: "cascade" }),
   reservedFrom: timestamp("reserved_from").notNull(),
   reservedTo: timestamp("reserved_to").notNull(),
   status: text("status").default("reserved").notNull(), // reserved, checked_out, returned_safe, damaged, cancelled
@@ -1005,6 +1062,7 @@ export const equipmentReservations = pgTable("equipment_reservations", {
 export const rentalEquipment = pgTable("rental_equipment", {
   id: uuid("id").defaultRandom().primaryKey(),
   studioProjectId: uuid("studio_project_id").references(() => studioProjects.id, { onDelete: "cascade" }),
+  contractItemId: uuid("contract_item_id").references(() => studioContractItems.id, { onDelete: "cascade" }),
   supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
   itemTitle: text("item_title").notNull(),
   rentalCompany: text("rental_company").notNull(),
@@ -1020,6 +1078,8 @@ export const rentalEquipment = pgTable("rental_equipment", {
   voidReason: text("void_reason"),
   voidedAt: timestamp("voided_at"),
   status: text("status").default("rented").notNull(), // planned, rented, returned, settled
+  markedRentedAt: timestamp("marked_rented_at"),
+  markedRentedById: uuid("marked_rented_by_id").references(() => employees.id, { onDelete: "set null" }),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -1060,6 +1120,7 @@ export const studioCalendarEvents = pgTable("studio_calendar_events", {
   id: uuid("id").defaultRandom().primaryKey(),
   ownerEmployeeId: uuid("owner_employee_id").references(() => employees.id, { onDelete: "set null" }),
   studioProjectId: uuid("studio_project_id").references(() => studioProjects.id, { onDelete: "cascade" }),
+  contractId: uuid("contract_id").references(() => studioContracts.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   eventType: text("event_type").default("shooting").notNull(), // shooting, consultation, selection_session, venue_visit, delivery, maintenance
   startTime: timestamp("start_time").notNull(),
@@ -1071,6 +1132,37 @@ export const studioCalendarEvents = pgTable("studio_calendar_events", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
+
+export const studioDailyVisits = pgTable("studio_daily_visits", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  title: text("title").notNull(),
+  visitDate: timestamp("visit_date").notNull(),
+  price: numeric("price", { precision: 15, scale: 2 }).default("0").notNull(),
+  paidAmount: numeric("paid_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  customerName: text("customer_name").notNull(),
+  mobile: text("mobile").notNull(),
+  notes: text("notes"),
+  createdById: uuid("created_by_id").references(() => employees.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [index("idx_studio_daily_visits_date").on(t.visitDate)]);
+
+export const studioReservations = pgTable("studio_reservations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  title: text("title").notNull(),
+  reservedAt: timestamp("reserved_at").notNull(),
+  price: numeric("price", { precision: 15, scale: 2 }).default("0").notNull(),
+  paidAmount: numeric("paid_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  customerName: text("customer_name").notNull(),
+  mobile: text("mobile").notNull(),
+  notes: text("notes"),
+  status: text("status").default("pending").notNull(),
+  completedAt: timestamp("completed_at"),
+  completedById: uuid("completed_by_id").references(() => employees.id, { onDelete: "set null" }),
+  createdById: uuid("created_by_id").references(() => employees.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [index("idx_studio_reservations_date_status").on(t.reservedAt, t.status)]);
 
 // 16.12. Studio Tasks
 export const studioTasks = pgTable("studio_tasks", {

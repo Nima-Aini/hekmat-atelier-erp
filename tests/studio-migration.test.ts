@@ -76,6 +76,7 @@ describe("Hekmat Atelier (حکمت آتلیه) Database Migration & Schema Verif
       "004_studio_constraints_indexes",
       "005_backup_recovery",
       "006_atelier_product",
+      "007_atelier_final_workflow",
     ]);
   });
 

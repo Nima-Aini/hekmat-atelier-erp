@@ -11,7 +11,7 @@ const vazirmatn = Vazirmatn({
 
 export const metadata: Metadata = {
   title: "حکمت آتلیه | Hekmat Atelier",
-  description: "سیستم یکپارچه مدیریت آتلیه، پروژه، مشتری و امور مالی",
+  description: "سیستم یکپارچه قرارداد، برنامه‌ریزی، مشتریان و تجهیزات آتلیه",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -23,7 +23,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css"
         />
       </head>
-      <body className={`${vazirmatn.className} bg-slate-950 text-slate-100 antialiased`}>
+      <body className={`${vazirmatn.className} bg-[#050506] text-zinc-100 antialiased`}>
         {children}
       </body>
     </html>
