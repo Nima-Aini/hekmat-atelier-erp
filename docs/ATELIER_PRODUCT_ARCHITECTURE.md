@@ -1,5 +1,31 @@
 # Hekmat Atelier product architecture
 
+## Final Iranian Atelier rebuild (migration 007)
+
+The previous productization established strong accounting, scope, audit, recovery and Studio domain services, but its visible information architecture still resembled an international SaaS template. The final rebuild keeps those healthy backend boundaries and replaces the everyday experience with the specific Iranian atelier workflow requested for this product.
+
+The only first-level destinations, in order, are: داشبورد، قرارداد، مراجعات روزانه، رزرو، برنامه ریزی، تقویم، مشتریان، پرسنل، تجهیزات، اعلانات، دستیار هوش مصنوعی، تنظیمات. The desktop navigation is a fixed left sidebar; mobile uses one left drawer. Finance, backup, audit and access management remain authoritative but are contextual or secondary system tools rather than daily first-level modules.
+
+| Previous visible concept | Final visible destination | Compatibility retained |
+|---|---|---|
+| Sales funnel and inquiry screens | قرارداد / رزرو | Previous tables remain historical; no destructive migration |
+| Visible project workspace | قرارداد + برنامه ریزی | `studio_projects` remains the internal accounting/scope bridge |
+| Service catalog as a first-level module | Contract items and project types | Existing catalog/snapshots remain readable |
+| Workboard and production workflow | Per-item planning | Existing tasks, plans and timeline remain historical/operational infrastructure |
+| Financial center | Amounts within contract/customer screens | Canonical invoice, receipt, account and expense services remain source of truth |
+| Partners and reports | Contextual data / Settings | Existing suppliers and report services are preserved |
+| Generic alerts | اعلانات | Conditions are derived from live contracts, reservations, planning and balances |
+
+Migration `007_atelier_final_workflow` is additive and idempotent. It introduces project-type configuration, contract items, daily visits, lightweight reservations, per-item personnel assignments, wage snapshots and rental completion evidence. It extends contracts, calendar events, owned-equipment reservations and rental requirements with nullable links. It does not drop, truncate or reinterpret historical financial data.
+
+Contract creation serializes by idempotency key, normalizes the phone number, reuses the canonical customer safely, creates the hidden Studio/Core project bridge and stores a pending contract without posting revenue. Approval is the explicit financial boundary: it locks the contract, creates exactly one canonical invoice and optional initial receipt, then creates the contract calendar event. Approved financial items cannot be edited through the ordinary contract editor.
+
+Planning is available only for approved contracts. Personnel and owned equipment are assigned independently to each contract item. Resource locks and overlap queries reject double booking. Default personnel wages are copied into immutable assignment/salary snapshots; later default changes do not rewrite history. Rental requirements remain stored after completion and record who/when marked them rented. Critical rental reminders disappear when the condition is resolved rather than deleting evidence.
+
+Daily visits and reservations are deliberately lightweight and separate from formal contract customers. Their paid/remaining invariants are server validated. Completing a reservation never converts it into a contract. The customer list is derived exclusively from customers linked to formal contracts, and exposes no creation action.
+
+The design system uses black surfaces, charcoal cards, controlled luminous red lines and priority colors. The reference image influenced the narrow left rail, cinematic radial lighting, compact operational density, mixed card sizes and chart placement. Its unrelated English labels and decorative/fake figures were intentionally not copied; every dashboard queue and chart is database-backed.
+
 Baseline: `ba0d193a2535924d5c71d83df0c089e344e4bae5`, branch `codex/phase2-hardening`.
 Implementation is isolated on `codex/atelier-productization`. This document describes the target; completion requires the acceptance story, tests, CI and staging evidence, not this document alone.
 
