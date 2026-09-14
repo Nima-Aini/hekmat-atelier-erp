@@ -1,8 +1,13 @@
-name: Verify pull request
-run-name: Verify exact head SHA ${{ github.event.pull_request.head.sha }}
+name: Verify and deploy staging
+run-name: Verify exact head SHA ${{ github.event.pull_request.head.sha || github.sha }}
 on:
   pull_request:
     branches: [main, codex/phase2-hardening]
+  push:
+    branches: [codex/phase2-hardening]
+concurrency:
+  group: ${{ github.event_name == 'push' && 'hekmat-atelier-staging' || format('hekmat-atelier-verify-{0}', github.run_id) }}
+  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
@@ -25,7 +30,7 @@ jobs:
           --health-cmd "pg_isready -U atelier_ci -d atelier_ci"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      VALIDATED_GIT_SHA: ${{ github.event.pull_request.head.sha }}
+      VALIDATED_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       TZ: ${{ matrix.timezone }}
       DB_DRIVER: postgres
       DATABASE_URL: postgresql://atelier_ci:atelier_ci@127.0.0.1:5432/atelier_ci
@@ -62,7 +67,7 @@ jobs:
           --health-cmd "pg_isready -U atelier_drill -d atelier_source"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      VALIDATED_GIT_SHA: ${{ github.event.pull_request.head.sha }}
+      VALIDATED_GIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       CI: "true"
       DB_DRIVER: postgres
       DATABASE_URL: postgresql://atelier_drill:atelier_drill@127.0.0.1:5432/atelier_source
@@ -87,3 +92,67 @@ jobs:
         run: npx vitest run tests/zz-backup-postgres-drill.test.ts
       - name: Validate maintenance mode through real HTTP
         run: npm run maintenance:http-drill
+
+  deploy-staging:
+    if: github.event_name == 'push'
+    needs: [verify, restore-drill]
+    runs-on: ubuntu-latest
+    environment: staging
+    timeout-minutes: 30
+    env:
+      DEPLOY_PATH: ${{ vars.STAGING_DEPLOY_PATH }}
+      PM2_APP_NAME: ${{ vars.STAGING_PM2_APP_NAME }}
+      APP_PORT: ${{ vars.STAGING_APP_PORT }}
+      READINESS_URL: ${{ vars.STAGING_READINESS_URL }}
+      SMOKE_BASE_URL_VALUE: ${{ vars.STAGING_BASE_URL }}
+      DEPLOY_REPOSITORY_URL: ${{ vars.STAGING_DEPLOY_REPOSITORY_URL }}
+      EXPECTED_REPOSITORY_URL: https://github.com/${{ github.repository }}.git
+      STAGING_SSH_HOST_VALUE: ${{ secrets.STAGING_SSH_HOST }}
+      STAGING_SSH_USER_VALUE: ${{ secrets.STAGING_SSH_USER }}
+      STAGING_SSH_KEY_VALUE: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+      STAGING_SSH_PORT_VALUE: ${{ secrets.STAGING_SSH_PORT }}
+      APP_ENV: staging
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Validate staging configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in DEPLOY_PATH PM2_APP_NAME APP_PORT READINESS_URL DEPLOY_REPOSITORY_URL; do
+            test -n "${!name:-}" || { echo "Missing required GitHub Variable: STAGING_$name" >&2; exit 1; }
+          done
+          test -n "$SMOKE_BASE_URL_VALUE" || { echo "Missing required GitHub Variable: STAGING_BASE_URL" >&2; exit 1; }
+          for name in STAGING_SSH_HOST_VALUE STAGING_SSH_USER_VALUE STAGING_SSH_KEY_VALUE STAGING_SSH_PORT_VALUE; do
+            test -n "${!name:-}" || { echo "Missing required GitHub Secret: ${name%_VALUE}" >&2; exit 1; }
+          done
+          bash scripts/validate-deploy-config.sh
+      - name: Deploy exact verified SHA
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.STAGING_SSH_HOST }}
+          username: ${{ secrets.STAGING_SSH_USER }}
+          key: ${{ secrets.STAGING_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.STAGING_SSH_PORT }}
+          command_timeout: 25m
+          envs: DEPLOY_PATH,PM2_APP_NAME,APP_PORT,READINESS_URL,DEPLOY_REPOSITORY_URL,EXPECTED_REPOSITORY_URL,APP_ENV
+          script: |
+            set -euo pipefail
+            export NVM_DIR="${NVM_DIR:-/root/.nvm}"
+            test ! -s "$NVM_DIR/nvm.sh" || . "$NVM_DIR/nvm.sh"
+            export PATH="/usr/lib/postgresql/16/bin:$PATH"
+            cd "$DEPLOY_PATH"
+            test "$(git remote get-url origin)" = "$DEPLOY_REPOSITORY_URL" || { echo "Staging directory is not the configured Atelier repository." >&2; exit 1; }
+            git fetch --no-tags origin "${{ github.sha }}"
+            git cat-file -e "${{ github.sha }}^{commit}"
+            git show "${{ github.sha }}:deploy.sh" > /tmp/hekmat-atelier-staging-deploy.sh
+            chmod 700 /tmp/hekmat-atelier-staging-deploy.sh
+            PROJECT_DIR="$DEPLOY_PATH" APP_NAME="$PM2_APP_NAME" PORT="$APP_PORT" READINESS_URL="$READINESS_URL" APP_ENV="$APP_ENV" EXPECTED_REPOSITORY_URL="$EXPECTED_REPOSITORY_URL" bash /tmp/hekmat-atelier-staging-deploy.sh "${{ github.sha }}"
+      - name: Verify readiness, authorization boundaries, and exact SHA
+        run: npm run smoke:test
+        env:
+          SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
+          EXPECTED_GIT_SHA: ${{ github.sha }}
+          EXPECTED_APP_ENV: staging
+          EXPECTED_SCHEMA_VERSION: 007_atelier_final_workflow
