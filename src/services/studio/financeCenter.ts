@@ -21,8 +21,8 @@ async function assertFinanceScope(actor: EmployeeContext, projectId: string | nu
 export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | null = null) {
   const [accountRows, rawPaymentRows, rawExpenseRows, rawContracts, visits, reservations, rawSalaries, rawRentals, rawInstallmentRows] = await Promise.all([
     db.select().from(accounts).where(eq(accounts.status, "active")).orderBy(desc(accounts.isDefault), asc(accounts.name)),
-    db.select({ payment: payments, accountName: accounts.name }).from(payments).innerJoin(accounts, eq(accounts.id, payments.accountId)).where(eq(payments.status, "completed")).orderBy(desc(payments.paymentDate)).limit(500),
-    db.select({ expense: expenses, accountName: accounts.name }).from(expenses).leftJoin(accounts, eq(accounts.id, expenses.accountId)).where(eq(expenses.status, "posted")).orderBy(desc(expenses.expenseDate)).limit(500),
+    db.select({ payment: payments, accountName: accounts.name }).from(payments).innerJoin(accounts, eq(accounts.id, payments.accountId)).where(eq(payments.status, "completed")).orderBy(desc(payments.paymentDate)),
+    db.select({ expense: expenses, accountName: accounts.name }).from(expenses).leftJoin(accounts, eq(accounts.id, expenses.accountId)).where(eq(expenses.status, "posted")).orderBy(desc(expenses.expenseDate)),
     db.select({ contract: studioContracts, projectTitle: studioProjects.title, projectType: studioProjectTypes.title, invoice: invoices, customerName: customers.name })
       .from(studioContracts).innerJoin(studioProjects, eq(studioProjects.id, studioContracts.studioProjectId))
       .leftJoin(studioProjectTypes, eq(studioProjectTypes.id, studioContracts.projectTypeId))
