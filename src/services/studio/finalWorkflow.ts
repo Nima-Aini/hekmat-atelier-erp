@@ -17,9 +17,13 @@ import {
 import { db } from "@/db";
 import {
   accounts,
+  atelierExpenseSources,
   customers,
   equipmentReservations,
+  invoiceItems,
   invoices,
+  expenses,
+  payments,
   personnelSalaryRecords,
   rentalEquipment,
   studioEquipment,
@@ -41,6 +45,7 @@ import { toLatinDigits } from "@/lib/dateUtils";
 import { canAccessPermission, type EmployeeContext } from "@/services/access";
 import { logAuditEvent } from "@/services/audit";
 import { createInvoice } from "@/services/invoice";
+import { postCanonicalExpense, postCanonicalReceipt } from "@/services/financial";
 import type { Transaction } from "@/services/product";
 import { getNextSequenceCode } from "@/services/sequence";
 import { createStudioCustomer } from "@/services/studio/customerService";
@@ -55,6 +60,25 @@ import {
 
 export const CONTRACT_PENDING = "draft";
 export const CONTRACT_APPROVED = "signed";
+
+async function recognizePlanningObligation(
+  tx: Transaction,
+  actor: EmployeeContext,
+  input: { sourceType: "personnel_wage" | "rental"; sourceId: string; projectId: string | null; title: string; category: string; amount: number; dueDate: Date | null },
+) {
+  const [link] = await tx.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, input.sourceType), eq(atelierExpenseSources.sourceId, input.sourceId))).limit(1);
+  if (!link) return postCanonicalExpense(tx, {
+    requestKey: `atelier-planning-obligation:${input.sourceType}:${input.sourceId}`,
+    requestHash: requestHash({ sourceType: input.sourceType, sourceId: input.sourceId, projectId: input.projectId, amount: input.amount }),
+    projectId: input.projectId, title: input.title, category: input.category, amount: input.amount,
+    expenseDate: new Date(), dueDate: input.dueDate, paid: false, sourceType: input.sourceType, sourceId: input.sourceId,
+  }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName });
+  const [expense] = await tx.select().from(expenses).where(eq(expenses.id, link.expenseId)).for("update").limit(1);
+  if (!expense) throw new ApiError(409, "سند هزینه مرتبط یافت نشد.");
+  if (Number(expense.paidAmount) > 0 && Number(expense.amount) !== input.amount) throw new ApiError(409, "مبلغ تعهدی که پرداخت دارد قابل تغییر نیست.");
+  const [updated] = await tx.update(expenses).set({ title: input.title, amount: input.amount.toFixed(2), dueDate: input.dueDate }).where(eq(expenses.id, expense.id)).returning();
+  return { expense: updated, payment: null };
+}
 
 type ContractItemInput = {
   id?: string;
@@ -861,6 +885,9 @@ type SimpleMoneyInput = {
   customerName?: unknown;
   mobile?: unknown;
   notes?: unknown;
+  accountId?: unknown;
+  paymentMethod?: unknown;
+  idempotencyKey?: unknown;
 };
 function simpleValues(value: SimpleMoneyInput, dateKey: string) {
   const price = money(value.price, "قیمت"),
@@ -897,15 +924,57 @@ export async function listDailyVisits(
   if (filters.payment === "due")
     conditions.push(gt(studioDailyVisits.price, studioDailyVisits.paidAmount));
   const rows = await db
-    .select()
+    .select({ record: studioDailyVisits, invoicePaid: invoices.paidAmount, invoiceBalance: invoices.balanceDue })
     .from(studioDailyVisits)
+    .leftJoin(invoices, eq(invoices.id, studioDailyVisits.invoiceId))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(studioDailyVisits.visitDate))
     .limit(300);
-  return rows.map((row) => ({
+  return rows.map(({ record: row, invoicePaid, invoiceBalance }) => ({
     ...row,
-    remainingAmount: Number(row.price) - Number(row.paidAmount),
+    paidAmount: Number(invoicePaid ?? row.paidAmount),
+    remainingAmount: Number(invoiceBalance ?? (Number(row.price) - Number(row.paidAmount))),
   }));
+}
+
+async function ensureSimpleCustomer(tx: Transaction, name: string, mobile: string) {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`atelier-simple-customer:${mobile}`}, 0))`);
+  const [existing] = await tx.select().from(customers).where(eq(customers.mobile, mobile)).limit(1);
+  if (existing) return existing;
+  const [created] = await tx.insert(customers).values({ code: `AT-SIMPLE-${crypto.randomUUID()}`, name, mobile, notes: "طرف حساب مالی مراجعه/رزرو؛ مشتری رسمی قرارداد نیست" }).returning();
+  return created;
+}
+
+async function createSimpleInvoice(tx: Transaction, actor: EmployeeContext, kind: "daily_visit" | "reservation", sourceKey: string, values: ReturnType<typeof simpleValues>, accountId?: string | null, paymentMethod?: string | null) {
+  const customer = await ensureSimpleCustomer(tx, values.customerName, values.mobile);
+  const paid = Number(values.paidAmount);
+  if (paid > 0 && !accountId) throw new ApiError(400, "برای ثبت دریافت، حساب مقصد الزامی است.");
+  const documentDate = new Date(String(values.visitDate || values.reservedAt));
+  if (Number.isNaN(documentDate.getTime())) throw new ApiError(400, "تاریخ سند نامعتبر است.");
+  const invoice = await createInvoice({
+    requestKey: `atelier-${kind}:${sourceKey}`,
+    requestHash: requestHash({ kind, sourceKey, title: values.title, price: values.price, customerId: customer.id }),
+    customerId: customer.id,
+    invoiceDate: documentDate,
+    dueDate: documentDate,
+    items: [{ productType: "custom", isCustom: true, productName: values.title, quantity: 1, unitPrice: Number(values.price), unitCost: 0 }],
+    initialPayment: paid > 0 ? { amount: paid, accountId: accountId!, paymentMethod: paymentMethod || "card_transfer", paymentDate: documentDate } : undefined,
+    notes: kind === "daily_visit" ? "مراجعه روزانه آتلیه" : "رزرو آتلیه",
+    auditContext: { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName },
+  }, tx);
+  return { customer, invoice };
+}
+
+async function updateSimpleInvoice(tx: Transaction, invoiceId: string, values: ReturnType<typeof simpleValues>) {
+  const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).for("update").limit(1);
+  if (!invoice || invoice.status !== "issued") throw new ApiError(409, "سند مالی این رکورد قابل ویرایش نیست.");
+  const total = Number(values.price), paid = Number(invoice.paidAmount);
+  if (total < paid) throw new ApiError(422, "قیمت جدید نمی‌تواند از مبلغ دریافت‌شده کمتر باشد.");
+  const dueDate = new Date(String(values.visitDate || values.reservedAt));
+  if (Number.isNaN(dueDate.getTime())) throw new ApiError(400, "تاریخ سند نامعتبر است.");
+  await tx.update(invoices).set({ subtotal: total.toFixed(2), grandTotal: total.toFixed(2), grossProfitTotal: total.toFixed(2), balanceDue: (total - paid).toFixed(2), paymentStatus: total === paid ? "paid" : paid > 0 ? "partial" : "unpaid", dueDate, updatedAt: new Date() }).where(eq(invoices.id, invoice.id));
+  await tx.update(invoiceItems).set({ productNameSnapshot: values.title, unitPrice: total.toFixed(2), lineTotal: total.toFixed(2), lineProfit: total.toFixed(2) }).where(eq(invoiceItems.invoiceId, invoice.id));
+  return { paid, remaining: total - paid };
 }
 export async function saveDailyVisit(
   actor: EmployeeContext,
@@ -920,16 +989,26 @@ export async function saveDailyVisit(
     let row;
     if (id) {
       assertUuid(id);
+      const [existing] = await tx.select().from(studioDailyVisits).where(eq(studioDailyVisits.id, id)).for("update").limit(1);
+      if (!existing || existing.status !== "active") throw new ApiError(404, "مراجعه روزانه یافت نشد.");
+      if (!existing.invoiceId) throw new ApiError(409, "اتصال مالی مراجعه کامل نیست.");
+      const financial = await updateSimpleInvoice(tx, existing.invoiceId, vals as ReturnType<typeof simpleValues>);
       [row] = await tx
         .update(studioDailyVisits)
-        .set({ ...vals, updatedAt: new Date() })
+        .set({ ...vals, paidAmount: financial.paid.toFixed(2), updatedAt: new Date() })
         .where(eq(studioDailyVisits.id, id))
         .returning();
-    } else
+    } else {
+      const key = cleanText(value.idempotencyKey, "کلید درخواست", false, 160) || crypto.randomUUID();
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`daily-visit:${key}`}, 0))`);
+      const [prior] = await tx.select().from(studioDailyVisits).where(eq(studioDailyVisits.idempotencyKey, key)).limit(1);
+      if (prior) return { ...prior, remainingAmount: Number(prior.price) - Number(prior.paidAmount) };
+      const canonical = await createSimpleInvoice(tx, actor, "daily_visit", key, vals as ReturnType<typeof simpleValues>, cleanText(value.accountId, "حساب", false, 80), cleanText(value.paymentMethod, "روش پرداخت", false, 50));
       [row] = await tx
         .insert(studioDailyVisits)
-        .values({ ...vals, createdById: actor.employeeId })
+        .values({ ...vals, customerId: canonical.customer.id, invoiceId: canonical.invoice.id, idempotencyKey: key, financialStatus: "posted", status: "active", createdById: actor.employeeId })
         .returning();
+    }
     if (!row) throw new ApiError(404, "مراجعه روزانه یافت نشد.");
     await logAuditEvent(
       id ? "DAILY_VISIT_UPDATED" : "DAILY_VISIT_CREATED",
@@ -952,10 +1031,11 @@ export async function saveDailyVisit(
 export async function deleteDailyVisit(actor: EmployeeContext, id: string) {
   assertUuid(id);
   return db.transaction(async (tx) => {
-    const [row] = await tx
-      .delete(studioDailyVisits)
-      .where(eq(studioDailyVisits.id, id))
-      .returning();
+    const [current] = await tx.select().from(studioDailyVisits).where(eq(studioDailyVisits.id, id)).for("update").limit(1);
+    if (!current) throw new ApiError(404, "مراجعه روزانه یافت نشد.");
+    if (Number(current.paidAmount) > 0) throw new ApiError(409, "مراجعه دارای دریافت مالی است و باید از فرآیند برگشت وجه ابطال شود.");
+    if (current.invoiceId) await tx.update(invoices).set({ status: "cancelled", reversalReason: "ابطال مراجعه روزانه", updatedAt: new Date() }).where(eq(invoices.id, current.invoiceId));
+    const [row] = await tx.update(studioDailyVisits).set({ status: "cancelled", financialStatus: "voided", updatedAt: new Date() }).where(eq(studioDailyVisits.id, id)).returning();
     if (!row) throw new ApiError(404, "مراجعه روزانه یافت نشد.");
     await logAuditEvent(
       "DAILY_VISIT_DELETED",
@@ -976,13 +1056,15 @@ export async function deleteDailyVisit(actor: EmployeeContext, id: string) {
 export async function listReservations() {
   return (
     await db
-      .select()
+      .select({ record: studioReservations, invoicePaid: invoices.paidAmount, invoiceBalance: invoices.balanceDue })
       .from(studioReservations)
+      .leftJoin(invoices, eq(invoices.id, studioReservations.invoiceId))
       .orderBy(asc(studioReservations.reservedAt))
       .limit(300)
-  ).map((row) => ({
+  ).map(({ record: row, invoicePaid, invoiceBalance }) => ({
     ...row,
-    remainingAmount: Number(row.price) - Number(row.paidAmount),
+    paidAmount: Number(invoicePaid ?? row.paidAmount),
+    remainingAmount: Number(invoiceBalance ?? (Number(row.price) - Number(row.paidAmount))),
   }));
 }
 export async function saveReservation(
@@ -998,16 +1080,26 @@ export async function saveReservation(
     let row;
     if (id) {
       assertUuid(id);
+      const [existing] = await tx.select().from(studioReservations).where(eq(studioReservations.id, id)).for("update").limit(1);
+      if (!existing || existing.status === "cancelled") throw new ApiError(404, "رزرو یافت نشد.");
+      if (!existing.invoiceId) throw new ApiError(409, "اتصال مالی رزرو کامل نیست.");
+      const financial = await updateSimpleInvoice(tx, existing.invoiceId, vals as ReturnType<typeof simpleValues>);
       [row] = await tx
         .update(studioReservations)
-        .set({ ...vals, updatedAt: new Date() })
+        .set({ ...vals, paidAmount: financial.paid.toFixed(2), updatedAt: new Date() })
         .where(eq(studioReservations.id, id))
         .returning();
-    } else
+    } else {
+      const key = cleanText(value.idempotencyKey, "کلید درخواست", false, 160) || crypto.randomUUID();
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`reservation:${key}`}, 0))`);
+      const [prior] = await tx.select().from(studioReservations).where(eq(studioReservations.idempotencyKey, key)).limit(1);
+      if (prior) return { ...prior, remainingAmount: Number(prior.price) - Number(prior.paidAmount) };
+      const canonical = await createSimpleInvoice(tx, actor, "reservation", key, vals as ReturnType<typeof simpleValues>, cleanText(value.accountId, "حساب", false, 80), cleanText(value.paymentMethod, "روش پرداخت", false, 50));
       [row] = await tx
         .insert(studioReservations)
-        .values({ ...vals, status: "pending", createdById: actor.employeeId })
+        .values({ ...vals, customerId: canonical.customer.id, invoiceId: canonical.invoice.id, idempotencyKey: key, financialStatus: "posted", status: "pending", createdById: actor.employeeId })
         .returning();
+    }
     if (!row) throw new ApiError(404, "رزرو یافت نشد.");
     await logAuditEvent(
       id ? "RESERVATION_UPDATED" : "RESERVATION_CREATED",
@@ -1059,10 +1151,11 @@ export async function completeReservation(actor: EmployeeContext, id: string) {
 export async function deleteReservation(actor: EmployeeContext, id: string) {
   assertUuid(id);
   return db.transaction(async (tx) => {
-    const [row] = await tx
-      .delete(studioReservations)
-      .where(eq(studioReservations.id, id))
-      .returning();
+    const [current] = await tx.select().from(studioReservations).where(eq(studioReservations.id, id)).for("update").limit(1);
+    if (!current) throw new ApiError(404, "رزرو یافت نشد.");
+    if (Number(current.paidAmount) > 0) throw new ApiError(409, "رزرو دارای دریافت مالی است و باید از فرآیند برگشت وجه ابطال شود.");
+    if (current.invoiceId) await tx.update(invoices).set({ status: "cancelled", reversalReason: "ابطال رزرو", updatedAt: new Date() }).where(eq(invoices.id, current.invoiceId));
+    const [row] = await tx.update(studioReservations).set({ status: "cancelled", financialStatus: "voided", updatedAt: new Date() }).where(eq(studioReservations.id, id)).returning();
     if (!row) throw new ApiError(404, "رزرو یافت نشد.");
     await logAuditEvent(
       "RESERVATION_DELETED",
@@ -1339,6 +1432,10 @@ export async function assignPersonnelToItem(
         })
         .where(eq(personnelSalaryRecords.id, salaryRecordId));
     }
+    await recognizePlanningObligation(tx, actor, {
+      sourceType: "personnel_wage", sourceId: salaryRecordId!, projectId: info.project.projectId,
+      title: `دستمزد ${person.fullName} برای ${info.item.title}`, category: "salary", amount: wage, dueDate: end,
+    });
     const values = {
       contractItemId: itemId,
       personnelId,
@@ -1493,6 +1590,10 @@ export async function addRentalRequirement(
         notes: cleanText(value.notes, "توضیحات"),
       })
       .returning();
+    await recognizePlanningObligation(tx, actor, {
+      sourceType: "rental", sourceId: row.id, projectId: info.project.projectId,
+      title: `اجاره ${title} برای ${info.item.title}`, category: "rental", amount: estimated, dueDate: start,
+    });
     await logProjectTimeline(
       info.project.id,
       {
@@ -1554,6 +1655,10 @@ export async function markRentalAsRented(
       .set(patch)
       .where(eq(rentalEquipment.id, rentalId))
       .returning();
+    await recognizePlanningObligation(tx, actor, {
+      sourceType: "rental", sourceId: row.id, projectId: project.projectId,
+      title: `اجاره ${row.itemTitle}`, category: "rental", amount: Number(row.rentalCost), dueDate: row.pickupDate,
+    });
     await logAuditEvent(
       "RENTAL_MARKED_RENTED",
       "rental_equipment",

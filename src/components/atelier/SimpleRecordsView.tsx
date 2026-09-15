@@ -21,6 +21,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
   const reservation = kind === "reservations";
   const title = reservation ? "رزرو" : "مراجعات روزانه";
   const [records, setRecords] = useState<any[]>([]),
+    [accounts, setAccounts] = useState<any[]>([]),
     [loading, setLoading] = useState(true),
     [error, setError] = useState("");
   const [query, setQuery] = useState(""),
@@ -42,6 +43,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
       .finally(() => setLoading(false));
   };
   useEffect(load, [kind]);
+  useEffect(() => { fetch("/api/accounts").then((r) => r.json()).then((body) => body.success && setAccounts(body.accounts || [])).catch(() => undefined); }, []);
   useEffect(() => {
     const listener = (event: Event) => {
       const id = (event as CustomEvent).detail?.id;
@@ -216,6 +218,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
         <RecordForm
           reservation={reservation}
           initial={editing === "new" ? null : editing}
+          accounts={accounts}
           saving={saving}
           onClose={() => setEditing(null)}
           onSave={async (body) => {
@@ -251,12 +254,14 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
 function RecordForm({
   reservation,
   initial,
+  accounts,
   saving,
   onClose,
   onSave,
 }: {
   reservation: boolean;
   initial: any;
+  accounts: any[];
   saving: boolean;
   onClose: () => void;
   onSave: (body: any) => Promise<void>;
@@ -280,6 +285,7 @@ function RecordForm({
     [customerName, setCustomerName] = useState(initial?.customerName || ""),
     [mobile, setMobile] = useState(initial?.mobile || ""),
     [paidAmount, setPaidAmount] = useState(Number(initial?.paidAmount || 0)),
+    [accountId, setAccountId] = useState(accounts[0]?.id || ""),
     [notes, setNotes] = useState(initial?.notes || "");
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -297,6 +303,8 @@ function RecordForm({
       customerName,
       mobile,
       paidAmount,
+      accountId: paidAmount > 0 ? accountId : undefined,
+      paymentMethod: "card_transfer",
       notes,
     });
   };
@@ -350,10 +358,20 @@ function RecordForm({
             <MoneyInput
               value={paidAmount}
               onChange={setPaidAmount}
+              disabled={Boolean(initial && Number(initial.paidAmount) > 0)}
               unit="تومان"
               className="!rounded-xl !border-zinc-800 !bg-black"
             />
           </div>
+          {paidAmount > 0 && !initial && (
+            <label>
+              <span className="atelier-label">حساب مقصد *</span>
+              <select required value={accountId} onChange={(event) => setAccountId(event.target.value)} className="atelier-input w-full py-2.5">
+                <option value="">انتخاب حساب</option>
+                {accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+              </select>
+            </label>
+          )}
           <div className="rounded-xl border border-red-950 bg-red-950/10 p-3 text-xs">
             <span className="text-zinc-500">مبلغ مانده</span>
             <b className="mt-1 block text-red-400">

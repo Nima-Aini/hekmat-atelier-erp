@@ -8,11 +8,12 @@ import {
   studioTasks,
   studioProjects,
   employees,
+  atelierExpenseSources,
 } from "@/db/schema";
 import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { ApiError, assertUuid, decimal, pageNumber } from "@/lib/apiError";
 import crypto from "node:crypto";
-import { postCanonicalExpense } from "@/services/financial";
+import { postCanonicalExpense, postCanonicalExpensePayment } from "@/services/financial";
 import { logAuditEvent } from "@/services/audit";
 
 export interface CreatePersonnelInput {
@@ -716,9 +717,14 @@ export async function updatePersonnelSalaryStatus(
       assertUuid(options.accountId);
       if (existing.salary.studioProjectId && !existing.coreProjectId) throw new ApiError(422, "پروژه دستمزد به پروژه مالی متصل نیست.");
       const key = options.idempotencyKey?.trim() || crypto.randomUUID();
-      const canonical = await postCanonicalExpense(tx, { requestKey: `studio-wage:${key}`, requestHash: crypto.createHash("sha256").update(JSON.stringify({ salaryId, accountId: options.accountId, amount: existing.salary.totalCalculated })).digest("hex"), projectId: existing.coreProjectId, accountId: options.accountId, employeeId: existing.employeeId, title: `دستمزد ${existing.personnelName}`, category: "salary", amount: existing.salary.totalCalculated, expenseDate: sDate!, description: existing.salary.notes, paymentType: "salary_payout", paid: true }, { userId: options.actorId, employeeId: options.actorId, userName: options.actorName });
-      const [updated] = await tx.update(personnelSalaryRecords).set({ paymentStatus: "paid", paymentId: canonical.payment!.id, accountId: options.accountId, idempotencyKey: key, financialStatus: "posted", settlementDate: sDate, updatedAt: new Date() }).where(eq(personnelSalaryRecords.id, salaryId)).returning();
-      await logAuditEvent("STUDIO_WAGE_PAID", "personnel_salary", salaryId, { projectId: existing.coreProjectId, paymentId: canonical.payment!.id, expenseId: canonical.expense.id, amount: existing.salary.totalCalculated }, { userId: options.actorId, employeeId: options.actorId, userName: options.actorName }, tx);
+      let [source] = await tx.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "personnel_wage"), eq(atelierExpenseSources.sourceId, salaryId))).limit(1);
+      if (!source) {
+        const canonical = await postCanonicalExpense(tx, { requestKey: `studio-wage-obligation:${salaryId}`, requestHash: crypto.createHash("sha256").update(JSON.stringify({ salaryId, amount: existing.salary.totalCalculated })).digest("hex"), projectId: existing.coreProjectId, employeeId: existing.employeeId, title: `دستمزد ${existing.personnelName}`, category: "salary", amount: existing.salary.totalCalculated, expenseDate: sDate!, description: existing.salary.notes, paid: false, sourceType: "personnel_wage", sourceId: salaryId }, { userId: options.actorId, employeeId: options.actorId, userName: options.actorName });
+        [source] = await tx.select().from(atelierExpenseSources).where(eq(atelierExpenseSources.expenseId, canonical.expense.id)).limit(1);
+      }
+      const payment = await postCanonicalExpensePayment(tx, { requestKey: `studio-wage:${key}`, requestHash: crypto.createHash("sha256").update(JSON.stringify({ salaryId, accountId: options.accountId, amount: existing.salary.totalCalculated })).digest("hex"), expenseId: source.expenseId, accountId: options.accountId, amount: existing.salary.totalCalculated, paymentDate: sDate!, paymentType: "salary_payout" }, { userId: options.actorId, employeeId: options.actorId, userName: options.actorName });
+      const [updated] = await tx.update(personnelSalaryRecords).set({ paymentStatus: "paid", paymentId: payment.id, accountId: options.accountId, idempotencyKey: key, financialStatus: "posted", settlementDate: sDate, updatedAt: new Date() }).where(eq(personnelSalaryRecords.id, salaryId)).returning();
+      await logAuditEvent("STUDIO_WAGE_PAID", "personnel_salary", salaryId, { projectId: existing.coreProjectId, paymentId: payment.id, expenseId: source.expenseId, amount: existing.salary.totalCalculated }, { userId: options.actorId, employeeId: options.actorId, userName: options.actorName }, tx);
       return updated;
     }
     if (existing.salary.paymentId) throw new ApiError(409, "دستمزد پرداخت‌شده را نمی‌توان به وضعیت قبلی بازگرداند.");
@@ -731,7 +737,8 @@ export async function deletePersonnelSalaryRecord(salaryId: string) {
   assertUuid(salaryId);
   const [existing] = await db.select().from(personnelSalaryRecords).where(eq(personnelSalaryRecords.id, salaryId)).limit(1);
   if (!existing) throw new ApiError(404, "رکورد دستمزد یافت نشد.");
-  if (existing.paymentId || existing.financialStatus === "posted") throw new ApiError(409, "دستمزد ثبت‌شده قابل حذف نیست؛ برگشت مالی لازم است.");
+  const [source] = await db.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "personnel_wage"), eq(atelierExpenseSources.sourceId, salaryId))).limit(1);
+  if (source || existing.paymentId || existing.financialStatus === "posted") throw new ApiError(409, "دستمزد ثبت‌شده قابل حذف نیست؛ برگشت مالی لازم است.");
   await db.update(personnelSalaryRecords).set({ financialStatus: "voided", voidReason: "لغو رکورد پیش‌نویس", voidedAt: new Date(), updatedAt: new Date() }).where(eq(personnelSalaryRecords.id, salaryId));
   return { success: true, message: "رکورد پیش‌نویس بدون حذف سابقه لغو گردید." };
 }

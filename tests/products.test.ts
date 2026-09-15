@@ -10,16 +10,17 @@ import { POST as createExpense } from "../src/app/api/expenses/route";
 import { DELETE as deleteAccount } from "../src/app/api/accounts/route";
 import { GET as getCustomers, POST as createCustomer } from "../src/app/api/customers/route";
 import { GET as getEmployeeCustomers } from "../src/app/api/employees/[id]/customers/route";
-const state = vi.hoisted(() => ({ db: null as unknown, permission: "allow" }));
+const state = vi.hoisted(() => ({ db: null as unknown, permission: "allow", actorId: "c9000000-0000-4000-8000-000000000001" }));
 vi.mock("@/db", () => ({ get db() { return state.db; }, pool: {} }));
 vi.mock("@/services/access", async () => {
   const { ApiError } = await import("../src/lib/apiError");
-  const context = () => ({ employeeId: randomUUID(), roleCode: "admin", permissions: new Set(["*"]) });
-  return { getEmployeeContext: vi.fn(async () => context()), requirePermission: vi.fn(async () => {
+  const context = () => ({ employeeId: state.actorId, employeeName: "مدیر تست محصولات", roleCode: "admin", permissions: new Set(["*"]) });
+  const authorize = vi.fn(async () => {
     if (state.permission === "anonymous") throw new ApiError(401, "ابتدا وارد شوید");
     if (state.permission === "denied") throw new ApiError(403, "دسترسی مجاز نیست");
     return context();
-  }) };
+  });
+  return { getEmployeeContext: vi.fn(async () => context()), requirePermission: authorize, requireAnyPermission: authorize };
 });
 import * as schema from "../src/db/schema";
 import { migrateDatabase } from "../src/db/migrate";
@@ -59,6 +60,7 @@ beforeAll(async () => {
   await migrateDatabase();
   await migrateDatabase(); // Re-running startup migrations must retain data and succeed.
   state.db = database;
+  await database.insert(employees).values({ id: state.actorId, code: "PRODUCTS-ACTOR", name: "مدیر تست محصولات", mobile: "09000000019", status: "active" }).onConflictDoNothing();
 }, 60000);
 afterAll(async () => { await pg.close(); });
 

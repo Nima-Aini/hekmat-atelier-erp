@@ -618,6 +618,8 @@ export const payrollRecords = pgTable("payroll_records", {
 // 13. Expenses
 export const expenses = pgTable("expenses", {
   id: uuid("id").defaultRandom().primaryKey(),
+  requestKey: text("request_key"),
+  requestHash: text("request_hash"),
   expenseNumber: text("expense_number").notNull().unique(),
   category: text("category").default("عمومی").notNull(), // rent, utilities, marketing, transport, salary, commission, raw_materials, general
   amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
@@ -626,6 +628,9 @@ export const expenses = pgTable("expenses", {
   accountId: uuid("account_id").references(() => accounts.id),
   paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
   expenseDate: timestamp("expense_date").defaultNow().notNull(),
+  dueDate: timestamp("due_date"),
+  paidAmount: numeric("paid_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  paymentStatus: text("payment_status").default("unpaid").notNull(), // unpaid, partial, paid, reversed
   title: text("title").notNull(),
   description: text("description"),
   receiptImageUrl: text("receipt_image_url"),
@@ -634,7 +639,30 @@ export const expenses = pgTable("expenses", {
   reversalReason: text("reversal_reason"),
   reversedAt: timestamp("reversed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_expenses_request_key").on(t.requestKey)]);
+
+// Allocation metadata only: the money movement remains the canonical payment.
+export const expensePaymentAllocations = pgTable("expense_payment_allocations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  expenseId: uuid("expense_id").notNull().references(() => expenses.id, { onDelete: "restrict" }),
+  paymentId: uuid("payment_id").notNull().references(() => payments.id, { onDelete: "restrict" }),
+  allocatedAmount: numeric("allocated_amount", { precision: 15, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("uq_expense_payment_allocation").on(t.expenseId, t.paymentId),
+  index("idx_expense_payment_allocation_expense").on(t.expenseId),
+  index("idx_expense_payment_allocation_payment").on(t.paymentId),
+]);
+
+// Connects Atelier operational obligations to one canonical expense without
+// creating another ledger or duplicating the financial amount.
+export const atelierExpenseSources = pgTable("atelier_expense_sources", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  expenseId: uuid("expense_id").notNull().unique().references(() => expenses.id, { onDelete: "restrict" }),
+  sourceType: text("source_type").notNull(), // personnel_wage, rental, direct_expense, general_expense
+  sourceId: uuid("source_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_atelier_expense_source").on(t.sourceType, t.sourceId), index("idx_atelier_expense_source_lookup").on(t.sourceType, t.sourceId)]);
 
 // 14. Consignments (امانی)
 export const consignments = pgTable("consignments", {
@@ -1141,6 +1169,11 @@ export const studioDailyVisits = pgTable("studio_daily_visits", {
   paidAmount: numeric("paid_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   customerName: text("customer_name").notNull(),
   mobile: text("mobile").notNull(),
+  customerId: uuid("customer_id").references(() => customers.id, { onDelete: "restrict" }),
+  invoiceId: uuid("invoice_id").unique().references(() => invoices.id, { onDelete: "restrict" }),
+  idempotencyKey: text("idempotency_key").unique(),
+  financialStatus: text("financial_status").default("draft").notNull(),
+  status: text("status").default("active").notNull(),
   notes: text("notes"),
   createdById: uuid("created_by_id").references(() => employees.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1155,6 +1188,10 @@ export const studioReservations = pgTable("studio_reservations", {
   paidAmount: numeric("paid_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   customerName: text("customer_name").notNull(),
   mobile: text("mobile").notNull(),
+  customerId: uuid("customer_id").references(() => customers.id, { onDelete: "restrict" }),
+  invoiceId: uuid("invoice_id").unique().references(() => invoices.id, { onDelete: "restrict" }),
+  idempotencyKey: text("idempotency_key").unique(),
+  financialStatus: text("financial_status").default("draft").notNull(),
   notes: text("notes"),
   status: text("status").default("pending").notNull(),
   completedAt: timestamp("completed_at"),

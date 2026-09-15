@@ -7,6 +7,7 @@ import {
   rentalEquipment,
   suppliers,
   expenses,
+  atelierExpenseSources,
 } from "@/db/schema";
 import { and, desc, eq, ilike, ne, or, sql } from "drizzle-orm";
 import { ApiError, assertUuid, decimal, pageNumber } from "@/lib/apiError";
@@ -853,7 +854,8 @@ export async function updateRentalEquipment(id: string, input: UpdateRentalEquip
   if (!existing) {
     throw new ApiError(404, "تجهیز اجاره‌ای یافت نشد.");
   }
-  if (existing.expenseId && (input.rentalCost !== undefined || input.studioProjectId !== undefined)) {
+  const [source] = await db.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "rental"), eq(atelierExpenseSources.sourceId, id))).limit(1);
+  if ((source || existing.expenseId) && (input.rentalCost !== undefined || input.studioProjectId !== undefined)) {
     throw new ApiError(409, "هزینه یا پروژه رنتال ثبت‌شده در حسابداری قابل تغییر مستقیم نیست.");
   }
 
@@ -925,7 +927,8 @@ export async function deleteRentalEquipment(id: string) {
 
   const [existing] = await db.select().from(rentalEquipment).where(eq(rentalEquipment.id, id)).limit(1);
   if (!existing) throw new ApiError(404, "تجهیز اجاره‌ای یافت نشد.");
-  if (existing.expenseId || existing.financialStatus === "posted") throw new ApiError(409, "رنتال دارای هزینه حسابداری قابل حذف نیست؛ برگشت مالی لازم است.");
+  const [source] = await db.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "rental"), eq(atelierExpenseSources.sourceId, id))).limit(1);
+  if (source || existing.expenseId || existing.financialStatus === "posted") throw new ApiError(409, "رنتال دارای هزینه حسابداری قابل حذف نیست؛ برگشت مالی لازم است.");
   await db.update(rentalEquipment).set({ financialStatus: "voided", voidReason: "لغو رکورد پیش‌نویس", voidedAt: new Date(), status: "cancelled", updatedAt: new Date() }).where(eq(rentalEquipment.id, id));
   return { success: true, message: "رکورد رنتال بدون حذف سابقه لغو گردید." };
 }

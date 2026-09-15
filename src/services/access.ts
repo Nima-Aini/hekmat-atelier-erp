@@ -76,3 +76,13 @@ export async function requirePermission(permission: string, projectId?: string |
   if (projectId) throw new ApiError(403, "دسترسی شما به این پروژه یا عملیات مجاز نیست.", "PROJECT_SCOPE_FORBIDDEN");
   throw new ApiError(403, `دسترسی موردنیاز برای این عملیات وجود ندارد: ${permission}`, "PERMISSION_REQUIRED");
 }
+
+export async function requireAnyPermission(permissions: string[], projectId?: string | null) {
+  const context = await getEmployeeContext();
+  if (!context) throw new ApiError(401, "دسترسی غیرمجاز: لطفاً ابتدا وارد حساب کاربری خود شوید.");
+  for (const permission of permissions) {
+    if (await canAccessPermission(context, permission, projectId)) return context;
+  }
+  console.warn("authorization.denied", { employeeId: context.employeeId, permissions, projectId: projectId || null });
+  throw new ApiError(projectId ? 403 : 403, projectId ? "دسترسی شما به این پروژه یا عملیات مجاز نیست." : "دسترسی مالی موردنیاز وجود ندارد.", projectId ? "PROJECT_SCOPE_FORBIDDEN" : "PERMISSION_REQUIRED");
+}

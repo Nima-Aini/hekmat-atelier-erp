@@ -23,6 +23,7 @@ const TABS = [
   "تنظیمات اعلانات",
   "دسته‌بندی تجهیزات",
   "دستمزد",
+  "تنظیمات مالی",
   "مدیریت سیستم",
 ];
 const DEFAULT_CATEGORIES = [
@@ -237,6 +238,13 @@ export function FinalSettingsView() {
               set={(values) => patch("wages", { titles: values })}
             />
           </>
+        )}
+        {tab === "تنظیمات مالی" && (
+          <Grid>
+            <NumberField label="یادآوری مطالبات (روز قبل)" value={section("finance").receivableReminderDays || 3} set={(value) => patch("finance", { receivableReminderDays: value })} />
+            <NumberField label="یادآوری بدهی‌ها (روز قبل)" value={section("finance").payableReminderDays || 3} set={(value) => patch("finance", { payableReminderDays: value })} />
+            <Area label="دسته‌بندی‌های هزینه (هر مورد در یک خط)" value={(section("finance").expenseCategories || ["پرسنل", "اجاره تجهیزات", "حمل و نقل", "لوکیشن", "چاپ و آلبوم", "تدوین و رتوش", "عمومی"]).join("\n")} set={(value) => patch("finance", { expenseCategories: value.split("\n").map((item) => item.trim()).filter(Boolean) })} />
+          </Grid>
         )}
         {tab === "مدیریت سیستم" && (
           <div className="space-y-5">
