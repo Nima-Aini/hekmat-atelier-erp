@@ -1,11 +1,11 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../src/db";
 import { migrateDatabase } from "../src/db/migrate";
 import {
-  accounts, customers, employees, equipmentReservations, invoices, rentalEquipment,
+  accounts, atelierExpenseSources, customers, employees, equipmentReservations, expenses, invoices, rentalEquipment,
   studioCalendarEvents, studioContracts, studioCustomers, studioDailyVisits, studioEquipment,
   studioPersonnel, studioPlanningPersonnel, studioProjectTypes, studioReservations,
 } from "../src/db/schema";
@@ -85,6 +85,10 @@ describe("Final Iranian atelier workflow", () => {
     await saveDefaultWage(actor, person.id, "عکاسی", 9_000_000);
     const [stored] = await db.select().from(studioPlanningPersonnel).where(eq(studioPlanningPersonnel.id, assignment.id));
     expect(Number(stored.wageSnapshot)).toBe(5_000_000);
+    const [wageSource] = await db.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "personnel_wage"), eq(atelierExpenseSources.sourceId, stored.salaryRecordId!)));
+    const [wageExpense] = await db.select().from(expenses).where(eq(expenses.id, wageSource.expenseId));
+    expect(wageExpense).toMatchObject({ paymentStatus: "unpaid", paidAmount: "0.00" });
+    expect(Number(wageExpense.amount)).toBe(5_000_000);
     await expect(assignPersonnelToItem(actor, video.id, { personnelId: person.id, startsAt, endsAt, wageAmount: 7_000_000 })).rejects.toThrow("برنامه دیگری");
     await assignEquipmentToItem(actor, photo.id, { equipmentId: equipment.id, startsAt, endsAt });
     await expect(assignEquipmentToItem(actor, video.id, { equipmentId: equipment.id, startsAt, endsAt })).rejects.toThrow("تداخل زمانی");
@@ -95,6 +99,8 @@ describe("Final Iranian atelier workflow", () => {
   it("creates and resolves the critical rented-equipment reminder without deleting history", async () => {
     const drone = contract.items.find((item: any) => item.title === "پهپاد");
     const rental = await addRentalRequirement(actor, drone.id, { itemTitle: "پهپاد حرفه‌ای", supplierName: "اجاره‌دهنده تست", neededAt: contract.programDate, returnAt: contract.programEndDate, estimatedCost: 4_000_000 });
+    const [rentalSource] = await db.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "rental"), eq(atelierExpenseSources.sourceId, rental.id)));
+    expect(Number((await db.select().from(expenses).where(eq(expenses.id, rentalSource.expenseId)))[0].amount)).toBe(4_000_000);
     const before = await getFinalNotifications(null);
     expect(before.some((item) => item.id === `rental:${rental.id}` && item.priority === "critical" && String(item.message).includes("پهپاد حرفه‌ای"))).toBe(true);
     await markRentalAsRented(actor, rental.id, 3_500_000);
@@ -102,21 +108,23 @@ describe("Final Iranian atelier workflow", () => {
     expect(after.some((item) => item.id === `rental:${rental.id}`)).toBe(false);
     const [stored] = await db.select().from(rentalEquipment).where(eq(rentalEquipment.id, rental.id));
     expect(stored).toMatchObject({ status: "rented", markedRentedById: actorId });
+    expect(Number((await db.select().from(expenses).where(eq(expenses.id, rentalSource.expenseId)))[0].amount)).toBe(3_500_000);
   });
 
   it("keeps daily visits and reservations lightweight, consistent, and outside formal customers", async () => {
     const visitMobile = `0921${Date.now().toString().slice(-7)}`;
     const reservationMobile = `0990${Date.now().toString().slice(-7)}`;
-    const visit = await saveDailyVisit(actor, { title: "عکس پرسنلی", date: new Date(), price: 2_000_000, paidAmount: 500_000, customerName: "مراجعه تست", mobile: visitMobile });
+    const visit = await saveDailyVisit(actor, { title: "عکس پرسنلی", date: new Date(), price: 2_000_000, paidAmount: 500_000, customerName: "مراجعه تست", mobile: visitMobile, accountId });
     expect(visit.remainingAmount).toBe(1_500_000);
     expect((await listDailyVisits()).some((row) => row.id === visit.id)).toBe(true);
-    const reservation = await saveReservation(actor, { title: "رزرو پرتره", date: tomorrow(), price: 5_000_000, paidAmount: 1_000_000, customerName: "رزرو تست", mobile: reservationMobile });
+    const reservation = await saveReservation(actor, { title: "رزرو پرتره", date: tomorrow(), price: 5_000_000, paidAmount: 1_000_000, customerName: "رزرو تست", mobile: reservationMobile, accountId });
     expect(reservation.remainingAmount).toBe(4_000_000);
     await completeReservation(actor, reservation.id);
     expect((await listReservations()).find((row) => row.id === reservation.id)?.status).toBe("completed");
     expect(await db.select().from(studioReservations).where(eq(studioReservations.id, reservation.id))).toHaveLength(1);
-    expect(await db.select().from(customers).where(eq(customers.mobile, visitMobile))).toHaveLength(0);
-    expect(await db.select().from(customers).where(eq(customers.mobile, reservationMobile))).toHaveLength(0);
+    const simpleCustomers = await db.select().from(customers).where(sql`${customers.mobile} IN (${visitMobile},${reservationMobile})`);
+    expect(simpleCustomers).toHaveLength(2);
+    expect(await db.select().from(studioCustomers).where(inArray(studioCustomers.customerId, simpleCustomers.map((row) => row.id)))).toHaveLength(0);
   });
 
   it("shows only contract customers and counts approved contracts on the Jalali calendar", async () => {
@@ -130,7 +138,7 @@ describe("Final Iranian atelier workflow", () => {
 
   it("keeps the exact Persian menu order and one responsive left-side navigation", () => {
     const layout = readFileSync(new URL("../src/components/layout/AppLayout.tsx", import.meta.url), "utf8");
-    const expected = ["داشبورد", "قرارداد", "مراجعات روزانه", "رزرو", "برنامه ریزی", "تقویم", "مشتریان", "پرسنل", "تجهیزات", "اعلانات", "دستیار هوش مصنوعی", "تنظیمات"];
+    const expected = ["داشبورد", "قرارداد", "مراجعات روزانه", "رزرو", "برنامه ریزی", "تقویم", "مشتریان", "پرسنل", "تجهیزات", "مالی", "اعلانات", "دستیار هوش مصنوعی", "تنظیمات"];
     const indexes = expected.map((label) => layout.indexOf(`label: "${label}"`));
     expect(indexes.every((index) => index >= 0)).toBe(true);
     expect(indexes).toEqual([...indexes].sort((a, b) => a - b));

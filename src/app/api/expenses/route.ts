@@ -1,4 +1,4 @@
-import { apiError } from "@/lib/apiError";
+import { ApiError, apiError } from "@/lib/apiError";
 import { pageNumber } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
@@ -6,6 +6,8 @@ import { expenses, accounts, projects } from "@/db/schema";
 import { desc, eq, sql, and } from "drizzle-orm";
 import { logAuditEvent } from "@/services/audit";
 import { requirePermission } from "@/services/access";
+import { postCanonicalExpense } from "@/services/financial";
+import crypto from "node:crypto";
 
 export const dynamic = "force-dynamic";
 
@@ -78,83 +80,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ success: false, error: "مبلغ هزینه باید بزرگ‌تر از صفر باشد." }, { status: 400 });
     }
 
-    const category = body.category || "other";
-
-    // Ensure we have a valid accountId
-    let accountId = body.accountId;
-    if (!accountId || accountId.trim() === "") {
-      // Find default account or first available account
-      const [defAcc] = await db
-        .select()
-        .from(accounts)
-        .orderBy(desc(accounts.isDefault), desc(accounts.createdAt))
-        .limit(1);
-
-      if (defAcc) {
-        accountId = defAcc.id;
-      } else {
-        // Create an initial default cash account if none exists
-        const [newAcc] = await db
-          .insert(accounts)
-          .values({
-            code: `ACC-${Date.now().toString().slice(-4)}`,
-            name: "صندوق نقدینگی مرکزی",
-            type: "cash",
-            balance: "10000000",
-            isDefault: true,
-          })
-          .returning();
-        accountId = newAcc.id;
-      }
-    }
-
-    const expNum = `EXP-${Date.now().toString().slice(-6)}-${Math.floor(1000 + Math.random() * 9000)}`;
-
-    const created = await db.transaction(async (tx) => {
-      const [acc] = await tx.select().from(accounts).where(eq(accounts.id, accountId)).for("update").limit(1);
-      if (!acc) {
-        throw new Error("حساب مالی انتخاب شده یافت نشد.");
-      }
-
-      // Deduct expense from account balance
-      await tx
-        .update(accounts)
-        .set({
-          balance: sql`${accounts.balance} - ${amt}`,
-        })
-        .where(eq(accounts.id, accountId));
-
-      const [res] = await tx
-        .insert(expenses)
-        .values({
-          expenseNumber: expNum,
-          title: body.title.trim(),
-          category: category,
-          amount: amt.toString(),
-          projectId: body.projectId && body.projectId.trim() !== "" ? body.projectId : null,
-          accountId: accountId,
-          employeeId: context?.employeeId || null,
-          description: body.description?.trim() || body.notes?.trim() || null,
-          expenseDate: body.expenseDate ? new Date(body.expenseDate) : new Date(),
-        })
-        .returning();
-
-      return res;
-    });
-
-    try {
-      await logAuditEvent("CREATE", "expense", created.id, {
-        title: body.title,
-        amount: amt,
-        accountId: accountId,
-        projectId: body.projectId || null,
-      }, { userId: context?.employeeId || "system", userName: context?.roleCode || "کاربر سیستم" });
-    } catch {}
-
-    return NextResponse.json({ success: true, expense: created, message: "سند هزینه با موفقیت ثبت شد." });
+    if (!body.accountId) throw new ApiError(400, "انتخاب حساب پرداخت الزامی است.");
+    const key = String(body.idempotencyKey || req.headers.get("idempotency-key") || crypto.randomUUID());
+    const result = await db.transaction((tx) => postCanonicalExpense(tx, {
+      requestKey: `legacy-expense:${key}`, requestHash: crypto.createHash("sha256").update(JSON.stringify({ title: body.title, amount: amt, accountId: body.accountId, projectId: body.projectId || null })).digest("hex"),
+      title: body.title.trim(), category: body.category || "other", amount: amt, projectId: body.projectId || null,
+      accountId: body.accountId, employeeId: context.employeeId, expenseDate: body.expenseDate ? new Date(body.expenseDate) : new Date(),
+      description: body.description?.trim() || body.notes?.trim() || null, paid: true,
+    }, { userId: context.employeeId, employeeId: context.employeeId, userName: context.employeeName }));
+    return NextResponse.json({ success: true, expense: result.expense, message: "سند هزینه با موفقیت ثبت شد." });
   } catch (error: any) {
     console.error("POST /api/expenses error:", error);
     return apiError(error);
   }
 }
-

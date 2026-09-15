@@ -16,6 +16,7 @@ import {
 import { FinalNotificationsView } from "@/components/atelier/FinalNotificationsView";
 import { FinalSettingsView } from "@/components/atelier/FinalSettingsView";
 import { AiAssistantView } from "@/components/views/AiAssistantView";
+import { AtelierFinanceView } from "@/components/atelier/AtelierFinanceView";
 
 export default function HomePage() {
   const router = useRouter();
@@ -35,12 +36,13 @@ export default function HomePage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
+  const [selectedFinanceContractId, setSelectedFinanceContractId] = useState<string | null>(null);
   const renderActiveView = () => {
     switch (activeTab) {
       case "dashboard":
         return <FinalDashboard onNavigate={setActiveTab} />;
       case "contracts":
-        return <ContractsView />;
+        return <ContractsView onNavigateFinance={(contractId) => { setSelectedFinanceContractId(contractId); setActiveTab("finance"); }} />;
       case "daily_visits":
         return <SimpleRecordsView kind="daily-visits" />;
       case "reservations":
@@ -55,6 +57,8 @@ export default function HomePage() {
         return <PersonnelView />;
       case "equipment":
         return <EquipmentView />;
+      case "finance":
+        return <AtelierFinanceView initialContractId={selectedFinanceContractId} />;
       case "notifications":
         return <FinalNotificationsView onNavigate={setActiveTab} />;
       case "ai":

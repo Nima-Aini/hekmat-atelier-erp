@@ -3,12 +3,12 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { accounts, payments, expenses } from "@/db/schema";
 import { eq, desc, sql, and, ne } from "drizzle-orm";
-import { requirePermission } from "@/services/access";
+import { requireAnyPermission } from "@/services/access";
 import { logAuditEvent } from "@/services/audit";
 
 export async function GET(req: Request) {
   try {
-    await requirePermission("financial.view");
+    await requireAnyPermission(["studio.finance.view", "financial.view"]);
     const url = new URL(req.url);
     const type = url.searchParams.get("type");
 
@@ -51,7 +51,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    await requirePermission("financial.edit");
+    const actor = await requireAnyPermission(["studio.finance.manage", "financial.edit"]);
     const body = await req.json();
 
     const { name, type = "bank", bankName, accountNumber, balance = 0, isDefault = false } = body;
@@ -98,7 +98,7 @@ export async function POST(req: Request) {
       code: newAccount.code,
       type: newAccount.type,
       balance: newAccount.balance,
-    });
+    }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName });
 
     return NextResponse.json({
       success: true,
@@ -112,7 +112,7 @@ export async function POST(req: Request) {
 
 export async function PUT(req: Request) {
   try {
-    await requirePermission("financial.edit");
+    const actor = await requireAnyPermission(["studio.finance.manage", "financial.edit"]);
     const body = await req.json();
     const { id, name, code, type, bankName, accountNumber, balance, isDefault } = body;
 
@@ -146,7 +146,9 @@ export async function PUT(req: Request) {
     if (type !== undefined) updateData.type = type;
     if (bankName !== undefined) updateData.bankName = bankName?.trim() || null;
     if (accountNumber !== undefined) updateData.accountNumber = accountNumber?.trim() || null;
-    if (balance !== undefined) {
+    if (balance !== undefined && Number(balance) !== Number(existing.balance)) {
+      const [hasPayment] = await db.select({ id: payments.id }).from(payments).where(eq(payments.accountId, id)).limit(1);
+      if (hasPayment) throw new ApiError(409, "موجودی حساب دارای گردش مالی را نمی‌توان مستقیم تغییر داد.");
       if (Number(balance) < 0) {
         return NextResponse.json({ success: false, error: "موجودی حساب نمی‌تواند منفی باشد." }, { status: 400 });
       }
@@ -161,7 +163,7 @@ export async function PUT(req: Request) {
       code: updated.code,
       balance: updated.balance,
       isDefault: updated.isDefault,
-    });
+    }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName });
 
     return NextResponse.json({
       success: true,
@@ -175,7 +177,7 @@ export async function PUT(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    await requirePermission("financial.delete");
+    const actor = await requireAnyPermission(["studio.finance.manage", "financial.delete"]);
     const url = new URL(req.url);
     const id = url.searchParams.get("id");
 
@@ -196,7 +198,7 @@ export async function DELETE(req: Request) {
       return { account: deleted, archived: false };
     });
 
-    await logAuditEvent(result.archived ? "ARCHIVE" : "DELETE", "account", id, { name: result.account.name, code: result.account.code });
+    await logAuditEvent(result.archived ? "ARCHIVE" : "DELETE", "account", id, { name: result.account.name, code: result.account.code }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName });
     return NextResponse.json({ success: true, archived: result.archived, message: result.archived ? `حساب «${result.account.name}» دارای سابقه مالی است و بایگانی شد.` : `حساب «${result.account.name}» با موفقیت حذف شد.` });
   } catch (error: any) {
     return apiError(error);

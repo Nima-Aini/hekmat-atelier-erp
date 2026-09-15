@@ -155,4 +155,4 @@ jobs:
           SMOKE_BASE_URL: ${{ vars.STAGING_BASE_URL }}
           EXPECTED_GIT_SHA: ${{ github.sha }}
           EXPECTED_APP_ENV: staging
-          EXPECTED_SCHEMA_VERSION: 007_atelier_final_workflow
+          EXPECTED_SCHEMA_VERSION: 008_atelier_finance_cashflow
