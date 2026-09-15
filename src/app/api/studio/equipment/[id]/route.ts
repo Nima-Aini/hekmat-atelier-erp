@@ -1,21 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/services/access";
+import { canAccessPermission, requirePermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import {
   getStudioEquipmentById,
   updateStudioEquipment,
   deleteOrRetireEquipment,
 } from "@/services/studio/equipmentService";
+import { resolveStudioResourceOwner } from "@/services/studio/access";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requirePermission("studio.view");
+    const actor = await requirePermission("studio.view");
     const { id } = await params;
 
-    const equipment = await getStudioEquipmentById(id);
+    const equipment: any = await getStudioEquipmentById(id);
+    const visibleReservations = [];
+    for (const reservation of equipment.reservations || []) {
+      const owner = await resolveStudioResourceOwner("reservation", reservation.id);
+      if (await canAccessPermission(actor, "studio.view", owner.coreProjectId)) visibleReservations.push(reservation);
+    }
+    equipment.reservations = visibleReservations;
     return NextResponse.json({ success: true, equipment });
   } catch (error) {
     return apiError(error, "دریافت مشخصات تجهیز");

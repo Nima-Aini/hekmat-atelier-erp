@@ -4,9 +4,10 @@
 
 node_modules/
 .next/
-backups/
+/backups/
 .pgdata/
 
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+tsconfig.tsbuildinfo

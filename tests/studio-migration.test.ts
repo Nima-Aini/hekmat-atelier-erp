@@ -20,9 +20,11 @@ import {
   studioTasks,
   studioNotifications,
   permissions,
+  roles,
+  rolePermissions,
   codeSequences,
 } from "../src/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 describe("Hekmat Atelier (حکمت آتلیه) Database Migration & Schema Verification", () => {
   beforeAll(async () => {
@@ -52,6 +54,36 @@ describe("Hekmat Atelier (حکمت آتلیه) Database Migration & Schema Verif
     expect(permCodes).toContain("studio.production.manage");
     expect(permCodes).toContain("studio.calendar.view");
     expect(permCodes).toContain("studio.notifications.send");
+    expect(permCodes).toEqual(expect.arrayContaining([
+      "studio.contract.view", "studio.contract.manage", "studio.finance.view", "studio.finance.manage",
+      "studio.personnel.wage.view", "studio.personnel.wage.manage", "studio.profitability.view",
+      "backup.download", "backup.verify", "backup.restore", "backup.delete",
+    ]));
+  });
+
+  it("restricts backup creation and restore capabilities to administrators", async () => {
+    const rows = await db.select({ role: roles.code, permission: permissions.code }).from(rolePermissions).innerJoin(roles, eq(rolePermissions.roleId, roles.id)).innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id)).where(sql`${permissions.code} IN ('backup.create','backup.download','backup.verify','backup.restore','backup.delete')`);
+    expect(rows.some((row) => row.role !== "admin")).toBe(false);
+    expect(rows.filter((row) => row.role === "admin").map((row) => row.permission)).toEqual(expect.arrayContaining(["backup.create", "backup.download", "backup.verify", "backup.restore", "backup.delete"]));
+  });
+
+  it("records every versioned migration through Atelier productization", async () => {
+    const rows = await db.select({ id: sql<string>`id` }).from(sql`app_migrations`).orderBy(sql`id`);
+    expect(rows.map((row: any) => row.id)).toEqual([
+      "001_studio_financial_links",
+      "002_studio_reconciliation_indexes",
+      "003_studio_authorization_audit",
+      "004_studio_constraints_indexes",
+      "005_backup_recovery",
+      "006_atelier_product",
+      "007_atelier_final_workflow",
+      "008_atelier_finance_cashflow",
+    ]);
+  });
+
+  it("enforces new date and amount invariants for new records", async () => {
+    const [equipment] = await db.insert(studioEquipment).values({ code: `INV-${Date.now()}`, title: "Constraint Camera", category: "camera" }).returning();
+    await expect(db.insert(equipmentReservations).values({ equipmentId: equipment.id, reservedFrom: new Date("2027-01-02T10:00:00Z"), reservedTo: new Date("2027-01-02T09:00:00Z") })).rejects.toThrow();
   });
 
   it("should support full lifecycle insertion across all 13 studio tables", async () => {

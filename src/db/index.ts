@@ -1,15 +1,15 @@
 import { drizzle as drizzleNodePg, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle as drizzlePglite } from "drizzle-orm/pglite";
 import { PgDialect } from "drizzle-orm/pg-core";
-import { Pool } from "pg";
+import { Pool, types as pgTypes } from "pg";
 import { PGlite } from "@electric-sql/pglite";
+import { resolveDatabaseConfig } from "./config";
 
-const databaseUrl = process.env.DATABASE_URL;
-const useRemotePg = Boolean(
-  databaseUrl &&
-    !databaseUrl.includes("127.0.0.1:5432") &&
-    !databaseUrl.includes("localhost:5432")
-);
+const databaseConfig = resolveDatabaseConfig();
+
+// Existing schema uses TIMESTAMP WITHOUT TIME ZONE. Treat it as UTC
+// consistently instead of allowing node-postgres to apply the host timezone.
+pgTypes.setTypeParser(1114, (value: string) => new Date(`${value.replace(" ", "T")}Z`));
 
 const globalForDb = globalThis as typeof globalThis & {
   __arenaPool?: any;
@@ -20,15 +20,13 @@ const globalForDb = globalThis as typeof globalThis & {
 let rawDb: any;
 let rawPool: any;
 
-if (useRemotePg) {
+if (databaseConfig.driver === "postgres") {
   rawPool =
     globalForDb.__arenaPool ??
     new Pool({
-      connectionString: databaseUrl,
-      ssl:
-        databaseUrl && !databaseUrl.includes("127.0.0.1") && !databaseUrl.includes("localhost")
-          ? { rejectUnauthorized: false }
-          : undefined,
+      connectionString: databaseConfig.databaseUrl,
+      ssl: databaseConfig.ssl,
+      options: "-c timezone=UTC",
     });
   rawDb = globalForDb.__arenaDb ?? drizzleNodePg(rawPool);
   if (process.env.NODE_ENV !== "production") {
@@ -39,9 +37,9 @@ if (useRemotePg) {
   let pglite = globalForDb.__arenaPglite;
   if (!pglite) {
     try {
-      pglite = new PGlite("./.pgdata");
-    } catch {
-      pglite = new PGlite();
+      pglite = databaseConfig.pgliteDataDir ? new PGlite(databaseConfig.pgliteDataDir) : new PGlite();
+    } catch (error) {
+      throw new Error("Failed to initialize explicitly configured PGlite database.", { cause: error });
     }
     if (process.env.NODE_ENV !== "production") {
       globalForDb.__arenaPglite = pglite;
@@ -94,3 +92,4 @@ if (useRemotePg) {
 
 export const pool = rawPool as unknown as Pool;
 export const db = rawDb as unknown as NodePgDatabase<Record<string, never>>;
+export const activeDatabaseDriver = databaseConfig.driver;

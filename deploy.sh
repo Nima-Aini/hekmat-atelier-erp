@@ -2,23 +2,41 @@
 
 set -Eeuo pipefail
 
-# Values can be overridden on the server without editing this file.
-PROJECT_DIR="${PROJECT_DIR:-/var/www/project2}"
-APP_NAME="${APP_NAME:-akma-accounting}"
-PORT="${PORT:-}"
-BRANCH="${BRANCH:-main}"
-TARGET_SHA="${1:-origin/${BRANCH}}"
-BACKUP_DIR="${BACKUP_DIR:-${PROJECT_DIR}/backups}"
+# Production identity is deliberately external configuration. Never infer an
+# Atelier target from values that belonged to another deployment.
+PROJECT_DIR="${PROJECT_DIR:?PROJECT_DIR is required}"
+APP_NAME="${APP_NAME:?APP_NAME is required}"
+PORT="${PORT:?PORT is required}"
+READINESS_URL="${READINESS_URL:?READINESS_URL is required}"
+APP_ENV="${APP_ENV:?APP_ENV is required}"
+EXPECTED_REPOSITORY_URL="${EXPECTED_REPOSITORY_URL:?EXPECTED_REPOSITORY_URL is required}"
+TARGET_SHA="${1:?An exact target SHA is required}"
 LOCK_FILE="${LOCK_FILE:-/tmp/${APP_NAME}.deploy.lock}"
 PREVIOUS_SHA=""
-BACKUP_FILE=""
 ROLLING_BACK=0
+
+validate_runtime_target() {
+  [[ "$PROJECT_DIR" = /* ]] || { echo "PROJECT_DIR must be absolute." >&2; exit 1; }
+  case "${PROJECT_DIR%/}" in
+    ""|/|/var|/var/www|/root|/home|/opt|/usr|/var/www/project2)
+      echo "PROJECT_DIR is too broad or belongs to a legacy application." >&2
+      exit 1
+      ;;
+  esac
+  [[ "$APP_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$ ]] || { echo "APP_NAME is invalid." >&2; exit 1; }
+  case "$APP_NAME" in akma-accounting|project1|project2) echo "Legacy PM2 application name is forbidden." >&2; exit 1 ;; esac
+  [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT >= 1024 && PORT <= 65535 )) || { echo "PORT must be between 1024 and 65535." >&2; exit 1; }
+  [[ "$READINESS_URL" =~ ^https?:// ]] || { echo "READINESS_URL must be HTTP(S)." >&2; exit 1; }
+  case "$EXPECTED_REPOSITORY_URL" in *Nima-Aini/hekmat.git*) echo "Legacy repository is forbidden." >&2; exit 1 ;; esac
+}
 
 log() {
   printf '\n[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1"
 }
 
 start_application() {
+  local running_sha
+  running_sha="$(git rev-parse HEAD)"
   mkdir -p .next/standalone/.next
 
   if [ -d public ]; then
@@ -31,10 +49,10 @@ start_application() {
   cp .env .next/standalone/.env
 
   if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
-    PORT="$PORT" HOSTNAME="0.0.0.0" NODE_ENV="production" \
+    PORT="$PORT" HOSTNAME="0.0.0.0" NODE_ENV="production" APP_ENV="$APP_ENV" GIT_SHA="$running_sha" \
       pm2 reload "$APP_NAME" --update-env
   else
-    PORT="$PORT" HOSTNAME="0.0.0.0" NODE_ENV="production" \
+    PORT="$PORT" HOSTNAME="0.0.0.0" NODE_ENV="production" APP_ENV="$APP_ENV" GIT_SHA="$running_sha" \
       pm2 start .next/standalone/server.js --name "$APP_NAME"
   fi
 }
@@ -53,7 +71,7 @@ install_build_dependencies() {
 wait_until_healthy() {
   local attempt
   for attempt in $(seq 1 30); do
-    if curl -fsS --max-time 4 "$HEALTH_URL" >/dev/null 2>&1; then
+    if curl -fsS --max-time 4 "$READINESS_URL" >/dev/null 2>&1; then
       return 0
     fi
     sleep 2
@@ -76,7 +94,7 @@ rollback() {
   log "Starting application rollback"
   if [ -n "$PREVIOUS_SHA" ]; then
     cd "$PROJECT_DIR"
-    git reset --hard "$PREVIOUS_SHA"
+    git checkout --detach "$PREVIOUS_SHA"
     install_build_dependencies
     npm run build
     start_application
@@ -88,10 +106,7 @@ rollback() {
     fi
   fi
 
-  if [ -n "$BACKUP_FILE" ]; then
-    log "Database backup retained at $BACKUP_FILE"
-    log "Database restoration is intentionally manual to avoid overwriting newer data."
-  fi
+  log "Database restoration is intentionally manual and never part of rollback."
   exit "$exit_code"
 }
 
@@ -105,25 +120,15 @@ on_error() {
 
 trap 'on_error "$?" "$LINENO" "$BASH_COMMAND"' ERR
 
-for required_command in git npm pm2 curl pg_dump flock; do
+validate_runtime_target
+
+for required_command in git node npm pm2 curl pg_dump pg_restore psql flock ss; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     echo "Required server command is missing: $required_command"
     exit 127
   fi
 done
 
-# Preserve the port used by the currently running PM2 process. This prevents
-# an automatic deployment from drifting away from the existing Nginx target.
-if [ -z "$PORT" ]; then
-  RUNNING_PID="$(pm2 pid "$APP_NAME" 2>/dev/null | tail -n 1 || true)"
-  if [[ "$RUNNING_PID" =~ ^[0-9]+$ ]] && [ "$RUNNING_PID" -gt 0 ] && [ -r "/proc/${RUNNING_PID}/environ" ]; then
-    PORT="$(tr '\0' '\n' < "/proc/${RUNNING_PID}/environ" | sed -n 's/^PORT=//p' | tail -n 1)"
-  fi
-fi
-
-# project2 has historically used 3020; use it only when no running value exists.
-PORT="${PORT:-3020}"
-HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:${PORT}/api/health}"
 log "Selected application port: $PORT"
 
 mkdir -p "$(dirname "$LOCK_FILE")"
@@ -135,6 +140,12 @@ fi
 
 cd "$PROJECT_DIR"
 
+ACTUAL_REPOSITORY_URL="$(git remote get-url origin)"
+if [ "$ACTUAL_REPOSITORY_URL" != "$EXPECTED_REPOSITORY_URL" ]; then
+  echo "Repository remote does not match the configured Atelier repository." >&2
+  exit 1
+fi
+
 if [ ! -f .env ]; then
   echo ".env file not found in $PROJECT_DIR"
   exit 1
@@ -145,36 +156,90 @@ if ! grep -q '^DATABASE_URL=' .env; then
   exit 1
 fi
 
-# Refuse to erase manual tracked-file edits made directly on the server.
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "Tracked files have local changes. Commit or remove them before deployment."
-  git status --short
+if [[ ! "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "Target must be a full 40-character commit SHA: $TARGET_SHA"
   exit 1
 fi
-
-PREVIOUS_SHA="$(git rev-parse HEAD)"
-
-log "Creating PostgreSQL backup before code or schema changes"
-mkdir -p "$BACKUP_DIR"
-BACKUP_FILE="${BACKUP_DIR}/akma_db_$(date '+%Y-%m-%d_%H-%M-%S').dump"
-set -a
-# shellcheck disable=SC1091
-source .env
-set +a
-pg_dump --format=custom --no-owner --no-acl "$DATABASE_URL" > "$BACKUP_FILE"
-test -s "$BACKUP_FILE"
-
-log "Fetching requested revision"
-git fetch --prune origin "$BRANCH"
 if ! git cat-file -e "${TARGET_SHA}^{commit}" 2>/dev/null; then
   echo "Requested commit does not exist: $TARGET_SHA"
   exit 1
 fi
-git reset --hard "$TARGET_SHA"
+
+# Refuse to erase manual tracked-file edits made directly on the server. A
+# previous Next.js production build may have generated next-env.d.ts from its
+# tracked development form. Permit that one-time transition only when the
+# working file is byte-identical to the exact target commit.
+if ! git diff --cached --quiet; then
+  echo "Staged tracked changes are forbidden during deployment."
+  git status --short
+  exit 1
+fi
+if ! git diff --quiet; then
+  DIRTY_TRACKED_PATHS="$(git diff --name-only)"
+  if [ "$DIRTY_TRACKED_PATHS" != "next-env.d.ts" ] || ! git show "${TARGET_SHA}:next-env.d.ts" | cmp -s - next-env.d.ts; then
+    echo "Tracked files have local changes. Commit or remove them before deployment."
+    git status --short
+    exit 1
+  fi
+  log "Accepting generated next-env.d.ts because it exactly matches the target SHA"
+  git restore --source="$TARGET_SHA" --staged --worktree -- next-env.d.ts
+fi
+
+PREVIOUS_SHA="$(git rev-parse HEAD)"
+
+# Deployment identity cannot be overridden by values sourced from the app .env.
+DEPLOY_PROJECT_DIR="$PROJECT_DIR"
+DEPLOY_APP_NAME="$APP_NAME"
+DEPLOY_PORT="$PORT"
+DEPLOY_READINESS_URL="$READINESS_URL"
+DEPLOY_APP_ENV="$APP_ENV"
+DEPLOY_REPOSITORY_URL="$EXPECTED_REPOSITORY_URL"
+DEPLOY_TARGET_SHA="$TARGET_SHA"
+DEPLOY_PREVIOUS_SHA="$PREVIOUS_SHA"
+
+set -a
+# shellcheck disable=SC1091
+source .env
+set +a
+PROJECT_DIR="$DEPLOY_PROJECT_DIR"
+APP_NAME="$DEPLOY_APP_NAME"
+PORT="$DEPLOY_PORT"
+READINESS_URL="$DEPLOY_READINESS_URL"
+APP_ENV="$DEPLOY_APP_ENV"
+EXPECTED_REPOSITORY_URL="$DEPLOY_REPOSITORY_URL"
+TARGET_SHA="$DEPLOY_TARGET_SHA"
+PREVIOUS_SHA="$DEPLOY_PREVIOUS_SHA"
+
+log "Deployment metadata: repository=$EXPECTED_REPOSITORY_URL sha=$TARGET_SHA path=$PROJECT_DIR pm2=$APP_NAME port=$PORT readiness=$READINESS_URL environment=$APP_ENV"
+
+if ! pm2 describe "$APP_NAME" >/dev/null 2>&1 && ss -H -ltn "sport = :$PORT" | grep -q .; then
+  echo "Configured port is already owned by another process; deployment will not terminate it." >&2
+  exit 1
+fi
+
+# The active database still has the schema expected by PREVIOUS_SHA. Create
+# the safety backup with that already-running revision before selecting code
+# that may require a newer migration. This preserves the backup service's
+# migration-completeness gate instead of bypassing it during an upgrade.
+log "Verifying PostgreSQL tooling with the currently deployed revision"
+npm run postgres:check
+
+log "Creating and verifying a pre-migration native PostgreSQL backup"
+BACKUP_NOTES="Pre-deploy backup before ${TARGET_SHA}" npm run backup:create
+
+log "Selecting the exact verified revision"
+git checkout --detach "$TARGET_SHA"
+test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+git diff --quiet
+git diff --cached --quiet
 
 log "Installing dependencies and building production frontend/server"
 install_build_dependencies
+npm run postgres:check
 npm run build
+
+log "Applying lock-safe additive migrations"
+npm run db:migrate
 
 log "Reloading PM2 application on port $PORT"
 start_application
@@ -183,10 +248,7 @@ log "Checking application and database health"
 wait_until_healthy
 pm2 save
 
-# Keep backups for 14 days. This runs only after a successful deployment.
-find "$BACKUP_DIR" -maxdepth 1 -type f -name 'akma_db_*.dump' -mtime +14 -delete
-
 trap - ERR
 log "Deployment successful: $(git rev-parse HEAD)"
-log "Health check passed: $HEALTH_URL"
-log "Database backup: $BACKUP_FILE"
+log "Readiness check passed: $READINESS_URL"
+log "Verified database backup created through the application backup service"

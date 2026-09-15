@@ -8,8 +8,8 @@
   html, body {
     font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
     direction: rtl;
-    background-color: #020617;
-    color: #f8fafc;
+    background-color: #050506;
+    color: #f4f4f5;
     max-width: 100%;
   }
 
@@ -34,6 +34,52 @@
 
   input, button, select, textarea, optgroup, option {
     font-family: 'Vazirmatn', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+  }
+}
+
+:root {
+  --atelier-black: #050506;
+  --atelier-surface: #0b0b0d;
+  --atelier-card: #111114;
+  --atelier-line: #2a1116;
+  --atelier-red: #ef233c;
+  --atelier-red-deep: #7f101f;
+  --atelier-critical: #ff304f;
+  --atelier-warning: #f59e0b;
+  --atelier-success: #22c55e;
+}
+
+@layer components {
+  .atelier-panel {
+    @apply rounded-2xl border border-zinc-800/80 bg-[#0d0d0f]/95 shadow-[0_18px_60px_rgba(0,0,0,.28)];
+  }
+
+  .atelier-panel-red {
+    @apply rounded-2xl border border-red-950/80 bg-gradient-to-br from-[#111114] to-red-950/10 shadow-[0_18px_60px_rgba(0,0,0,.32)];
+  }
+
+  .atelier-input {
+    @apply rounded-xl border border-zinc-800 bg-[#09090b] px-3 text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-red-700 focus:ring-2 focus:ring-red-950;
+  }
+
+  .atelier-button {
+    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-red-700 bg-red-700 px-4 py-2 text-sm font-bold text-white shadow-[0_0_18px_rgba(220,20,45,.18)] transition hover:border-red-500 hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .atelier-button-secondary {
+    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2 text-sm font-bold text-zinc-300 transition hover:border-red-900 hover:text-white disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .atelier-icon-button {
+    @apply inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-400 transition hover:border-red-900 hover:text-white;
+  }
+
+  .atelier-label {
+    @apply mb-1.5 block text-xs font-bold text-zinc-400;
+  }
+
+  .atelier-kicker {
+    @apply text-[10px] font-black uppercase tracking-[.2em] text-red-400;
   }
 }
 
@@ -158,14 +204,22 @@ body:has(.app-modal) {
 }
 
 ::-webkit-scrollbar-track {
-  background: #090d16;
+  background: #080809;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: #3f161d;
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #7f1d2d;
+}
+
+@media print {
+  .app-shell > header,
+  .app-shell > aside,
+  .no-print { display: none !important; }
+  .app-main { margin: 0 !important; padding: 0 !important; }
+  body { background: white !important; color: black !important; }
 }

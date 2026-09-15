@@ -10,16 +10,17 @@ import { POST as createExpense } from "../src/app/api/expenses/route";
 import { DELETE as deleteAccount } from "../src/app/api/accounts/route";
 import { GET as getCustomers, POST as createCustomer } from "../src/app/api/customers/route";
 import { GET as getEmployeeCustomers } from "../src/app/api/employees/[id]/customers/route";
-const state = vi.hoisted(() => ({ db: null as unknown, permission: "allow" }));
+const state = vi.hoisted(() => ({ db: null as unknown, permission: "allow", actorId: "c9000000-0000-4000-8000-000000000001" }));
 vi.mock("@/db", () => ({ get db() { return state.db; }, pool: {} }));
 vi.mock("@/services/access", async () => {
   const { ApiError } = await import("../src/lib/apiError");
-  const context = () => ({ employeeId: randomUUID(), roleCode: "admin", permissions: new Set(["*"]) });
-  return { getEmployeeContext: vi.fn(async () => context()), requirePermission: vi.fn(async () => {
+  const context = () => ({ employeeId: state.actorId, employeeName: "مدیر تست محصولات", roleCode: "admin", permissions: new Set(["*"]) });
+  const authorize = vi.fn(async () => {
     if (state.permission === "anonymous") throw new ApiError(401, "ابتدا وارد شوید");
     if (state.permission === "denied") throw new ApiError(403, "دسترسی مجاز نیست");
     return context();
-  }) };
+  });
+  return { getEmployeeContext: vi.fn(async () => context()), requirePermission: authorize, requireAnyPermission: authorize };
 });
 import * as schema from "../src/db/schema";
 import { migrateDatabase } from "../src/db/migrate";
@@ -44,13 +45,22 @@ const create = async (special = false) => (await database.insert(products).value
 
 beforeAll(async () => {
   // PostgreSQL WASM does not need the pgcrypto extension for gen_random_uuid.
-  state.db = { execute: async (query: Parameters<typeof dialect.sqlToQuery>[0]) => {
-    const { sql } = dialect.sqlToQuery(query);
-    return pg.exec(sql.replace('CREATE EXTENSION IF NOT EXISTS "pgcrypto";', ""));
-  } };
+  const migrationDb: {
+    execute: (query: Parameters<typeof dialect.sqlToQuery>[0]) => Promise<unknown>;
+    transaction: (callback: (tx: typeof migrationDb) => Promise<unknown>) => Promise<unknown>;
+  } = {
+    execute: async (query) => {
+      const compiled = dialect.sqlToQuery(query);
+      const migrationSql = compiled.sql.replace('CREATE EXTENSION IF NOT EXISTS "pgcrypto";', "");
+      return compiled.params.length ? pg.query(migrationSql, compiled.params) : pg.exec(migrationSql);
+    },
+    transaction: async (callback) => callback(migrationDb),
+  };
+  state.db = migrationDb;
   await migrateDatabase();
   await migrateDatabase(); // Re-running startup migrations must retain data and succeed.
   state.db = database;
+  await database.insert(employees).values({ id: state.actorId, code: "PRODUCTS-ACTOR", name: "مدیر تست محصولات", mobile: "09000000019", status: "active" }).onConflictDoNothing();
 }, 60000);
 afterAll(async () => { await pg.close(); });
 

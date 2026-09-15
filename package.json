@@ -7,7 +7,15 @@
     "start": "next start -p 3000 -H 0.0.0.0",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "backup:create": "node --import tsx scripts/backup-create.ts",
+    "integrity:check": "node --import tsx scripts/integrity-check.ts",
+    "db:migrate": "node --import tsx scripts/migrate.ts",
+    "smoke:test": "node scripts/smoke-test.mjs",
+    "postgres:check": "bash scripts/check-postgres-tools.sh",
+    "secrets:scan": "node scripts/secret-scan.mjs",
+    "maintenance:http-drill": "bash scripts/maintenance-http-drill.sh",
+    "staging:recovery-drill": "node --import tsx scripts/staging-recovery-drill.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",
@@ -40,6 +48,7 @@
     "postcss": "8.5.23",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
+    "tsx": "^4.20.6",
     "vitest": "^5.0.0"
   }
 }

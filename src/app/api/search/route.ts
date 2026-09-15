@@ -1,227 +1,190 @@
-import { apiError } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { customers, invoices, products, rawMaterials, suppliers, projects, employees, accounts } from "@/db/schema";
-import { ilike, or, and, eq, sql, inArray } from "drizzle-orm";
-import { requirePermission, getScopedProjectIds } from "@/services/access";
+import {
+  customers,
+  invoices,
+  studioContracts,
+  studioCustomers,
+  studioDailyVisits,
+  studioEquipment,
+  studioPersonnel,
+  studioProjects,
+  studioReservations,
+} from "@/db/schema";
+import { and, eq, ilike, inArray, or, sql } from "drizzle-orm";
+import { apiError } from "@/lib/apiError";
+import { getScopedProjectIds, requirePermission } from "@/services/access";
 
 export async function GET(req: Request) {
   try {
-    const context = await requirePermission("global_search");
-    const manager = context.permissions.has("*") || ["admin", "manager"].includes(context.roleCode || "");
-    const allowed = (permission: string) => context.permissions.has("*") || context.permissions.has(permission);
-    const projectIds = manager ? null : await getScopedProjectIds();
-
-    const { searchParams } = new URL(req.url);
-    const q = (searchParams.get("q") || "").trim();
-
-    if (!q || q.length < 2) {
-      return NextResponse.json({ success: true, results: [] });
-    }
-
-    const searchTerm = `%${q}%`;
-
-    const [
-      matchedCustomers,
-      matchedInvoices,
-      matchedProducts,
-      matchedRawMaterials,
-      matchedSuppliers,
-      matchedProjects,
-      matchedEmployees,
-      matchedAccounts,
-    ] = await Promise.all([
-      db
-        .select({
-          id: customers.id,
-          title: customers.name,
-          code: customers.code,
-          detail: customers.mobile,
-          storeName: customers.storeName,
-        })
-        .from(customers)
-        .where(and(
-          or(
-            ilike(customers.name, searchTerm),
-            ilike(customers.code, searchTerm),
-            ilike(customers.mobile, searchTerm),
-            ilike(customers.storeName, searchTerm)
+    const actor = await requirePermission("global_search");
+    const coreIds = await getScopedProjectIds();
+    const q = new URL(req.url).searchParams.get("q")?.trim() || "";
+    if (q.length < 2) return NextResponse.json({ success: true, results: [] });
+    const term = `%${q}%`;
+    const projectScope =
+      coreIds === null
+        ? undefined
+        : coreIds.length
+          ? inArray(studioProjects.projectId, coreIds)
+          : sql`false`;
+    const [clients, contracts, personnel, equipment, visits, reservations] =
+      await Promise.all([
+        db
+          .selectDistinct({
+            id: studioCustomers.id,
+            title: customers.name,
+            code: customers.code,
+            detail: customers.mobile,
+          })
+          .from(studioCustomers)
+          .innerJoin(customers, eq(customers.id, studioCustomers.customerId))
+          .innerJoin(
+            studioProjects,
+            eq(studioProjects.studioCustomerId, studioCustomers.id),
           )
-        , allowed("customers.view") ? undefined : sql`false`, manager ? undefined : eq(customers.assignedEmployeeId, context.employeeId)))
-        .limit(6),
-
-      db
-        .select({
-          id: invoices.id,
-          title: invoices.invoiceNumber,
-          code: invoices.invoiceNumber,
-          detail: invoices.grandTotal,
-          notes: invoices.notes,
-        })
-        .from(invoices)
-        .where(and(
-          or(
-            ilike(invoices.invoiceNumber, searchTerm),
-            ilike(invoices.notes, searchTerm)
+          .innerJoin(
+            studioContracts,
+            eq(studioContracts.studioProjectId, studioProjects.id),
           )
-        , allowed("invoices.view") ? undefined : sql`false`, manager ? undefined : eq(invoices.employeeId, context.employeeId)))
-        .limit(6),
-
-      db
-        .select({
-          id: products.id,
-          title: products.name,
-          code: products.code,
-          detail: products.category,
-        })
-        .from(products)
-        .where(and(
-          or(
-            ilike(products.name, searchTerm),
-            ilike(products.code, searchTerm),
-            ilike(products.category, searchTerm)
+          .where(
+            and(
+              projectScope,
+              or(
+                ilike(customers.name, term),
+                ilike(customers.mobile, term),
+                ilike(customers.code, term),
+              ),
+            ),
           )
-        , allowed("products.view") ? undefined : sql`false`, eq(products.status, "active")))
-        .limit(6),
-
-      db
-        .select({
-          id: rawMaterials.id,
-          title: rawMaterials.name,
-          code: rawMaterials.code,
-          detail: rawMaterials.unit,
-        })
-        .from(rawMaterials)
-        .where(and(
-          or(
-            ilike(rawMaterials.name, searchTerm),
-            ilike(rawMaterials.code, searchTerm)
+          .limit(8),
+        actor.permissions.has("*") ||
+        actor.permissions.has("studio.contract.view")
+          ? db
+              .select({
+                id: studioContracts.id,
+                title: studioContracts.contractNumber,
+                code: invoices.invoiceNumber,
+                detail: studioProjects.title,
+                projectId: studioProjects.id,
+              })
+              .from(studioContracts)
+              .innerJoin(
+                studioProjects,
+                eq(studioProjects.id, studioContracts.studioProjectId),
+              )
+              .leftJoin(invoices, eq(invoices.id, studioContracts.invoiceId))
+              .where(
+                and(
+                  projectScope,
+                  or(
+                    ilike(studioContracts.contractNumber, term),
+                    ilike(invoices.invoiceNumber, term),
+                    ilike(studioProjects.title, term),
+                  ),
+                ),
+              )
+              .limit(8)
+          : [],
+        db
+          .select({
+            id: studioPersonnel.id,
+            title: studioPersonnel.fullName,
+            code: studioPersonnel.mobile,
+            detail: studioPersonnel.primaryRole,
+          })
+          .from(studioPersonnel)
+          .where(
+            or(
+              ilike(studioPersonnel.fullName, term),
+              ilike(studioPersonnel.mobile, term),
+              ilike(studioPersonnel.primaryRole, term),
+            ),
           )
-        , allowed("raw_materials.view") ? undefined : sql`false`, undefined))
-        .limit(6),
-
-      db
-        .select({
-          id: suppliers.id,
-          title: suppliers.name,
-          code: suppliers.code,
-          detail: suppliers.mobile,
-        })
-        .from(suppliers)
-        .where(and(
-          or(
-            ilike(suppliers.name, searchTerm),
-            ilike(suppliers.code, searchTerm),
-            ilike(suppliers.contactPerson, searchTerm)
+          .limit(8),
+        db
+          .select({
+            id: studioEquipment.id,
+            title: studioEquipment.title,
+            code: studioEquipment.code,
+            detail: studioEquipment.category,
+          })
+          .from(studioEquipment)
+          .where(
+            or(
+              ilike(studioEquipment.title, term),
+              ilike(studioEquipment.code, term),
+              ilike(studioEquipment.serialNumber, term),
+            ),
           )
-        , allowed("suppliers.view") ? undefined : sql`false`, undefined))
-        .limit(6),
-
-      db
-        .select({
-          id: projects.id,
-          title: projects.name,
-          code: projects.code,
-          detail: projects.status,
-        })
-        .from(projects)
-        .where(and(
-          or(
-            ilike(projects.name, searchTerm),
-            ilike(projects.code, searchTerm)
+          .limit(8),
+        db
+          .select({
+            id: studioDailyVisits.id,
+            title: studioDailyVisits.title,
+            code: studioDailyVisits.mobile,
+            detail: studioDailyVisits.customerName,
+          })
+          .from(studioDailyVisits)
+          .where(
+            or(
+              ilike(studioDailyVisits.title, term),
+              ilike(studioDailyVisits.customerName, term),
+              ilike(studioDailyVisits.mobile, term),
+            ),
           )
-        , allowed("projects.view") ? undefined : sql`false`, projectIds === null ? undefined : projectIds.length ? inArray(projects.id, projectIds) : sql`false`))
-        .limit(6),
-
-      db
-        .select({
-          id: employees.id,
-          title: employees.name,
-          code: employees.code,
-          detail: employees.role,
-        })
-        .from(employees)
-        .where(and(
-          or(
-            ilike(employees.name, searchTerm),
-            ilike(employees.code, searchTerm),
-            ilike(employees.mobile, searchTerm)
+          .limit(8),
+        db
+          .select({
+            id: studioReservations.id,
+            title: studioReservations.title,
+            code: studioReservations.mobile,
+            detail: studioReservations.customerName,
+          })
+          .from(studioReservations)
+          .where(
+            or(
+              ilike(studioReservations.title, term),
+              ilike(studioReservations.customerName, term),
+              ilike(studioReservations.mobile, term),
+            ),
           )
-        , allowed("employees.view") ? undefined : sql`false`, manager || allowed("employees.manage") ? undefined : eq(employees.id, context.employeeId)))
-        .limit(6),
-
-      db
-        .select({
-          id: accounts.id,
-          title: accounts.name,
-          code: accounts.code,
-          detail: accounts.bankName,
-        })
-        .from(accounts)
-        .where(and(
-          or(
-            ilike(accounts.name, searchTerm),
-            ilike(accounts.code, searchTerm),
-            ilike(accounts.bankName, searchTerm)
-          )
-        , allowed("financial.view") ? undefined : sql`false`, undefined))
-        .limit(6),
-    ]);
-
+          .limit(8),
+      ]);
     const results = [
-      ...matchedCustomers.map((item) => ({
+      ...clients.map((item) => ({
         ...item,
-        type: "customer",
+        type: "studio_customer",
         typeLabel: "مشتری",
-        subtext: item.storeName ? `${item.code || ""} - ${item.storeName}` : (item.code || item.detail),
       })),
-      ...matchedInvoices.map((item) => ({
+      ...contracts.map((item) => ({
         ...item,
-        type: "invoice",
-        typeLabel: "فاکتور",
-        subtext: item.detail ? `${Number(item.detail).toLocaleString("fa-IR")} تومان` : item.code,
+        type: "studio_contract",
+        typeLabel: "قرارداد",
       })),
-      ...matchedProducts.map((item) => ({
+      ...visits.map((item) => ({
         ...item,
-        type: "product",
-        typeLabel: "محصول",
-        subtext: item.detail ? `${item.code || ""} - دسته‌بندی: ${item.detail}` : item.code,
+        type: "studio_daily_visit",
+        typeLabel: "مراجعه روزانه",
       })),
-      ...matchedRawMaterials.map((item) => ({
+      ...reservations.map((item) => ({
         ...item,
-        type: "raw_material",
-        typeLabel: "ماده اولیه",
-        subtext: item.detail ? `${item.code || ""} - واحد: ${item.detail}` : item.code,
+        type: "studio_reservation",
+        typeLabel: "رزرو",
       })),
-      ...matchedSuppliers.map((item) => ({
+      ...personnel.map((item) => ({
         ...item,
-        type: "supplier",
-        typeLabel: "تامین‌کننده",
-        subtext: item.detail || item.code,
+        type: "studio_personnel",
+        typeLabel: "پرسنل",
       })),
-      ...matchedProjects.map((item) => ({
+      ...equipment.map((item) => ({
         ...item,
-        type: "project",
-        typeLabel: "پروژه",
-        subtext: item.code || "پروژه فعال",
-      })),
-      ...matchedEmployees.map((item) => ({
-        ...item,
-        type: "employee",
-        typeLabel: "همکار / ویزیتور",
-        subtext: item.detail === "visitor" ? "ویزیتور" : item.detail === "accountant" ? "حسابدار" : item.code,
-      })),
-      ...matchedAccounts.map((item) => ({
-        ...item,
-        type: "account",
-        typeLabel: "حساب بانکی / صندوق",
-        subtext: item.detail ? `${item.code} - ${item.detail}` : item.code,
+        type: "studio_equipment",
+        typeLabel: "تجهیزات",
       })),
     ];
-
     return NextResponse.json({ success: true, results });
-  } catch (error: any) {
-    const status = error.message?.includes("دسترسی") ? 403 : 500;
-    return apiError(error);
+  } catch (error) {
+    return apiError(error, "جستجوی آتلیه");
   }
 }

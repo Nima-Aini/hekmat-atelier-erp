@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { db } from "@/db";
-import { employees, employeeAccounts, roles } from "@/db/schema";
+import { authLoginAttempts, employees, employeeAccounts, roles } from "@/db/schema";
 import { eq } from "drizzle-orm";
+import { ApiError } from "@/lib/apiError";
 declare global {
   var __akmaDevAuthSecret: string | undefined;
 }
@@ -39,7 +40,7 @@ export function signSession(employeeId: string) {
   return `${payload}.${sig}`;
 }
 
-export function verifySession(token: string): string | null {
+export function verifySessionDetails(token: string): { employeeId: string; issuedAt: Date } | null {
   if (token.split(".").length !== 2) return null;
   const [payload, sig] = token.split(".");
   if (!payload || !sig) return null;
@@ -52,21 +53,64 @@ export function verifySession(token: string): string | null {
     if (!id || !/^[0-9a-f-]{36}$/i.test(id) || !ts || !Number.isFinite(Number(ts))) return null;
     const tokenAge = Date.now() - Number(ts);
     if (tokenAge > 12 * 60 * 60 * 1000 || tokenAge < 0) return null;
-    return id;
+    return { employeeId: id, issuedAt: new Date(Number(ts)) };
   } catch {
     return null;
   }
 }
 
+export function verifySession(token: string): string | null {
+  return verifySessionDetails(token)?.employeeId || null;
+}
+
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_BLOCK_MS = 15 * 60 * 1000;
+const LOGIN_MAX_ATTEMPTS = 5;
+
+export function loginAttemptKey(username: string, clientAddress: string) {
+  return crypto.createHash("sha256").update(`${username.trim().toLowerCase()}\u0000${clientAddress}`).digest("hex");
+}
+
+export async function assertLoginAllowed(key: string) {
+  const [row] = await db.select().from(authLoginAttempts).where(eq(authLoginAttempts.key, key)).limit(1);
+  if (row?.blockedUntil && row.blockedUntil.getTime() > Date.now()) throw new ApiError(429, "تعداد تلاش‌های ورود بیش از حد مجاز است؛ کمی بعد دوباره تلاش کنید.", "LOGIN_RATE_LIMITED");
+}
+
+export async function recordLoginFailure(key: string) {
+  await db.transaction(async (tx) => {
+    await tx.insert(authLoginAttempts).values({ key, attempts: 0 }).onConflictDoNothing();
+    const [row] = await tx.select().from(authLoginAttempts).where(eq(authLoginAttempts.key, key)).for("update").limit(1);
+    const now = new Date();
+    const expired = !row || now.getTime() - row.windowStartedAt.getTime() >= LOGIN_WINDOW_MS;
+    const attempts = expired ? 1 : row.attempts + 1;
+    await tx.update(authLoginAttempts).set({ attempts, windowStartedAt: expired ? now : row!.windowStartedAt, blockedUntil: attempts >= LOGIN_MAX_ATTEMPTS ? new Date(now.getTime() + LOGIN_BLOCK_MS) : null, updatedAt: now }).where(eq(authLoginAttempts.key, key));
+  });
+}
+
+export async function clearLoginFailures(key: string) {
+  await db.delete(authLoginAttempts).where(eq(authLoginAttempts.key, key));
+}
+
 export async function ensureDefaultAdminAccount() {
-  const username = process.env.INITIAL_ADMIN_USERNAME || "admin";
-  const password = process.env.INITIAL_ADMIN_PASSWORD || "admin123456";
+  const production = process.env.NODE_ENV === "production";
+  const allowDevBootstrap = process.env.ALLOW_DEV_ADMIN_BOOTSTRAP === "true";
+  const username = process.env.INITIAL_ADMIN_USERNAME?.trim();
+  const password = process.env.INITIAL_ADMIN_PASSWORD;
+  const [existingAdmin] = await db.select({ id: employeeAccounts.id }).from(employeeAccounts).innerJoin(roles, eq(employeeAccounts.roleId, roles.id)).where(eq(roles.code, "admin")).limit(1);
+  if (existingAdmin) return;
+  if (!username || !password) {
+    if (production) throw new Error("Initial administrator bootstrap requires INITIAL_ADMIN_USERNAME and INITIAL_ADMIN_PASSWORD.");
+    if (!allowDevBootstrap) return;
+    throw new Error("ALLOW_DEV_ADMIN_BOOTSTRAP requires explicit INITIAL_ADMIN_USERNAME and INITIAL_ADMIN_PASSWORD values.");
+  }
+  if (!production && !allowDevBootstrap) return;
+  if (password.length < 12) throw new Error("INITIAL_ADMIN_PASSWORD must contain at least 12 characters.");
   const [existingByUsername] = await db
     .select({ id: employeeAccounts.id })
     .from(employeeAccounts)
     .where(eq(employeeAccounts.username, username))
     .limit(1);
-  if (existingByUsername) return;
+  if (existingByUsername) throw new Error("Initial administrator username already belongs to a non-admin account.");
 
   let [employee] = await db
     .select()
@@ -80,7 +124,7 @@ export async function ensureDefaultAdminAccount() {
       .from(employeeAccounts)
       .where(eq(employeeAccounts.employeeId, employee.id))
       .limit(1);
-    if (existingByEmployee) return;
+    if (existingByEmployee) throw new Error("Bootstrap administrator employee already has a non-admin account.");
   }
 
   if (!employee) {

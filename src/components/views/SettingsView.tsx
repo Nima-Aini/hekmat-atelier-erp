@@ -6,7 +6,7 @@ import { Settings, Save, RefreshCw, Key, ShieldCheck, Building2, MapPin, Phone, 
 
 export const SettingsView: React.FC = () => {
   const [form, setForm] = useState({
-    businessName: "سازمان و کسب‌وکار حکمت آکما",
+    businessName: "حکمت آتلیه",
     taxNumber: "",
     economicCode: "",
     nationalId: "",
@@ -37,7 +37,7 @@ export const SettingsView: React.FC = () => {
       const res = await fetch("/api/settings").then((r) => r.json());
       if (res.success && res.settings) {
         setForm({
-          businessName: res.settings.businessName || "سازمان و کسب‌وکار حکمت آکما",
+          businessName: res.settings.businessName || "حکمت آتلیه",
           taxNumber: res.settings.taxNumber || "",
           economicCode: res.settings.economicCode || res.settings.taxNumber || "",
           nationalId: res.settings.nationalId || "",
@@ -138,7 +138,7 @@ export const SettingsView: React.FC = () => {
                 type="text"
                 value={form.businessName}
                 onChange={(e) => setForm({ ...form, businessName: e.target.value })}
-                placeholder="مثال: شرکت صنایع بازرگانی حکمت آکما"
+                placeholder="مثال: حکمت آتلیه"
                 className="w-full rounded-xl border border-slate-700 bg-slate-950 p-2.5 text-white focus:border-cyan-500 focus:outline-none"
                 required
               />
