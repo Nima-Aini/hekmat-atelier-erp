@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { studioCatalog, studioWorkflowTemplates } from "@/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray } from "drizzle-orm";
 import { ApiError, decimal } from "@/lib/apiError";
 import type { EmployeeContext } from "@/services/access";
 import type { Transaction } from "@/services/product";
@@ -10,13 +10,34 @@ import { validateStages } from "./workflow";
 
 export async function saveCatalog(actor: EmployeeContext, value: unknown, id?: string) {
   const body = object(value);
-  const data = { kind: choice(body.kind, ["service", "package", "addon"]), name: text(body.name, true, 200)!, jobType: text(body.jobType, true, 80)!, description: text(body.description), basePrice: decimal(body.basePrice ?? 0, "قیمت", 2), specifications: object(body.specifications || {}), parentId: uuid(body.parentId), workflowTemplateId: uuid(body.workflowTemplateId), active: body.active !== false, updatedAt: new Date() };
+  const kind = choice(body.kind, ["service", "package", "addon"]);
+  const specifications = object(body.specifications || {});
+  if (kind === "package") {
+    const itemIds = Array.isArray(specifications.itemIds) ? specifications.itemIds.map((item) => uuid(item)!) : [];
+    if (itemIds.length > 100 || new Set(itemIds).size !== itemIds.length) throw new ApiError(400, "آیتم‌های پکیج معتبر نیستند.");
+    specifications.itemIds = itemIds;
+    if (itemIds.length) {
+      const rows = await db.select({ id: studioCatalog.id, kind: studioCatalog.kind, active: studioCatalog.active }).from(studioCatalog).where(inArray(studioCatalog.id, itemIds));
+      if (rows.length !== itemIds.length || rows.some((row) => row.kind !== "service" || !row.active)) throw new ApiError(400, "پکیج فقط می‌تواند شامل آیتم‌های فعال باشد.");
+    }
+  }
+  const data = { kind, name: text(body.name, true, 200)!, jobType: text(body.jobType || "atelier", true, 80)!, description: text(body.description), basePrice: decimal(body.basePrice ?? 0, "قیمت", 2), specifications, parentId: uuid(body.parentId), workflowTemplateId: uuid(body.workflowTemplateId), active: body.active !== false, sortOrder: Number(body.sortOrder || 0), updatedAt: new Date() };
   return db.transaction(async tx => {
     const [item] = id ? await tx.update(studioCatalog).set(data).where(eq(studioCatalog.id, id)).returning() : await tx.insert(studioCatalog).values(data).returning();
     if (!item) throw new ApiError(404, "خدمت یافت نشد.");
     await logAuditEvent("STUDIO_CATALOG_SAVED", "studio_catalog", item.id, { kind: item.kind }, { employeeId: actor.employeeId, userName: actor.employeeName }, tx);
     return item;
   });
+}
+
+export async function listAtelierCatalog(includeInactive = false) {
+  const rows = await db.select().from(studioCatalog).orderBy(asc(studioCatalog.sortOrder), asc(studioCatalog.name));
+  const visible = includeInactive ? rows : rows.filter((row) => row.active);
+  return visible.map((row) => ({
+    ...row,
+    defaultPrice: Number(row.basePrice),
+    itemIds: row.kind === "package" && Array.isArray((row.specifications as any)?.itemIds) ? (row.specifications as any).itemIds : [],
+  }));
 }
 export async function saveTemplate(actor: EmployeeContext, value: unknown, id?: string) {
   const body = object(value); const data = { name: text(body.name, true, 200)!, jobType: text(body.jobType, true, 80)!, stages: validateStages(body.stages), active: body.active !== false, updatedAt: new Date() };

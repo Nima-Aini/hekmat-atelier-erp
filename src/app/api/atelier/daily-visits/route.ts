@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiError } from "@/lib/apiError";
-import { requirePermission } from "@/services/access";
+import { requireAnyPermission, requirePermission } from "@/services/access";
 import {
   listDailyVisits,
   saveDailyVisit,
@@ -8,7 +8,7 @@ import {
 
 export async function GET(req: NextRequest) {
   try {
-    await requirePermission("studio.view");
+    await requireAnyPermission(["studio.daily_visits.view", "studio.daily_visits.manage", "studio.view"]);
     const p = new URL(req.url).searchParams;
     return NextResponse.json({
       success: true,

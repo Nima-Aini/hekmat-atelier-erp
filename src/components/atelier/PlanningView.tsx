@@ -303,18 +303,6 @@ function PlanningAction({
     [supplierName, setSupplierName] = useState(""),
     [cost, setCost] = useState(0),
     [saving, setSaving] = useState(false);
-  const selectedWage =
-    action.type === "personnel"
-      ? planning.defaultWages.find(
-          (row: any) =>
-            row.personnelId === resourceId &&
-            row.workTitle === action.item.title,
-        )
-      : null;
-  useEffect(() => {
-    if (selectedWage) setWage(Number(selectedWage.amount));
-    else if (action.type === "personnel") setWage(0);
-  }, [resourceId, selectedWage, action.type]);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
@@ -390,8 +378,7 @@ function PlanningAction({
                 className="!rounded-xl !border-zinc-800 !bg-black"
               />
               <p className="mt-1 text-[10px] text-zinc-600">
-                مبلغ پیشنهادی از دستمزد پیش‌فرض آمده و برای این قرارداد به‌صورت
-                ثابت ذخیره می‌شود.
+                مبلغ این کار را صریح وارد کنید؛ پس از ثبت، برای همین تخصیص به‌صورت snapshot نگهداری می‌شود.
               </p>
             </div>
           </>

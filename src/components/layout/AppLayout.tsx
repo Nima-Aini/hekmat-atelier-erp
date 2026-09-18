@@ -19,6 +19,7 @@ import {
   UsersRound,
   X,
 } from "lucide-react";
+import { canSeeAtelierSection } from "@/lib/atelierNavigation";
 
 interface AppLayoutProps {
   activeTab: string;
@@ -45,21 +46,6 @@ const NAVIGATION = [
   { id: "settings", label: "تنظیمات", icon: Settings },
 ] as const;
 
-const REQUIRED_PERMISSION: Record<string, string> = {
-  contracts: "studio.contract.view",
-  daily_visits: "studio.view",
-  reservations: "studio.view",
-  planning: "studio.view",
-  calendar: "studio.view",
-  customers: "studio.view",
-  personnel: "studio.view",
-  equipment: "studio.view",
-  finance: "studio.finance.view",
-  notifications: "studio.view",
-  ai: "ai.view",
-  settings: "settings.view",
-};
-
 export const AppLayout: React.FC<AppLayoutProps> = ({
   activeTab,
   setActiveTab,
@@ -77,14 +63,16 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   const permissions = new Set<string>(
     me?.navigationPermissions || me?.permissions || [],
   );
-  const visibleNavigation = NAVIGATION.filter(
-    ({ id }) =>
-      id === "dashboard" ||
-      permissions.has("*") ||
-      permissions.has(REQUIRED_PERMISSION[id] || ""),
+  const visibleNavigation = NAVIGATION.filter(({ id }) =>
+    canSeeAtelierSection(id, permissions),
   );
+  const canViewNotifications = canSeeAtelierSection("notifications", permissions);
 
   useEffect(() => {
+    if (!canViewNotifications) {
+      setNotificationCount(0);
+      return;
+    }
     const load = () =>
       fetch("/api/atelier/notifications")
         .then((response) => response.json())
@@ -101,7 +89,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
     load();
     const timer = window.setInterval(load, 60_000);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [canViewNotifications]);
 
   useEffect(() => {
     if (!sidebarOpen) return;

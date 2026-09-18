@@ -168,6 +168,14 @@ export const employeeAccounts = pgTable("employee_accounts", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const employeePermissions = pgTable("employee_permissions", {
+  employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  permissionId: uuid("permission_id").notNull().references(() => permissions.id, { onDelete: "cascade" }),
+  granted: boolean("granted").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [primaryKey({ columns: [t.employeeId, t.permissionId] })]);
+
 export const authLoginAttempts = pgTable("auth_login_attempts", {
   key: text("key").primaryKey(),
   attempts: integer("attempts").default(0).notNull(),
@@ -978,7 +986,7 @@ export const studioContractItems = pgTable("studio_contract_items", {
 export const studioPersonnel = pgTable("studio_personnel", {
   id: uuid("id").defaultRandom().primaryKey(),
   employeeId: uuid("employee_id").references(() => employees.id, { onDelete: "set null" }),
-  personnelType: text("personnel_type").default("employee").notNull(), // employee, temporary_worker
+  personnelType: text("personnel_type").default("employee").notNull(), // employee, temporary_worker, project_based
   fullName: text("full_name").notNull(),
   mobile: text("mobile").notNull(),
   primaryRole: text("primary_role").notNull(), // photographer, videographer, drone_operator, crane_operator, editor, retoucher, director, lighting_tech, sound_engineer
@@ -986,6 +994,8 @@ export const studioPersonnel = pgTable("studio_personnel", {
   experienceYears: integer("experience_years").default(1),
   rating: numeric("rating", { precision: 3, scale: 2 }).default("5.00"),
   status: text("status").default("active").notNull(), // active, on_leave, inactive
+  fixedSalary: numeric("fixed_salary", { precision: 15, scale: 2 }).default("0").notNull(),
+  paymentCycle: text("payment_cycle").default("monthly"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -1179,6 +1189,33 @@ export const studioDailyVisits = pgTable("studio_daily_visits", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (t) => [index("idx_studio_daily_visits_date").on(t.visitDate)]);
+
+export const studioDailyVisitTitles = pgTable("studio_daily_visit_titles", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  title: text("title").notNull(),
+  active: boolean("active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_studio_daily_visit_title").on(t.title)]);
+
+export const studioDailyVisitPersonnel = pgTable("studio_daily_visit_personnel", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  dailyVisitId: uuid("daily_visit_id").notNull().references(() => studioDailyVisits.id, { onDelete: "restrict" }),
+  personnelId: uuid("personnel_id").notNull().references(() => studioPersonnel.id, { onDelete: "restrict" }),
+  personnelNameSnapshot: text("personnel_name_snapshot").notNull(),
+  workTitle: text("work_title").notNull(),
+  wageSnapshot: numeric("wage_snapshot", { precision: 15, scale: 2 }).default("0").notNull(),
+  salaryRecordId: uuid("salary_record_id").references(() => personnelSalaryRecords.id, { onDelete: "set null" }),
+  status: text("status").default("active").notNull(),
+  removedAt: timestamp("removed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("uq_daily_visit_personnel_active").on(t.dailyVisitId, t.personnelId, t.workTitle),
+  index("idx_daily_visit_personnel_visit").on(t.dailyVisitId),
+  index("idx_daily_visit_personnel_person").on(t.personnelId),
+]);
 
 export const studioReservations = pgTable("studio_reservations", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -1499,6 +1536,7 @@ export const studioCatalog = pgTable("studio_catalog", {
   specifications: jsonb("specifications").default({}).notNull(),
   workflowTemplateId: uuid("workflow_template_id").references(() => studioWorkflowTemplates.id),
   active: boolean("active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { canAccessPermission, requirePermission } from "@/services/access";
+import { canAccessPermission, requireAnyPermission, requirePermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import {
   getStudioPersonnelById,
@@ -13,7 +13,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const actor = await requirePermission("studio.view");
+    const actor = await requireAnyPermission(["studio.personnel.view", "studio.personnel.manage", "studio.view"]);
     const { id } = await params;
 
     const personnel: any = await getStudioPersonnelById(id);
@@ -25,7 +25,7 @@ export async function GET(
     const reservations = [];
     for (const reservation of personnel.reservations || []) {
       const owner = await resolveStudioResourceOwner("reservation", reservation.id);
-      if (await canAccessPermission(actor, "studio.view", owner.coreProjectId)) reservations.push(reservation);
+      if (await canAccessPermission(actor, "studio.personnel.view", owner.coreProjectId) || await canAccessPermission(actor, "studio.view", owner.coreProjectId)) reservations.push(reservation);
     }
     const visibleIds = new Set([...salaryRecords.map((row: any) => `salary-${row.id}`), ...reservations.map((row: any) => `res-${row.id}`)]);
     personnel.salaryRecords = salaryRecords;
