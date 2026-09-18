@@ -3,13 +3,13 @@ import { apiError } from "@/lib/apiError";
 import {
   canAccessPermission,
   getScopedProjectIds,
-  requirePermission,
+  requireAnyPermission,
 } from "@/services/access";
 import { getFinalDashboard } from "@/services/studio/finalInsights";
 
 export async function GET() {
   try {
-    const actor = await requirePermission("studio.view");
+    const actor = await requireAnyPermission(["studio.dashboard.view", "studio.view"]);
     const includeFinance = await canAccessPermission(
       actor,
       "studio.finance.view",

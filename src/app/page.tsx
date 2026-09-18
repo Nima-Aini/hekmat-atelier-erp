@@ -17,6 +17,9 @@ import { FinalNotificationsView } from "@/components/atelier/FinalNotificationsV
 import { FinalSettingsView } from "@/components/atelier/FinalSettingsView";
 import { AiAssistantView } from "@/components/views/AiAssistantView";
 import { AtelierFinanceView } from "@/components/atelier/AtelierFinanceView";
+import { canSeeAtelierSection, visibleAtelierSections } from "@/lib/atelierNavigation";
+
+const SECTION_IDS = ["dashboard", "contracts", "daily_visits", "reservations", "planning", "calendar", "customers", "personnel", "equipment", "finance", "notifications", "ai", "settings"] as const;
 
 export default function HomePage() {
   const router = useRouter();
@@ -37,8 +40,13 @@ export default function HomePage() {
     null,
   );
   const [selectedFinanceContractId, setSelectedFinanceContractId] = useState<string | null>(null);
+  const permissionValues: string[] = me?.navigationPermissions || me?.permissions || [];
+  const availableSections = visibleAtelierSections(SECTION_IDS, permissionValues);
+  const effectiveActiveTab = canSeeAtelierSection(activeTab, permissionValues)
+    ? activeTab
+    : availableSections[0] || "";
   const renderActiveView = () => {
-    switch (activeTab) {
+    switch (effectiveActiveTab) {
       case "dashboard":
         return <FinalDashboard onNavigate={setActiveTab} />;
       case "contracts":
@@ -66,7 +74,7 @@ export default function HomePage() {
       case "settings":
         return <FinalSettingsView />;
       default:
-        return <FinalDashboard onNavigate={setActiveTab} />;
+        return <div className="atelier-panel p-6 text-sm text-zinc-400">هیچ بخشی برای این حساب فعال نشده است. با مدیر سیستم تماس بگیرید.</div>;
     }
   };
 
@@ -80,7 +88,7 @@ export default function HomePage() {
 
   return (
     <AppLayout
-      activeTab={activeTab}
+      activeTab={effectiveActiveTab}
       setActiveTab={setActiveTab}
       selectedProjectId={selectedProjectId}
       setSelectedProjectId={setSelectedProjectId}

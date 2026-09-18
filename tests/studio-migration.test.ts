@@ -23,6 +23,8 @@ import {
   roles,
   rolePermissions,
   codeSequences,
+  studioDailyVisitTitles,
+  employeePermissions,
 } from "../src/db/schema";
 import { eq, and, sql } from "drizzle-orm";
 
@@ -57,8 +59,13 @@ describe("Hekmat Atelier (حکمت آتلیه) Database Migration & Schema Verif
     expect(permCodes).toEqual(expect.arrayContaining([
       "studio.contract.view", "studio.contract.manage", "studio.finance.view", "studio.finance.manage",
       "studio.personnel.wage.view", "studio.personnel.wage.manage", "studio.profitability.view",
+      "studio.dashboard.view", "studio.daily_visits.view", "studio.reservations.view", "studio.planning.view",
+      "studio.customers.view", "studio.personnel.view", "studio.equipment.view", "studio.notifications.view",
       "backup.download", "backup.verify", "backup.restore", "backup.delete",
     ]));
+    expect((await db.select().from(roles)).map((role) => role.code)).toContain("atelier_personnel");
+    await expect(db.select().from(studioDailyVisitTitles)).resolves.toBeDefined();
+    await expect(db.select().from(employeePermissions)).resolves.toBeDefined();
   });
 
   it("restricts backup creation and restore capabilities to administrators", async () => {
@@ -78,6 +85,7 @@ describe("Hekmat Atelier (حکمت آتلیه) Database Migration & Schema Verif
       "006_atelier_product",
       "007_atelier_final_workflow",
       "008_atelier_finance_cashflow",
+      "009_atelier_packages_personnel",
     ]);
   });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CalendarDays,
   Camera,
@@ -8,7 +8,7 @@ import {
   Plus,
   Search,
   UserRound,
-  WalletCards,
+  KeyRound,
 } from "lucide-react";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { AtelierModal } from "./AtelierModal";
@@ -64,7 +64,7 @@ export function PersonnelView() {
     [error, setError] = useState(""),
     [query, setQuery] = useState(""),
     [editing, setEditing] = useState<any | "new" | null>(null),
-    [wagePerson, setWagePerson] = useState<any>(null);
+    [accessPerson, setAccessPerson] = useState<any>(null);
   const load = () => {
     setLoading(true);
     Promise.all([
@@ -102,7 +102,7 @@ export function PersonnelView() {
       <Header
         kicker="افراد قابل انتخاب در برنامه ریزی"
         title="پرسنل"
-        description="پرسنل ثابت، موقت و پروژه‌ای با تخصص و دستمزد پیش‌فرض"
+        description="پرسنل ثابت، موقت و پروژه‌ای با تخصص، حقوق ثابت و دسترسی کنترل‌شده"
         action="پرسنل جدید"
         onAdd={() => setEditing("new")}
       />
@@ -154,6 +154,9 @@ export function PersonnelView() {
               <p className="mt-3 text-xs text-zinc-500">
                 برنامه‌های فعال و پیش رو: {Number(assignmentCounts[person.id] || 0).toLocaleString("fa-IR")}
               </p>
+              <p className="mt-2 text-xs text-zinc-500">
+                حقوق ثابت: <b className="text-zinc-300">{Number(person.fixedSalary || 0).toLocaleString("fa-IR")} تومان</b>
+              </p>
               <div className="mt-4 flex gap-2">
                 <button
                   onClick={() => setEditing(person)}
@@ -163,11 +166,11 @@ export function PersonnelView() {
                   ویرایش
                 </button>
                 <button
-                  onClick={() => setWagePerson(person)}
+                  onClick={() => setAccessPerson(person)}
                   className="atelier-button flex-1"
                 >
-                  <WalletCards className="h-4 w-4" />
-                  دستمزدها
+                  <KeyRound className="h-4 w-4" />
+                  حساب و دسترسی
                 </button>
               </div>
             </article>
@@ -184,8 +187,8 @@ export function PersonnelView() {
           }}
         />
       )}{" "}
-      {wagePerson && (
-        <WageForm person={wagePerson} onClose={() => setWagePerson(null)} />
+      {accessPerson && (
+        <PersonnelAccessForm person={accessPerson} onClose={() => setAccessPerson(null)} />
       )}
     </div>
   );
@@ -402,13 +405,15 @@ function PersonnelForm({
       personnelType: initial?.personnelType || "employee",
       primaryRole: initial?.primaryRole || "photographer",
       status: initial?.status || "active",
+      fixedSalary: Number(initial?.fixedSalary || 0),
+      paymentCycle: initial?.paymentCycle || "monthly",
       notes: initial?.notes || "",
     }),
     [skills, setSkills] = useState<string>(
       initial?.skills?.map((skill: any) => skill.skillTitle).join("، ") || "",
     ),
     [saving, setSaving] = useState(false);
-  const change = (key: string, value: string) =>
+  const change = (key: string, value: string | number) =>
     setForm((current) => ({ ...current, [key]: value }));
   return (
     <AtelierModal
@@ -473,7 +478,23 @@ function PersonnelForm({
           label="نوع همکاری"
           value={form.personnelType}
           set={(v) => change("personnelType", v)}
-          options={{ employee: "ثابت", temporary_worker: "موقت" }}
+          options={{ employee: "ثابت", temporary_worker: "موقت", project_based: "پروژه‌ای" }}
+        />
+        <label>
+          <span className="atelier-label">حقوق ثابت</span>
+          <MoneyInput
+            value={form.fixedSalary}
+            onChange={(value) => change("fixedSalary", value)}
+            unit="تومان"
+            className="!rounded-xl !border-zinc-800 !bg-black"
+          />
+          <span className="mt-1 block text-[10px] text-zinc-600">این مبلغ فقط تنظیم پرسنل است و تا زمان ثبت پرداخت، سند مالی خودکار ایجاد نمی‌کند.</span>
+        </label>
+        <Select
+          label="دوره حقوق ثابت"
+          value={form.paymentCycle}
+          set={(v) => change("paymentCycle", v)}
+          options={{ monthly: "ماهانه", none: "بدون دوره" }}
         />
         <Select
           label="تخصص اصلی"
@@ -505,73 +526,73 @@ function PersonnelForm({
   );
 }
 
-function WageForm({ person, onClose }: { person: any; onClose: () => void }) {
-  const [wages, setWages] = useState<any[]>([]),
-    [workTitle, setWorkTitle] = useState("عکاسی"),
-    [amount, setAmount] = useState(0);
-  const load = useCallback(() =>
-    fetch(`/api/atelier/personnel/${person.id}/default-wages`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.success) setWages(data.wages || []);
-      }), [person.id]);
+function PersonnelAccessForm({ person, onClose }: { person: any; onClose: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [hasAccount, setHasAccount] = useState(false);
+  const [available, setAvailable] = useState<Array<{ permission: string; label: string }>>([]);
+  const [form, setForm] = useState({ username: "", password: "", status: "active", permissions: [] as string[] });
   useEffect(() => {
-    void load();
-  }, [load]);
+    fetch(`/api/atelier/personnel/${person.id}/access`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (!data.success) throw new Error(data.error || "دریافت دسترسی ممکن نشد.");
+        setAvailable(data.availablePermissions || []);
+        setHasAccount(Boolean(data.access?.username));
+        setForm({
+          username: data.access?.username || "",
+          password: "",
+          status: data.access?.status || "active",
+          permissions: data.access?.permissions || [],
+        });
+      })
+      .catch((reason) => window.alert(reason instanceof Error ? reason.message : "دریافت دسترسی ممکن نشد."))
+      .finally(() => setLoading(false));
+  }, [person.id]);
   return (
     <AtelierModal
-      title={`دستمزدهای پیش فرض ${person.fullName}`}
+      title={`حساب و دسترسی ${person.fullName}`}
       onClose={onClose}
     >
-      <div className="space-y-4">
-        <div className="space-y-2">
-          {wages.map((row) => (
-            <div
-              key={row.id}
-              className="flex justify-between rounded-xl border border-zinc-800 p-3 text-sm"
-            >
-              <span>{row.workTitle}</span>
-              <b>{Number(row.amount).toLocaleString("fa-IR")} تومان</b>
-            </div>
-          ))}
-        </div>
-        <form
-          onSubmit={async (event) => {
-            event.preventDefault();
-            const data = await fetch(
-              `/api/atelier/personnel/${person.id}/default-wages`,
-              {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({ workTitle, amount }),
-              },
-            ).then((r) => r.json());
-            if (!data.success) return window.alert(data.error || "ثبت نشد.");
-            setAmount(0);
-            load();
-          }}
-          className="grid gap-3 border-t border-zinc-900 pt-4 sm:grid-cols-2"
-        >
-          <Text
-            label="عنوان فعالیت"
-            value={workTitle}
-            set={setWorkTitle}
-            required
-          />
-          <div>
-            <label className="atelier-label">دستمزد</label>
-            <MoneyInput
-              value={amount}
-              onChange={setAmount}
-              unit="تومان"
-              className="!rounded-xl !border-zinc-800 !bg-black"
-            />
+      {loading ? <LoadingState /> : (
+        <form onSubmit={async (event) => {
+          event.preventDefault();
+          setSaving(true);
+          try {
+            const data = await fetch(`/api/atelier/personnel/${person.id}/access`, {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ ...form, password: form.password || undefined }),
+            }).then((response) => response.json());
+            if (!data.success) throw new Error(data.error || "ذخیره دسترسی انجام نشد.");
+            window.alert("حساب و دسترسی‌ها ذخیره شد.");
+            onClose();
+          } catch (reason) {
+            window.alert(reason instanceof Error ? reason.message : "ذخیره دسترسی انجام نشد.");
+          } finally {
+            setSaving(false);
+          }
+        }} className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Text label="نام کاربری" value={form.username} set={(username) => setForm((current) => ({ ...current, username }))} required dir="ltr" />
+            <Text label={hasAccount ? "رمز عبور جدید (اختیاری)" : "رمز عبور اولیه"} value={form.password} set={(password) => setForm((current) => ({ ...current, password }))} required={!hasAccount} dir="ltr" />
+            <Select label="وضعیت حساب" value={form.status} set={(status) => setForm((current) => ({ ...current, status }))} options={{ active: "فعال", inactive: "غیرفعال" }} />
           </div>
-          <button className="atelier-button sm:col-span-2">
-            ثبت دستمزد پیش فرض
-          </button>
+          <fieldset>
+            <legend className="atelier-label">بخش‌های قابل دسترسی</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {available.map((item) => (
+                <label key={item.permission} className="flex cursor-pointer items-center gap-2 rounded-xl border border-zinc-800 bg-black/30 p-3 text-sm">
+                  <input type="checkbox" checked={form.permissions.includes(item.permission)} onChange={(event) => setForm((current) => ({ ...current, permissions: event.target.checked ? [...current.permissions, item.permission] : current.permissions.filter((permission) => permission !== item.permission) }))} />
+                  <span>{item.label}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <p className="text-xs leading-6 text-zinc-500">رمز فعلی هرگز نمایش داده نمی‌شود. غیرفعال‌کردن حساب، نشست‌های بعدی کاربر را مسدود می‌کند.</p>
+          <Actions saving={saving} onClose={onClose} />
         </form>
-      </div>
+      )}
     </AtelierModal>
   );
 }

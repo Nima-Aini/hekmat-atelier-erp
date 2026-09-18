@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getScopedProjectIds, requirePermission } from "@/services/access";
+import { getScopedProjectIds, requireAnyPermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import { getPersonnelSchedule } from "@/services/studio/personnelService";
 
@@ -8,7 +8,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requirePermission("studio.view");
+    await requireAnyPermission(["studio.personnel.view", "studio.planning.view", "studio.view"]);
     const { id } = await params;
     const { searchParams } = new URL(req.url);
 

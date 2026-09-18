@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiError } from "@/lib/apiError";
-import { requirePermission } from "@/services/access";
+import { requireAnyPermission, requirePermission } from "@/services/access";
 import {
   listReservations,
   saveReservation,
 } from "@/services/studio/finalWorkflow";
 export async function GET() {
   try {
-    await requirePermission("studio.view");
+    await requireAnyPermission(["studio.reservations.view", "studio.reservations.manage", "studio.view"]);
     return NextResponse.json({
       success: true,
       reservations: await listReservations(),

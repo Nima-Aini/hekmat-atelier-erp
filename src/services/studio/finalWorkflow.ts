@@ -19,6 +19,7 @@ import {
   accounts,
   atelierExpenseSources,
   customers,
+  employeeProjectAssignments,
   equipmentReservations,
   invoiceItems,
   invoices,
@@ -32,8 +33,9 @@ import {
   studioContracts,
   studioCustomers,
   studioDailyVisits,
+  studioDailyVisitPersonnel,
+  studioDailyVisitTitles,
   studioPersonnel,
-  studioPersonnelDefaultWages,
   studioPlanningPersonnel,
   studioProjectTypes,
   studioProjects,
@@ -173,6 +175,21 @@ export async function listProjectTypes(includeInactive = false) {
     .from(studioProjectTypes)
     .where(includeInactive ? undefined : eq(studioProjectTypes.active, true))
     .orderBy(asc(studioProjectTypes.sortOrder), asc(studioProjectTypes.title));
+}
+
+export async function listDailyVisitTitles(includeInactive = false) {
+  return db.select().from(studioDailyVisitTitles).where(includeInactive ? undefined : eq(studioDailyVisitTitles.active, true)).orderBy(asc(studioDailyVisitTitles.sortOrder), asc(studioDailyVisitTitles.title));
+}
+
+export async function saveDailyVisitTitle(actor: EmployeeContext, value: Record<string, unknown>, id?: string) {
+  const title = cleanText(value.title, "عنوان مراجعه", true, 120)!;
+  return db.transaction(async (tx) => {
+    const values = { title, active: value.active !== false, sortOrder: Number(value.sortOrder || 0), updatedAt: new Date() };
+    const [row] = id ? (assertUuid(id), await tx.update(studioDailyVisitTitles).set(values).where(eq(studioDailyVisitTitles.id, id)).returning()) : await tx.insert(studioDailyVisitTitles).values(values).onConflictDoUpdate({ target: studioDailyVisitTitles.title, set: values }).returning();
+    if (!row) throw new ApiError(404, "عنوان مراجعه یافت نشد.");
+    await logAuditEvent(id ? "DAILY_VISIT_TITLE_UPDATED" : "DAILY_VISIT_TITLE_CREATED", "studio_daily_visit_title", row.id, { title: row.title, active: row.active, sortOrder: row.sortOrder }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
+    return row;
+  });
 }
 
 export async function saveProjectType(
@@ -888,6 +905,7 @@ type SimpleMoneyInput = {
   accountId?: unknown;
   paymentMethod?: unknown;
   idempotencyKey?: unknown;
+  personnelAssignments?: unknown;
 };
 function simpleValues(value: SimpleMoneyInput, dateKey: string) {
   const price = money(value.price, "قیمت"),
@@ -930,11 +948,71 @@ export async function listDailyVisits(
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(studioDailyVisits.visitDate))
     .limit(300);
+  const visitIds = rows.map(({ record }) => record.id);
+  const assignments = visitIds.length ? await db.select().from(studioDailyVisitPersonnel).where(and(inArray(studioDailyVisitPersonnel.dailyVisitId, visitIds), eq(studioDailyVisitPersonnel.status, "active"))).orderBy(asc(studioDailyVisitPersonnel.createdAt)) : [];
   return rows.map(({ record: row, invoicePaid, invoiceBalance }) => ({
     ...row,
     paidAmount: Number(invoicePaid ?? row.paidAmount),
     remainingAmount: Number(invoiceBalance ?? (Number(row.price) - Number(row.paidAmount))),
+    personnelAssignments: assignments.filter((assignment) => assignment.dailyVisitId === row.id),
+    personnelCost: assignments.filter((assignment) => assignment.dailyVisitId === row.id).reduce((sum, assignment) => sum + Number(assignment.wageSnapshot), 0),
+    preliminaryProfit: Number(row.price) - assignments.filter((assignment) => assignment.dailyVisitId === row.id).reduce((sum, assignment) => sum + Number(assignment.wageSnapshot), 0),
   }));
+}
+
+async function syncDailyVisitPersonnel(tx: Transaction, actor: EmployeeContext, visit: typeof studioDailyVisits.$inferSelect, raw: unknown) {
+  if (raw === undefined) {
+    const active = await tx.select().from(studioDailyVisitPersonnel).where(and(eq(studioDailyVisitPersonnel.dailyVisitId, visit.id), eq(studioDailyVisitPersonnel.status, "active"))).orderBy(asc(studioDailyVisitPersonnel.createdAt));
+    const personnelCost = active.reduce((sum, row) => sum + Number(row.wageSnapshot), 0);
+    return { personnelAssignments: active, personnelCost, preliminaryProfit: Number(visit.price) - personnelCost };
+  }
+  if (!Array.isArray(raw)) throw new ApiError(400, "فهرست پرسنل مراجعه معتبر نیست.");
+  if (raw.length > 20) throw new ApiError(400, "حداکثر ۲۰ تخصیص پرسنل مجاز است.");
+  const parsed = raw.map((value) => {
+    const row = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    const personnelId = String(row.personnelId || ""); assertUuid(personnelId);
+    return { id: row.id ? String(row.id) : null, personnelId, workTitle: cleanText(row.workTitle, "عنوان کار", true, 120)!, wage: money(row.wageAmount, "دستمزد") };
+  });
+  if (new Set(parsed.map((row) => `${row.personnelId}:${row.workTitle}`)).size !== parsed.length) throw new ApiError(400, "تخصیص تکراری پرسنل مجاز نیست.");
+  const existing = await tx.select().from(studioDailyVisitPersonnel).where(and(eq(studioDailyVisitPersonnel.dailyVisitId, visit.id), eq(studioDailyVisitPersonnel.status, "active"))).for("update");
+  const retained = new Set(parsed.map((row) => row.id).filter(Boolean));
+  for (const old of existing.filter((row) => !retained.has(row.id))) {
+    if (old.salaryRecordId) {
+      const [link] = await tx.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "personnel_wage"), eq(atelierExpenseSources.sourceId, old.salaryRecordId))).limit(1);
+      if (link) {
+        const [expense] = await tx.select().from(expenses).where(eq(expenses.id, link.expenseId)).for("update").limit(1);
+        if (expense && Number(expense.paidAmount) > 0) throw new ApiError(409, "تخصیص دارای پرداخت مالی است و برای حذف به اصلاح مالی نیاز دارد.");
+        if (expense) await tx.update(expenses).set({ status: "reversed", paymentStatus: "reversed", reversalReason: "حذف تخصیص پرسنل مراجعه روزانه", reversedAt: new Date() }).where(eq(expenses.id, expense.id));
+      }
+      await tx.update(personnelSalaryRecords).set({ financialStatus: "voided", voidReason: "حذف از مراجعه روزانه", voidedAt: new Date(), updatedAt: new Date() }).where(eq(personnelSalaryRecords.id, old.salaryRecordId));
+    }
+    await tx.update(studioDailyVisitPersonnel).set({ status: "removed", removedAt: new Date(), updatedAt: new Date() }).where(eq(studioDailyVisitPersonnel.id, old.id));
+  }
+  for (const assignment of parsed) {
+    const [person] = await tx.select().from(studioPersonnel).where(and(eq(studioPersonnel.id, assignment.personnelId), eq(studioPersonnel.status, "active"))).limit(1);
+    if (!person) throw new ApiError(404, "پرسنل فعال انتخاب‌شده یافت نشد.");
+    const old = assignment.id ? existing.find((row) => row.id === assignment.id) : undefined;
+    if (assignment.id && !old) throw new ApiError(404, "تخصیص مراجعه یافت نشد.");
+    let salaryRecordId = old?.salaryRecordId || null;
+    if (!salaryRecordId) {
+      const [salary] = await tx.insert(personnelSalaryRecords).values({ personnelId: assignment.personnelId, salaryType: "per_project", rateAmount: assignment.wage.toFixed(2), unitsCount: "1", totalCalculated: assignment.wage.toFixed(2), paymentStatus: "pending", financialStatus: "draft", notes: `مراجعه روزانه: ${visit.title}` }).returning();
+      salaryRecordId = salary.id;
+    } else {
+      const [link] = await tx.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "personnel_wage"), eq(atelierExpenseSources.sourceId, salaryRecordId))).limit(1);
+      if (link) {
+        const [expense] = await tx.select().from(expenses).where(eq(expenses.id, link.expenseId)).for("update").limit(1);
+        if (expense && Number(expense.paidAmount) > 0 && Number(expense.amount) !== assignment.wage) throw new ApiError(409, "دستمزد دارای پرداخت قابل تغییر نیست.");
+      }
+      await tx.update(personnelSalaryRecords).set({ personnelId: assignment.personnelId, rateAmount: assignment.wage.toFixed(2), totalCalculated: assignment.wage.toFixed(2), updatedAt: new Date() }).where(eq(personnelSalaryRecords.id, salaryRecordId));
+    }
+    await recognizePlanningObligation(tx, actor, { sourceType: "personnel_wage", sourceId: salaryRecordId, projectId: null, title: `دستمزد ${person.fullName} برای مراجعه ${visit.title}`, category: "salary", amount: assignment.wage, dueDate: visit.visitDate });
+    const values = { personnelId: assignment.personnelId, personnelNameSnapshot: person.fullName, workTitle: assignment.workTitle, wageSnapshot: assignment.wage.toFixed(2), salaryRecordId, status: "active", removedAt: null, updatedAt: new Date() };
+    if (old) await tx.update(studioDailyVisitPersonnel).set(values).where(eq(studioDailyVisitPersonnel.id, old.id));
+    else await tx.insert(studioDailyVisitPersonnel).values({ dailyVisitId: visit.id, ...values }).onConflictDoUpdate({ target: [studioDailyVisitPersonnel.dailyVisitId, studioDailyVisitPersonnel.personnelId, studioDailyVisitPersonnel.workTitle], set: values });
+  }
+  const active = await tx.select().from(studioDailyVisitPersonnel).where(and(eq(studioDailyVisitPersonnel.dailyVisitId, visit.id), eq(studioDailyVisitPersonnel.status, "active"))).orderBy(asc(studioDailyVisitPersonnel.createdAt));
+  const personnelCost = active.reduce((sum, row) => sum + Number(row.wageSnapshot), 0);
+  return { personnelAssignments: active, personnelCost, preliminaryProfit: Number(visit.price) - personnelCost };
 }
 
 async function ensureSimpleCustomer(tx: Transaction, name: string, mobile: string) {
@@ -1002,7 +1080,10 @@ export async function saveDailyVisit(
       const key = cleanText(value.idempotencyKey, "کلید درخواست", false, 160) || crypto.randomUUID();
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`daily-visit:${key}`}, 0))`);
       const [prior] = await tx.select().from(studioDailyVisits).where(eq(studioDailyVisits.idempotencyKey, key)).limit(1);
-      if (prior) return { ...prior, remainingAmount: Number(prior.price) - Number(prior.paidAmount) };
+      if (prior) {
+        const personnel = await syncDailyVisitPersonnel(tx, actor, prior, undefined);
+        return { ...prior, remainingAmount: Number(prior.price) - Number(prior.paidAmount), ...personnel };
+      }
       const canonical = await createSimpleInvoice(tx, actor, "daily_visit", key, vals as ReturnType<typeof simpleValues>, cleanText(value.accountId, "حساب", false, 80), cleanText(value.paymentMethod, "روش پرداخت", false, 50));
       [row] = await tx
         .insert(studioDailyVisits)
@@ -1010,6 +1091,7 @@ export async function saveDailyVisit(
         .returning();
     }
     if (!row) throw new ApiError(404, "مراجعه روزانه یافت نشد.");
+    const personnel = await syncDailyVisitPersonnel(tx, actor, row, value.personnelAssignments);
     await logAuditEvent(
       id ? "DAILY_VISIT_UPDATED" : "DAILY_VISIT_CREATED",
       "studio_daily_visit",
@@ -1025,6 +1107,7 @@ export async function saveDailyVisit(
     return {
       ...row,
       remainingAmount: Number(row.price) - Number(row.paidAmount),
+      ...personnel,
     };
   });
 }
@@ -1034,6 +1117,7 @@ export async function deleteDailyVisit(actor: EmployeeContext, id: string) {
     const [current] = await tx.select().from(studioDailyVisits).where(eq(studioDailyVisits.id, id)).for("update").limit(1);
     if (!current) throw new ApiError(404, "مراجعه روزانه یافت نشد.");
     if (Number(current.paidAmount) > 0) throw new ApiError(409, "مراجعه دارای دریافت مالی است و باید از فرآیند برگشت وجه ابطال شود.");
+    await syncDailyVisitPersonnel(tx, actor, current, []);
     if (current.invoiceId) await tx.update(invoices).set({ status: "cancelled", reversalReason: "ابطال مراجعه روزانه", updatedAt: new Date() }).where(eq(invoices.id, current.invoiceId));
     const [row] = await tx.update(studioDailyVisits).set({ status: "cancelled", financialStatus: "voided", updatedAt: new Date() }).where(eq(studioDailyVisits.id, id)).returning();
     if (!row) throw new ApiError(404, "مراجعه روزانه یافت نشد.");
@@ -1236,7 +1320,7 @@ export async function getPlanning(
           .where(inArray(rentalEquipment.contractItemId, itemIds)),
       ])
     : [[], [], []];
-  const [personnelOptions, equipmentOptions, defaultWages] = await Promise.all([
+  const [personnelOptions, equipmentOptions] = await Promise.all([
     db
       .select()
       .from(studioPersonnel)
@@ -1247,7 +1331,6 @@ export async function getPlanning(
       .from(studioEquipment)
       .where(ne(studioEquipment.currentHealthStatus, "retired"))
       .orderBy(asc(studioEquipment.title)),
-    db.select().from(studioPersonnelDefaultWages),
   ]);
   return {
     contracts: contracts.map((contract) => ({
@@ -1272,62 +1355,7 @@ export async function getPlanning(
     })),
     personnelOptions,
     equipmentOptions,
-    defaultWages,
   };
-}
-export async function listDefaultWages(personnelId?: string) {
-  if (personnelId) assertUuid(personnelId);
-  return db
-    .select()
-    .from(studioPersonnelDefaultWages)
-    .where(
-      personnelId
-        ? eq(studioPersonnelDefaultWages.personnelId, personnelId)
-        : undefined,
-    )
-    .orderBy(asc(studioPersonnelDefaultWages.workTitle));
-}
-export async function saveDefaultWage(
-  actor: EmployeeContext,
-  personnelId: string,
-  workTitle: unknown,
-  amountInput: unknown,
-) {
-  assertUuid(personnelId);
-  const title = cleanText(workTitle, "عنوان فعالیت", true, 120)!;
-  const amount = money(amountInput, "دستمزد پیش‌فرض");
-  return db.transaction(async (tx) => {
-    const [person] = await tx
-      .select({ id: studioPersonnel.id })
-      .from(studioPersonnel)
-      .where(eq(studioPersonnel.id, personnelId))
-      .limit(1);
-    if (!person) throw new ApiError(404, "پرسنل یافت نشد.");
-    const [row] = await tx
-      .insert(studioPersonnelDefaultWages)
-      .values({ personnelId, workTitle: title, amount: amount.toFixed(2) })
-      .onConflictDoUpdate({
-        target: [
-          studioPersonnelDefaultWages.personnelId,
-          studioPersonnelDefaultWages.workTitle,
-        ],
-        set: { amount: amount.toFixed(2), updatedAt: new Date() },
-      })
-      .returning();
-    await logAuditEvent(
-      "PERSONNEL_DEFAULT_WAGE_SAVED",
-      "studio_personnel",
-      personnelId,
-      { workTitle: title, amount },
-      {
-        userId: actor.employeeId,
-        employeeId: actor.employeeId,
-        userName: actor.employeeName,
-      },
-      tx,
-    );
-    return row;
-  });
 }
 
 export async function assignPersonnelToItem(
@@ -1356,6 +1384,18 @@ export async function assignPersonnelToItem(
       )
       .limit(1);
     if (!person) throw new ApiError(404, "پرسنل فعال یافت نشد.");
+    if (person.employeeId && info.project.projectId) {
+      await tx.insert(employeeProjectAssignments).values({
+        employeeId: person.employeeId,
+        projectId: info.project.projectId,
+        role: "atelier_personnel",
+        status: "active",
+        permissionSet: {},
+      }).onConflictDoUpdate({
+        target: [employeeProjectAssignments.employeeId, employeeProjectAssignments.projectId],
+        set: { status: "active", endedAt: null },
+      });
+    }
     const conflict = await tx
       .select({ id: studioPlanningPersonnel.id })
       .from(studioPlanningPersonnel)
@@ -1374,20 +1414,9 @@ export async function assignPersonnelToItem(
         `پرسنل «${person.fullName}» در این بازه برنامه دیگری دارد.`,
         "PERSONNEL_CONFLICT",
       );
-    const [preset] = await tx
-      .select()
-      .from(studioPersonnelDefaultWages)
-      .where(
-        and(
-          eq(studioPersonnelDefaultWages.personnelId, personnelId),
-          eq(studioPersonnelDefaultWages.workTitle, info.item.title),
-        ),
-      )
-      .limit(1);
-    const wage =
-      value.wageAmount === undefined || value.wageAmount === ""
-        ? Number(preset?.amount || 0)
-        : money(value.wageAmount, "دستمزد");
+    if (value.wageAmount === undefined || value.wageAmount === "")
+      throw new ApiError(400, "دستمزد این کار باید به‌صورت دستی وارد شود.");
+    const wage = money(value.wageAmount, "دستمزد");
     const [existing] = await tx
       .select()
       .from(studioPlanningPersonnel)
@@ -1478,7 +1507,7 @@ export async function assignPersonnelToItem(
       },
       tx,
     );
-    return { ...row, defaultWage: Number(preset?.amount || 0) };
+    return row;
   });
 }
 

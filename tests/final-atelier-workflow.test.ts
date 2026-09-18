@@ -13,7 +13,7 @@ import type { EmployeeContext } from "../src/services/access";
 import {
   addRentalRequirement, approveContract, assignEquipmentToItem, assignPersonnelToItem,
   completeReservation, createPendingContract, getPlanning, listDailyVisits, listReservations,
-  markRentalAsRented, saveDailyVisit, saveDefaultWage, saveReservation, updateContract,
+  markRentalAsRented, saveDailyVisit, saveReservation, updateContract,
 } from "../src/services/studio/finalWorkflow";
 import { getFinalCalendar, getFinalNotifications, listContractCustomers } from "../src/services/studio/finalInsights";
 import { createStudioEquipment } from "../src/services/studio/equipmentService";
@@ -75,14 +75,11 @@ describe("Final Iranian atelier workflow", () => {
 
   it("plans every contract item with wage snapshots and conflict protection", async () => {
     const person = await createStudioPersonnel({ fullName: "عکاس تست نهایی", mobile: `0935${Date.now().toString().slice(-7)}`, personnelType: "temporary_worker", primaryRole: "photographer", status: "active", skills: [{ skillTitle: "عکاسی", skillCategory: "shooting" }] });
-    await saveDefaultWage(actor, person.id, "عکاسی", 5_000_000);
     const equipment = await createStudioEquipment({ title: "دوربین تست نهایی", category: "camera", serialNumber: randomUUID(), currentHealthStatus: "healthy", locationType: "in_studio" });
     const [photo, video] = contract.items;
     const startsAt = contract.programDate, endsAt = contract.programEndDate;
-    const assignment = await assignPersonnelToItem(actor, photo.id, { personnelId: person.id, startsAt, endsAt });
-    expect(Number(assignment.defaultWage)).toBe(5_000_000);
+    const assignment = await assignPersonnelToItem(actor, photo.id, { personnelId: person.id, startsAt, endsAt, wageAmount: 5_000_000 });
     expect(Number(assignment.wageSnapshot)).toBe(5_000_000);
-    await saveDefaultWage(actor, person.id, "عکاسی", 9_000_000);
     const [stored] = await db.select().from(studioPlanningPersonnel).where(eq(studioPlanningPersonnel.id, assignment.id));
     expect(Number(stored.wageSnapshot)).toBe(5_000_000);
     const [wageSource] = await db.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "personnel_wage"), eq(atelierExpenseSources.sourceId, stored.salaryRecordId!)));

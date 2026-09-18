@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Banknote, CheckCircle2, Edit3, FilePlus2, Printer, Trash2 } from "lucide-react";
+import { Banknote, CheckCircle2, Edit3, FilePlus2, PackagePlus, Printer, Trash2 } from "lucide-react";
 import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import { expandPackageToContractItems } from "@/lib/atelierCatalog";
 import {
   getBusinessDateTimeParts,
   tehranDateTimeToUtc,
@@ -20,7 +21,7 @@ type ItemForm = {
   notes: string;
 };
 const blankItem = (): ItemForm => ({
-  title: "عکاسی",
+  title: "",
   description: "",
   quantity: 1,
   unitPrice: 0,
@@ -44,6 +45,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
   const [types, setTypes] = useState<any[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [config, setConfig] = useState<any>({});
+  const [catalog, setCatalog] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<any | "new" | null>(null);
@@ -64,6 +66,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
       setContracts(contractData.contracts || []);
       setTypes(settingsData.projectTypes || []);
       setConfig(settingsData.config || {});
+      setCatalog(settingsData.catalog || []);
       setAccounts(accountData.accounts || []);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "خطای نامشخص");
@@ -234,6 +237,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
             types={types}
             accounts={accounts}
             config={config}
+            catalog={catalog}
             saving={saving}
             onClose={() => setEditing(null)}
             onSave={async (body) => {
@@ -284,6 +288,7 @@ function ContractForm({
   types,
   accounts,
   config,
+  catalog,
   saving,
   onClose,
   onSave,
@@ -292,6 +297,7 @@ function ContractForm({
   types: any[];
   accounts: any[];
   config: any;
+  catalog: any[];
   saving: boolean;
   onClose: () => void;
   onSave: (body: any) => Promise<void>;
@@ -346,6 +352,17 @@ function ContractForm({
   const [terms, setTerms] = useState(
     initial?.termsAndConditions || config?.contract?.defaultTerms || "",
   );
+  const [itemPicker, setItemPicker] = useState(false);
+  const [packagePicker, setPackagePicker] = useState(false);
+  const activeItems = catalog.filter((row) => row.kind === "service" && row.active);
+  const activePackages = catalog.filter((row) => row.kind === "package" && row.active);
+  const addCatalogItem = (catalogItem: any) => setItems((current) => [...current, { title: catalogItem.name, description: catalogItem.description || "", quantity: 1, unitPrice: Number(catalogItem.basePrice || catalogItem.defaultPrice || 0), notes: "" }]);
+  const addPackage = (pack: any) => {
+    const snapshots = expandPackageToContractItems(pack, activeItems);
+    if (!snapshots.length) return window.alert("این پکیج آیتم فعالی ندارد.");
+    setItems((current) => [...current, ...snapshots]);
+    setPackagePicker(false);
+  };
   const total = useMemo(
     () =>
       items.reduce(
@@ -481,18 +498,21 @@ function ContractForm({
             )}
             {!approved && (
               <section>
-                <div className="mb-3 flex items-center justify-between">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-black">آیتم های قرارداد</h3>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setItems((current) => [...current, blankItem()])
-                    }
-                    className="atelier-button-secondary"
-                  >
-                    افزودن آیتم
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => { setItemPicker((value) => !value); setPackagePicker(false); }} className="atelier-button-secondary">افزودن آیتم</button>
+                    <button type="button" onClick={() => { setPackagePicker((value) => !value); setItemPicker(false); }} className="atelier-button-secondary"><PackagePlus className="h-4 w-4" />افزودن پکیج</button>
+                  </div>
                 </div>
+                {itemPicker && <div className="mb-3 grid gap-2 rounded-2xl border border-zinc-800 bg-black/40 p-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {activeItems.map((item) => <button key={item.id} type="button" onClick={() => { addCatalogItem(item); setItemPicker(false); }} className="rounded-xl border border-zinc-800 p-3 text-right text-xs hover:border-red-800"><b className="block text-zinc-100">{item.name}</b><span className="mt-1 block text-zinc-500">{formatMoney(item.basePrice)}</span></button>)}
+                  <button type="button" onClick={() => { setItems((current) => [...current, blankItem()]); setItemPicker(false); }} className="rounded-xl border border-dashed border-red-900 p-3 text-right text-xs text-red-300">آیتم سفارشی</button>
+                </div>}
+                {packagePicker && <div className="mb-3 grid gap-2 rounded-2xl border border-red-950 bg-red-950/10 p-3 sm:grid-cols-2">
+                  {activePackages.map((pack) => <button key={pack.id} type="button" onClick={() => addPackage(pack)} className="rounded-xl border border-red-950 p-3 text-right hover:bg-red-950/30"><b className="block text-sm">{pack.name}</b><span className="mt-1 block text-xs text-zinc-500">{pack.description || `${(pack.itemIds || pack.specifications?.itemIds || []).length} آیتم`}</span></button>)}
+                  {!activePackages.length && <p className="text-xs text-zinc-500">پکیج فعالی در تنظیمات ثبت نشده است.</p>}
+                </div>}
                 <div className="space-y-3">
                   {items.map((item, index) => (
                     <div

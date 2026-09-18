@@ -22,6 +22,8 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
   const title = reservation ? "رزرو" : "مراجعات روزانه";
   const [records, setRecords] = useState<any[]>([]),
     [accounts, setAccounts] = useState<any[]>([]),
+    [personnel, setPersonnel] = useState<any[]>([]),
+    [dailyVisitTitles, setDailyVisitTitles] = useState<any[]>([]),
     [loading, setLoading] = useState(true),
     [error, setError] = useState("");
   const [query, setQuery] = useState(""),
@@ -43,7 +45,17 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
       .finally(() => setLoading(false));
   };
   useEffect(load, [kind]);
-  useEffect(() => { fetch("/api/accounts").then((r) => r.json()).then((body) => body.success && setAccounts(body.accounts || [])).catch(() => undefined); }, []);
+  useEffect(() => {
+    Promise.all([
+      fetch("/api/accounts").then((r) => r.json()),
+      fetch("/api/studio/personnel?pageSize=100").then((r) => r.json()),
+      fetch("/api/atelier/settings").then((r) => r.json()),
+    ]).then(([accountBody, personnelBody, settingsBody]) => {
+      if (accountBody.success) setAccounts(accountBody.accounts || []);
+      if (personnelBody.success) setPersonnel((personnelBody.personnel || []).filter((person: any) => person.status === "active"));
+      if (settingsBody.success) setDailyVisitTitles((settingsBody.dailyVisitTitles || []).filter((item: any) => item.active));
+    }).catch(() => undefined);
+  }, []);
   useEffect(() => {
     const listener = (event: Event) => {
       const id = (event as CustomEvent).detail?.id;
@@ -186,6 +198,13 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
                   </b>
                 </span>
               </div>
+              {!reservation && (
+                <div className="mt-3 rounded-xl border border-zinc-900 bg-black/20 p-3 text-xs">
+                  <div className="flex justify-between text-zinc-500"><span>هزینه پرسنل</span><b className="text-orange-300">{money(row.personnelCost)}</b></div>
+                  <div className="mt-2 flex justify-between text-zinc-500"><span>سود اولیه</span><b className={Number(row.preliminaryProfit || 0) >= 0 ? "text-emerald-400" : "text-red-400"}>{money(row.preliminaryProfit)}</b></div>
+                  {!!row.personnelAssignments?.length && <p className="mt-2 text-[10px] leading-5 text-zinc-600">{row.personnelAssignments.map((item: any) => `${item.personnelNameSnapshot} — ${item.workTitle}`).join("، ")}</p>}
+                </div>
+              )}
               <div className="mt-4 flex gap-2">
                 <button
                   onClick={() => setEditing(row)}
@@ -219,6 +238,8 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
           reservation={reservation}
           initial={editing === "new" ? null : editing}
           accounts={accounts}
+          personnel={personnel}
+          dailyVisitTitles={dailyVisitTitles}
           saving={saving}
           onClose={() => setEditing(null)}
           onSave={async (body) => {
@@ -255,6 +276,8 @@ function RecordForm({
   reservation,
   initial,
   accounts,
+  personnel,
+  dailyVisitTitles,
   saving,
   onClose,
   onSave,
@@ -262,6 +285,8 @@ function RecordForm({
   reservation: boolean;
   initial: any;
   accounts: any[];
+  personnel: any[];
+  dailyVisitTitles: any[];
   saving: boolean;
   onClose: () => void;
   onSave: (body: any) => Promise<void>;
@@ -286,7 +311,13 @@ function RecordForm({
     [mobile, setMobile] = useState(initial?.mobile || ""),
     [paidAmount, setPaidAmount] = useState(Number(initial?.paidAmount || 0)),
     [accountId, setAccountId] = useState(accounts[0]?.id || ""),
-    [notes, setNotes] = useState(initial?.notes || "");
+    [notes, setNotes] = useState(initial?.notes || ""),
+    [assignments, setAssignments] = useState<any[]>(initial?.personnelAssignments?.map((item: any) => ({
+      id: item.id,
+      personnelId: item.personnelId,
+      workTitle: item.workTitle,
+      wageAmount: Number(item.wageSnapshot || 0),
+    })) || []);
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!date) return;
@@ -306,6 +337,7 @@ function RecordForm({
       accountId: paidAmount > 0 ? accountId : undefined,
       paymentMethod: "card_transfer",
       notes,
+      personnelAssignments: reservation ? undefined : assignments,
     });
   };
   return (
@@ -315,7 +347,17 @@ function RecordForm({
     >
       <form onSubmit={(event) => void submit(event)} className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input label="عنوان" value={title} set={setTitle} required />
+          {!reservation && dailyVisitTitles.length ? (
+            <label>
+              <span className="atelier-label">عنوان *</span>
+              <select value={dailyVisitTitles.some((item) => item.title === title) ? title : "custom"} onChange={(event) => setTitle(event.target.value === "custom" ? "" : event.target.value)} className="atelier-input w-full py-2.5">
+                <option value="">انتخاب عنوان</option>
+                {dailyVisitTitles.map((item) => <option key={item.id} value={item.title}>{item.title}</option>)}
+                <option value="custom">عنوان سفارشی</option>
+              </select>
+              {!dailyVisitTitles.some((item) => item.title === title) && <input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder="عنوان سفارشی" className="atelier-input mt-2 w-full py-2.5" />}
+            </label>
+          ) : <Input label="عنوان" value={title} set={setTitle} required />}
           <JalaliDatePicker
             label="تاریخ"
             value={date}
@@ -380,6 +422,25 @@ function RecordForm({
             <small className="text-zinc-600">محاسبه قطعی در سرور</small>
           </div>
         </div>
+        {!reservation && (
+          <fieldset className="rounded-2xl border border-zinc-800 bg-black/20 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <legend className="font-black">پرسنل و دستمزد این مراجعه</legend>
+              <button type="button" onClick={() => setAssignments((current) => [...current, { personnelId: "", workTitle: "", wageAmount: 0 }])} className="atelier-button-secondary"><Plus className="h-4 w-4" />افزودن پرسنل</button>
+            </div>
+            <div className="mt-4 space-y-3">
+              {assignments.map((assignment, index) => (
+                <div key={assignment.id || index} className="grid gap-3 rounded-xl border border-zinc-900 p-3 sm:grid-cols-2">
+                  <label><span className="atelier-label">پرسنل *</span><select required value={assignment.personnelId} onChange={(event) => setAssignments((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, personnelId: event.target.value } : item))} className="atelier-input w-full py-2.5"><option value="">انتخاب پرسنل</option>{personnel.map((person) => <option key={person.id} value={person.id}>{person.fullName}</option>)}</select></label>
+                  <Input label="عنوان فعالیت" value={assignment.workTitle} set={(workTitle) => setAssignments((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, workTitle } : item))} required />
+                  <label><span className="atelier-label">دستمزد این مراجعه</span><MoneyInput value={assignment.wageAmount} onChange={(wageAmount) => setAssignments((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, wageAmount } : item))} unit="تومان" className="!rounded-xl !border-zinc-800 !bg-black" /></label>
+                  <button type="button" onClick={() => setAssignments((current) => current.filter((_, itemIndex) => itemIndex !== index))} className="atelier-button-secondary self-end text-red-400"><Trash2 className="h-4 w-4" />حذف تخصیص</button>
+                </div>
+              ))}
+              {!assignments.length && <p className="text-xs text-zinc-600">برای این مراجعه هنوز پرسنلی تخصیص داده نشده است.</p>}
+            </div>
+          </fieldset>
+        )}
         <label className="block">
           <span className="atelier-label">توضیحات</span>
           <textarea

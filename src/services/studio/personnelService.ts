@@ -18,7 +18,7 @@ import { logAuditEvent } from "@/services/audit";
 
 export interface CreatePersonnelInput {
   employeeId?: string | null;
-  personnelType?: "employee" | "temporary_worker";
+  personnelType?: "employee" | "temporary_worker" | "project_based";
   fullName: string;
   mobile: string;
   primaryRole: string;
@@ -26,6 +26,8 @@ export interface CreatePersonnelInput {
   experienceYears?: number;
   rating?: number;
   status?: "active" | "on_leave" | "inactive";
+  fixedSalary?: number;
+  paymentCycle?: "monthly" | "none";
   notes?: string | null;
   skills?: Array<{
     skillTitle: string;
@@ -38,7 +40,7 @@ export interface CreatePersonnelInput {
 
 export interface UpdatePersonnelInput {
   employeeId?: string | null;
-  personnelType?: "employee" | "temporary_worker";
+  personnelType?: "employee" | "temporary_worker" | "project_based";
   fullName?: string;
   mobile?: string;
   primaryRole?: string;
@@ -46,6 +48,8 @@ export interface UpdatePersonnelInput {
   experienceYears?: number;
   rating?: number;
   status?: "active" | "on_leave" | "inactive";
+  fixedSalary?: number;
+  paymentCycle?: "monthly" | "none";
   notes?: string | null;
 }
 
@@ -135,6 +139,8 @@ export async function listStudioPersonnel(filter: ListPersonnelFilter) {
       experienceYears: studioPersonnel.experienceYears,
       rating: studioPersonnel.rating,
       status: studioPersonnel.status,
+      fixedSalary: studioPersonnel.fixedSalary,
+      paymentCycle: studioPersonnel.paymentCycle,
       notes: studioPersonnel.notes,
       createdAt: studioPersonnel.createdAt,
       updatedAt: studioPersonnel.updatedAt,
@@ -197,6 +203,8 @@ export async function getStudioPersonnelById(id: string) {
       experienceYears: studioPersonnel.experienceYears,
       rating: studioPersonnel.rating,
       status: studioPersonnel.status,
+      fixedSalary: studioPersonnel.fixedSalary,
+      paymentCycle: studioPersonnel.paymentCycle,
       notes: studioPersonnel.notes,
       createdAt: studioPersonnel.createdAt,
       updatedAt: studioPersonnel.updatedAt,
@@ -346,7 +354,9 @@ export async function createStudioPersonnel(input: CreatePersonnelInput) {
   }
 
   const role = input.primaryRole?.trim() || "photographer";
-  const personnelType = input.personnelType === "temporary_worker" ? "temporary_worker" : "employee";
+  const personnelType = ["temporary_worker", "project_based"].includes(input.personnelType || "")
+    ? input.personnelType!
+    : "employee";
   const rating = input.rating !== undefined ? Math.min(5, Math.max(1, Number(input.rating))).toFixed(2) : "5.00";
   const experienceYears = input.experienceYears !== undefined ? Math.max(0, Number(input.experienceYears)) : 1;
 
@@ -368,9 +378,19 @@ export async function createStudioPersonnel(input: CreatePersonnelInput) {
         experienceYears,
         rating,
         status: input.status || "active",
+        fixedSalary: decimal(input.fixedSalary ?? 0, "حقوق ثابت", 2),
+        paymentCycle: input.paymentCycle === "none" ? "none" : "monthly",
         notes: input.notes?.trim() || null,
       })
       .returning();
+
+    if (inserted.employeeId) {
+      await tx.update(employees).set({
+        baseSalary: inserted.fixedSalary,
+        cooperationType: inserted.personnelType,
+        updatedAt: new Date(),
+      }).where(eq(employees.id, inserted.employeeId));
+    }
 
     if (input.skills && Array.isArray(input.skills) && input.skills.length > 0) {
       for (const skill of input.skills) {
@@ -430,7 +450,9 @@ export async function updateStudioPersonnel(id: string, input: UpdatePersonnelIn
   }
 
   if (input.personnelType !== undefined) {
-    updateData.personnelType = input.personnelType === "temporary_worker" ? "temporary_worker" : "employee";
+    updateData.personnelType = ["temporary_worker", "project_based"].includes(input.personnelType)
+      ? input.personnelType
+      : "employee";
   }
 
   if (input.primaryRole !== undefined) {
@@ -456,17 +478,28 @@ export async function updateStudioPersonnel(id: string, input: UpdatePersonnelIn
     updateData.status = input.status;
   }
 
+  if (input.fixedSalary !== undefined) updateData.fixedSalary = decimal(input.fixedSalary, "حقوق ثابت", 2);
+  if (input.paymentCycle !== undefined) updateData.paymentCycle = input.paymentCycle === "none" ? "none" : "monthly";
+
   if (input.notes !== undefined) {
     updateData.notes = input.notes ? input.notes.trim() : null;
   }
 
-  const [updated] = await db
-    .update(studioPersonnel)
-    .set(updateData)
-    .where(eq(studioPersonnel.id, id))
-    .returning();
-
-  return updated;
+  return db.transaction(async (tx) => {
+    const [updated] = await tx
+      .update(studioPersonnel)
+      .set(updateData)
+      .where(eq(studioPersonnel.id, id))
+      .returning();
+    if (updated.employeeId) {
+      await tx.update(employees).set({
+        baseSalary: updated.fixedSalary,
+        cooperationType: updated.personnelType,
+        updatedAt: new Date(),
+      }).where(eq(employees.id, updated.employeeId));
+    }
+    return updated;
+  });
 }
 
 export async function deleteStudioPersonnel(id: string) {
