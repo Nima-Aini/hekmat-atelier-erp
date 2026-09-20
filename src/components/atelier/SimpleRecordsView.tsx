@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Banknote, CheckCircle2, Edit3, Eye, Plus, Search, Trash2 } from "lucide-react";
+import { Banknote, Edit3, Eye, Plus, Search, Trash2 } from "lucide-react";
 import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import {
@@ -13,6 +13,7 @@ import {
 import { AtelierModal } from "./AtelierModal";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 import { atelierConfirm, atelierToast } from "@/lib/atelierFeedback";
+import { AccountSelector, PaymentMethodSelect } from "./FinanceControls";
 
 const money = (value: unknown) =>
   `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
@@ -94,16 +95,6 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
     }).then((r) => r.json());
     if (!data.success) return atelierToast(data.error || "حذف انجام نشد.", "error");
     atelierToast("رکورد حذف شد.", "success");
-    load();
-  };
-  const complete = async (row: any) => {
-    if (!(await atelierConfirm(`رزرو «${row.title}» تکمیل و برای همیشه حذف شود؟`, "تکمیل شده و حذف"))) return;
-    const data = await fetch(`/api/atelier/reservations/${row.id}`, {
-      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "complete_delete" }),
-    }).then((r) => r.json());
-    if (!data.success)
-      return atelierToast(data.error || "تکمیل رزرو انجام نشد.", "error");
-    atelierToast("رزرو تکمیل و حذف شد.", "success");
     load();
   };
 
@@ -218,13 +209,12 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
                   ویرایش
                 </button>
                 {!reservation && Number(row.remainingAmount) > 0 && <button onClick={() => setPaying(row)} className="atelier-button flex-1"><Banknote className="h-4 w-4" />ثبت پرداخت</button>}
-                {reservation && <button onClick={() => void complete(row)} className="atelier-button flex-1"><CheckCircle2 className="h-4 w-4" />تکمیل شده و حذف</button>}
-                {reservation && <button onClick={() => setConverting(row)} className="atelier-button-secondary flex-1">تکمیل شده و انتقال به مراجعات روزانه</button>}
+                {reservation && <button onClick={() => setConverting(row)} className="atelier-button flex-1">انتقال به مراجعه روزانه</button>}
                 <button
                   onClick={() => void remove(row)}
-                  className={reservation ? "atelier-button-secondary flex-1 text-red-400" : "atelier-icon-button text-red-400"}
+                  className={reservation ? "atelier-button-secondary flex-1 !border-red-900 text-red-300" : "atelier-icon-button text-red-400"}
                 >
-                  <Trash2 className="h-4 w-4" />{reservation && "لغو و حذف رزرو"}
+                  <Trash2 className="h-4 w-4" />{reservation && "حذف"}
                 </button>
               </div>
             </article>
@@ -472,7 +462,7 @@ function DailyVisitPaymentForm({ visit, accounts, onClose, onSaved }: { visit: a
   const [method, setMethod] = useState("card_transfer");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
-  return <AtelierModal title="ثبت پرداخت مراجعه روزانه" onClose={onClose}><form className="space-y-4" onSubmit={async (event) => { event.preventDefault(); if (!date) return; setSaving(true); try { const data = await fetch(`/api/atelier/daily-visits/${visit.id}/payments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ amount, paidAt: date.toISOString(), accountId, paymentMethod: method, notes, idempotencyKey: crypto.randomUUID() }) }).then((response) => response.json()); if (!data.success) throw new Error(data.error || "ثبت پرداخت انجام نشد."); atelierToast("پرداخت مراجعه ثبت شد.", "success"); onSaved(); } catch (reason) { atelierToast(reason instanceof Error ? reason.message : "ثبت پرداخت انجام نشد.", "error"); } finally { setSaving(false); } }}><div><label className="atelier-label">مبلغ *</label><MoneyInput value={amount} onChange={setAmount} unit="تومان" className="!rounded-xl !border-zinc-800 !bg-black" /></div><JalaliDatePicker label="تاریخ پرداخت" value={date} onChange={setDate} required /><label><span className="atelier-label">حساب *</span><select required value={accountId} onChange={(event) => setAccountId(event.target.value)} className="atelier-input w-full py-2.5"><option value="">انتخاب حساب</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><label><span className="atelier-label">روش پرداخت *</span><select value={method} onChange={(event) => setMethod(event.target.value)} className="atelier-input w-full py-2.5"><option value="cash">نقدی</option><option value="card_transfer">کارت به کارت</option><option value="pos">کارت‌خوان</option><option value="bank_transfer">انتقال بانکی</option></select></label><label><span className="atelier-label">یادداشت</span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="atelier-input min-h-24 w-full py-3" /></label><div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="atelier-button-secondary">انصراف</button><button disabled={saving} className="atelier-button">{saving ? "در حال ثبت…" : "ثبت پرداخت"}</button></div></form></AtelierModal>;
+  return <AtelierModal title="ثبت پرداخت مراجعه روزانه" onClose={onClose}><form className="space-y-4" onSubmit={async (event) => { event.preventDefault(); if (!date) return; setSaving(true); try { const data = await fetch(`/api/atelier/daily-visits/${visit.id}/payments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ amount, paidAt: date.toISOString(), accountId, paymentMethod: method, notes, idempotencyKey: crypto.randomUUID() }) }).then((response) => response.json()); if (!data.success) throw new Error(data.error || "ثبت پرداخت انجام نشد."); atelierToast("پرداخت مراجعه ثبت شد.", "success"); onSaved(); } catch (reason) { atelierToast(reason instanceof Error ? reason.message : "ثبت پرداخت انجام نشد.", "error"); } finally { setSaving(false); } }}><div><label className="atelier-label">مبلغ *</label><MoneyInput value={amount} onChange={setAmount} unit="تومان" className="!rounded-xl !border-zinc-800 !bg-black" /></div><JalaliDatePicker label="تاریخ پرداخت" value={date} onChange={setDate} required /><AccountSelector accounts={accounts} value={accountId} onChange={setAccountId} label="حساب دریافت" /><PaymentMethodSelect value={method} onChange={setMethod} /><label><span className="atelier-label">یادداشت</span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="atelier-input min-h-24 w-full py-3" /></label><div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="atelier-button-secondary">انصراف</button><button disabled={saving} className="atelier-button">{saving ? "در حال ثبت…" : "ثبت پرداخت"}</button></div></form></AtelierModal>;
 }
 
 function Input({

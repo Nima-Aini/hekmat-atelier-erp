@@ -224,7 +224,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
                   ) : (
                     <>
                       <button onClick={() => onNavigateFinance?.(contract.id)} className="atelier-button-secondary flex-1">
-                        <Banknote className="h-4 w-4" /> مالی قرارداد
+                        <Banknote className="h-4 w-4" /> مشاهده در مالی
                       </button>
                       <button onClick={() => setPrinting(contract)} className="atelier-button flex-1">
                         <Printer className="h-4 w-4" /> چاپ قرارداد

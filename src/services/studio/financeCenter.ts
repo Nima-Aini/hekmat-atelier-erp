@@ -172,21 +172,38 @@ export async function saveContractInstallments(actor: EmployeeContext, contractI
     const [lockedContract] = await tx.select().from(studioContracts).where(eq(studioContracts.id, contractId)).for("update").limit(1);
     if (!lockedContract || lockedContract.status !== "signed") throw new ApiError(404, "قرارداد تأییدشده یافت نشد.");
     const [project] = await tx.select({ coreProjectId: studioProjects.projectId }).from(studioProjects).where(eq(studioProjects.id, lockedContract.studioProjectId)).limit(1);
-    const [invoice] = lockedContract.invoiceId ? await tx.select({ balance: invoices.balanceDue }).from(invoices).where(eq(invoices.id, lockedContract.invoiceId)).limit(1) : [];
+    const [invoice] = lockedContract.invoiceId ? await tx.select({ balance: invoices.balanceDue, total: invoices.grandTotal }).from(invoices).where(eq(invoices.id, lockedContract.invoiceId)).limit(1) : [];
     await assertFinanceScope(actor, project?.coreProjectId);
     const current = await tx.select().from(studioInstallments).where(eq(studioInstallments.contractId, contractId));
-    if (current.length) {
-      const allocations = await tx.select().from(studioInstallmentAllocations).where(inArray(studioInstallmentAllocations.installmentId, current.map((r) => r.id)));
-      if (allocations.length) throw new ApiError(409, "برنامه اقساط دارای دریافت است و قابل بازنویسی نیست.");
-      await tx.delete(studioInstallments).where(eq(studioInstallments.contractId, contractId));
-    }
-    const values = rows.map((row, position) => ({ contractId, title: String(row.title || `قسط ${position + 1}`).trim(), amount: decimal(row.amount, "مبلغ قسط", 2, true), dueDate: new Date(String(row.dueDate)), position }));
+    const allocations = current.length ? await tx.select().from(studioInstallmentAllocations).where(inArray(studioInstallmentAllocations.installmentId, current.map((r) => r.id))) : [];
+    const values = rows.map((row, position) => ({ id: row.id ? String(row.id) : null, contractId, title: String(row.title || `قسط ${position + 1}`).trim(), amount: decimal(row.amount, "مبلغ قسط", 2, true), dueDate: new Date(String(row.dueDate)), position }));
     if (values.some((row) => Number.isNaN(row.dueDate.getTime()))) throw new ApiError(400, "تاریخ سررسید قسط نامعتبر است.");
     const total = values.reduce((sum, row) => sum + n(row.amount), 0);
-    if (total > n(invoice?.balance)) throw new ApiError(422, "جمع اقساط از مانده قرارداد بیشتر است.");
-    const created = values.length ? await tx.insert(studioInstallments).values(values).returning() : [];
-    await logAuditEvent("ATELIER_INSTALLMENTS_UPDATED", "studio_contract", contractId, { count: created.length, total }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
-    return created;
+    if (total > n(invoice?.total || lockedContract.totalAmount)) throw new ApiError(422, "جمع اقساط از مبلغ نهایی قرارداد بیشتر است.");
+    const currentById = new Map(current.map((row) => [row.id, row]));
+    const submittedIds = new Set<string>();
+    const result = [];
+    for (const value of values) {
+      if (value.id) {
+        assertUuid(value.id); const existing = currentById.get(value.id);
+        if (!existing) throw new ApiError(422, "یکی از اقساط متعلق به این قرارداد نیست.");
+        if (submittedIds.has(value.id)) throw new ApiError(422, "قسط تکراری در برنامه ارسال شده است.");
+        submittedIds.add(value.id);
+        const paid = allocations.filter((row) => row.installmentId === value.id).reduce((sum, row) => sum + n(row.amount), 0);
+        if (n(value.amount) < paid) throw new ApiError(422, `مبلغ «${value.title}» از دریافتی ثبت‌شده آن کمتر است.`);
+        const [updated] = await tx.update(studioInstallments).set({ title: value.title, amount: value.amount, dueDate: value.dueDate, position: value.position, updatedAt: new Date() }).where(eq(studioInstallments.id, value.id)).returning();
+        result.push(updated);
+      } else {
+        const [created] = await tx.insert(studioInstallments).values({ contractId, title: value.title, amount: value.amount, dueDate: value.dueDate, position: value.position }).returning();
+        result.push(created);
+      }
+    }
+    for (const existing of current) if (!submittedIds.has(existing.id)) {
+      if (allocations.some((row) => row.installmentId === existing.id)) throw new ApiError(409, `قسط «${existing.title}» دریافت دارد و قابل حذف نیست.`);
+      await tx.delete(studioInstallments).where(eq(studioInstallments.id, existing.id));
+    }
+    await logAuditEvent("ATELIER_INSTALLMENTS_UPDATED", "studio_contract", contractId, { count: result.length, total }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
+    return result;
   });
 }
 

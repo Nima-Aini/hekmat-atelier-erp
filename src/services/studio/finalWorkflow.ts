@@ -1528,7 +1528,7 @@ export async function updatePersonnelAssignment(actor: EmployeeContext, itemId: 
     await lockScheduleResources(tx, [], [...new Set([current.personnelId, personnelId])]);
     const [person] = await tx.select().from(studioPersonnel).where(and(eq(studioPersonnel.id, personnelId), eq(studioPersonnel.status, "active"))).limit(1);
     if (!person) throw new ApiError(404, "پرسنل فعال یافت نشد.");
-    const conflict = await tx.select({ id: studioPlanningPersonnel.id }).from(studioPlanningPersonnel).where(and(eq(studioPlanningPersonnel.personnelId, personnelId), ne(studioPlanningPersonnel.id, assignmentId), lt(studioPlanningPersonnel.startsAt, end), gt(studioPlanningPersonnel.endsAt, start))).limit(1);
+    const conflict = await tx.select({ id: studioPlanningPersonnel.id }).from(studioPlanningPersonnel).innerJoin(studioContractItems, eq(studioContractItems.id, studioPlanningPersonnel.contractItemId)).where(and(eq(studioPlanningPersonnel.personnelId, personnelId), ne(studioPlanningPersonnel.id, assignmentId), ne(studioContractItems.contractId, info.item.contractId), lt(studioPlanningPersonnel.startsAt, end), gt(studioPlanningPersonnel.endsAt, start))).limit(1);
     if (conflict.length) throw new ApiError(409, `پرسنل «${person.fullName}» در این بازه برنامه دیگری دارد.`, "PERSONNEL_CONFLICT");
     if (!current.salaryRecordId) throw new ApiError(409, "پیوند مالی دستمزد این تخصیص ناقص است.");
     const [salary] = await tx.select().from(personnelSalaryRecords).where(eq(personnelSalaryRecords.id, current.salaryRecordId)).for("update").limit(1);

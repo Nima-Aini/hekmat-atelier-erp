@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Calendar, ChevronLeft, ChevronRight, X } from "lucide-react";
 import {
   getJalaliMonthLength,
@@ -46,6 +47,8 @@ export const JalaliDatePicker: React.FC<Props> = ({
   const initialView = value ? gregorianToJalali(new Date(value as any)) : gregorianToJalali(new Date());
   const [view, setView] = useState({ year: initialView.year, month: initialView.month });
   const rootRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({});
 
   useEffect(() => {
     setText(toJalaliStr(valueKey));
@@ -57,11 +60,27 @@ export const JalaliDatePicker: React.FC<Props> = ({
 
   useEffect(() => {
     const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node) && !popupRef.current?.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", closeOnOutsideClick);
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const rect = rootRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(320, window.innerWidth - 24);
+      const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.right - width));
+      const spaceBelow = window.innerHeight - rect.bottom;
+      setPopupStyle({ position: "fixed", width, left, top: spaceBelow >= 390 ? rect.bottom + 8 : undefined, bottom: spaceBelow < 390 ? window.innerHeight - rect.top + 8 : undefined });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [open]);
 
   const handleChange = (val: string) => {
     const latin = toLatinDigits(val);
@@ -159,8 +178,8 @@ export const JalaliDatePicker: React.FC<Props> = ({
           امروز
         </button>
       </div>
-      {open && !disabled && (
-        <div dir="rtl" role="dialog" aria-label="انتخاب تاریخ شمسی" className="absolute right-0 top-full z-[120] mt-2 w-[min(calc(100vw-2rem),20rem)] rounded-2xl border border-red-950 bg-[#09090b] p-3 text-white shadow-2xl shadow-red-950/30">
+      {open && !disabled && typeof document !== "undefined" && createPortal(
+        <div ref={popupRef} dir="rtl" role="dialog" aria-label="انتخاب تاریخ شمسی" style={popupStyle} className="z-[140] rounded-2xl border border-red-950 bg-[#09090b] p-3 text-white shadow-2xl shadow-red-950/30">
           <div className="mb-3 flex items-center justify-between">
             <button type="button" onClick={() => moveMonth(1)} aria-label="ماه بعد" className="rounded-lg p-2 hover:bg-red-950"><ChevronRight className="h-4 w-4" /></button>
             <strong className="text-sm">{monthNames[view.month - 1]} {view.year.toLocaleString("fa-IR", { useGrouping: false })}</strong>
@@ -179,7 +198,7 @@ export const JalaliDatePicker: React.FC<Props> = ({
             <button type="button" onClick={() => { handleChange(""); setOpen(false); }} className="rounded-lg px-2 py-1.5 text-xs text-rose-300 hover:bg-rose-950/40">پاک کردن</button>
             <button type="button" onClick={handleToday} className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-cyan-300 hover:bg-slate-700">امروز</button>
           </div>
-        </div>
+        </div>, document.body
       )}
       {error ? (
         <span className="text-[11px] text-rose-400">{error}</span>
