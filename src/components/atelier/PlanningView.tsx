@@ -4,15 +4,23 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Camera,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  ClipboardCopy,
   Clock3,
+  Edit3,
+  Eye,
   UserPlus,
   UsersRound,
   Wrench,
 } from "lucide-react";
 import { MoneyInput } from "@/components/ui/MoneyInput";
-import { toJalaliDate } from "@/lib/dateUtils";
+import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
+import { getBusinessDateTimeParts, tehranDateTimeToUtc, toJalaliDate } from "@/lib/dateUtils";
 import { AtelierModal } from "./AtelierModal";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
+import { atelierPrompt, atelierToast } from "@/lib/atelierFeedback";
+import { formatPlanningCopyText } from "@/lib/planningText";
 
 const money = (value: unknown) =>
   `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
@@ -22,11 +30,13 @@ type Action = {
   contract: any;
 } | null;
 
-export function PlanningView() {
+export function PlanningView({ onEditContract }: { onEditContract?: (id: string) => void }) {
   const [planning, setPlanning] = useState<any>(null),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
-    [action, setAction] = useState<Action>(null);
+    [action, setAction] = useState<Action>(null),
+    [expanded, setExpanded] = useState<Set<string>>(new Set()),
+    [summary, setSummary] = useState<any>(null);
   const load = () => {
     setLoading(true);
     setError("");
@@ -41,6 +51,25 @@ export function PlanningView() {
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
+  useEffect(() => {
+    const openTarget = (id: string) => {
+      const contract = planning?.contracts?.find((row: any) => row.id === id || row.items?.some((item: any) => item.id === id || item.rentalRequirements?.some((rental: any) => rental.id === id)));
+      if (!contract) return;
+      sessionStorage.removeItem("akma:planning-target");
+      setExpanded((current) => new Set(current).add(contract.id));
+      window.setTimeout(() => document.getElementById(`planning-contract-${contract.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" }), 120);
+    };
+    const listener = (event: Event) => {
+      const id = (event as CustomEvent).detail?.id;
+      if (!id) return;
+      sessionStorage.setItem("akma:planning-target", id);
+      openTarget(id);
+    };
+    window.addEventListener("akma:navigate-item", listener);
+    const pending = sessionStorage.getItem("akma:planning-target");
+    if (pending) openTarget(pending);
+    return () => window.removeEventListener("akma:navigate-item", listener);
+  }, [planning]);
   const equipmentMap = useMemo(
     () =>
       new Map(
@@ -70,26 +99,26 @@ export function PlanningView() {
           {planning.contracts.map((contract: any) => (
             <section
               key={contract.id}
+              id={`planning-contract-${contract.id}`}
               className="atelier-panel-red overflow-hidden"
             >
               <header className="flex flex-wrap items-center justify-between gap-3 border-b border-red-950/50 p-4 sm:p-5">
-                <div>
-                  <p className="text-xs text-red-400">
-                    {contract.contractNumber}
-                  </p>
+                <button className="min-w-0 flex-1 text-right" onClick={() => setExpanded((current) => { const next = new Set(current); next.has(contract.id) ? next.delete(contract.id) : next.add(contract.id); return next; })}>
                   <h2 className="mt-1 font-black">
-                    {contract.projectType.title} {contract.customer.name}
+                    {contract.customer.name} — {contract.projectType.title}
                   </h2>
                   <p className="mt-1 text-xs text-zinc-500">
-                    {toJalaliDate(contract.programDate, { showTime: true })}{" "}
-                    • {contract.executionLocation || "محل ثبت نشده"}
+                    {toJalaliDate(contract.programDate, { showTime: true })} • وضعیت برنامه‌ریزی: {contract.items.every((item: any) => item.personnelAssignments.length) ? "تکمیل پرسنل" : "نیازمند تخصیص"}
                   </p>
+                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button onClick={() => onEditContract?.(contract.id)} className="atelier-icon-button" aria-label="ویرایش قرارداد"><Edit3 className="h-4 w-4" /></button>
+                  <button onClick={() => setSummary(contract)} className="atelier-icon-button" aria-label="نمایش خلاصه"><Eye className="h-4 w-4" /></button>
+                  <button onClick={async () => { await navigator.clipboard.writeText(formatPlanningCopyText(contract)); atelierToast("متن برنامه کپی شد.", "success"); }} className="atelier-button-secondary text-xs"><ClipboardCopy className="h-4 w-4" />کپی متن</button>
+                  <button onClick={() => setExpanded((current) => { const next = new Set(current); next.has(contract.id) ? next.delete(contract.id) : next.add(contract.id); return next; })} className="atelier-icon-button" aria-label="باز و بسته کردن">{expanded.has(contract.id) ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</button>
                 </div>
-                <span className="rounded-full border border-emerald-900 bg-emerald-950/20 px-3 py-1 text-xs text-emerald-400">
-                  تایید شده
-                </span>
               </header>
-              <div className="grid gap-3 p-3 sm:p-5 xl:grid-cols-2">
+              {expanded.has(contract.id) && <div className="grid gap-3 p-3 sm:p-5 xl:grid-cols-2">
                 {contract.items.map((item: any) => (
                   <article
                     key={item.id}
@@ -98,6 +127,7 @@ export function PlanningView() {
                     <div className="flex items-start justify-between">
                       <div>
                         <h3 className="font-black">{item.title}</h3>
+                        <p className="mt-1 text-xs text-red-300">اجرا: {toJalaliDate(contract.programDate, { showTime: true })} تا {toJalaliDate(contract.programEndDate, { showTime: true })}</p>
                         <p className="mt-1 text-xs text-zinc-600">
                           {Number(item.quantity).toLocaleString("fa-IR")} ×{" "}
                           {money(item.unitPrice)}
@@ -157,7 +187,7 @@ export function PlanningView() {
                               </span>
                               <span>
                                 {row.status === "planned"
-                                  ? "نیاز به اجاره"
+                                  ? "اجاره تکمیل نشده"
                                   : "اجاره شد"}
                               </span>
                             </div>
@@ -168,7 +198,7 @@ export function PlanningView() {
                             {row.status === "planned" && (
                               <button
                                 onClick={async () => {
-                                  const value = window.prompt(
+                                  const value = await atelierPrompt(
                                     "هزینه نهایی اجاره (تومان)",
                                     String(Number(row.rentalCost)),
                                   );
@@ -186,9 +216,8 @@ export function PlanningView() {
                                     },
                                   ).then((r) => r.json());
                                   if (!data.success)
-                                    return window.alert(
-                                      data.error || "ثبت انجام نشد.",
-                                    );
+                                    return atelierToast(data.error || "ثبت انجام نشد.", "error");
+                                  atelierToast("اجاره تکمیل شد.", "success");
                                   load();
                                 }}
                                 className="mt-2 rounded-lg bg-emerald-700 px-3 py-1.5 font-bold text-white"
@@ -232,7 +261,7 @@ export function PlanningView() {
                     </div>
                   </article>
                 ))}
-              </div>
+              </div>}
             </section>
           ))}
         </div>
@@ -248,6 +277,12 @@ export function PlanningView() {
           }}
         />
       )}
+      {summary && <AtelierModal title="خلاصه برنامه قرارداد" onClose={() => setSummary(null)} wide>
+        <div className="space-y-4 text-sm">
+          <div className="grid gap-3 rounded-2xl border border-zinc-800 bg-black/30 p-4 sm:grid-cols-2"><p><span className="text-zinc-500">مشتری:</span> {summary.customer.name} — {summary.customer.mobile}</p><p><span className="text-zinc-500">نوع پروژه:</span> {summary.projectType.title}</p><p><span className="text-zinc-500">تاریخ و ساعت:</span> {toJalaliDate(summary.programDate, { showTime: true })} تا {toJalaliDate(summary.programEndDate, { showTime: true })}</p><p><span className="text-zinc-500">لوکیشن:</span> {summary.executionLocation || "ثبت نشده"}</p></div>
+          {summary.items.map((item: any) => <div key={item.id} className="rounded-2xl border border-zinc-800 p-4"><h3 className="font-black">{item.title}</h3><p className={`mt-2 text-xs ${item.personnelAssignments.length ? "text-zinc-300" : "text-red-400"}`}>پرسنل: {item.personnelAssignments.map((row: any) => row.personnelName).join("، ") || "تخصیص داده نشده"}</p><p className={`mt-1 text-xs ${item.equipmentAssignments.length ? "text-zinc-300" : "text-red-400"}`}>تجهیزات آتلیه: {item.equipmentAssignments.map((row: any) => equipmentMap.get(row.equipmentId)).filter(Boolean).join("، ") || "تخصیص داده نشده"}</p><p className={`mt-1 text-xs ${item.rentalRequirements.some((row: any) => row.status === "planned") ? "font-black text-red-400" : "text-zinc-300"}`}>تجهیزات اجاره‌ای: {item.rentalRequirements.map((row: any) => `${row.itemTitle} (${row.status === "planned" ? "اجاره تکمیل نشده" : "اجاره شد"})`).join("، ") || "نیازی ثبت نشده"}</p></div>)}
+        </div>
+      </AtelierModal>}
     </div>
   );
 }
@@ -295,37 +330,49 @@ function PlanningAction({
     endDefault = new Date(
       action.contract.programEndDate || +startDefault + 4 * 3600000,
     );
+  const startParts = getBusinessDateTimeParts(startDefault);
+  const endParts = getBusinessDateTimeParts(endDefault);
   const [resourceId, setResourceId] = useState(""),
-    [start, setStart] = useState(startDefault.toISOString().slice(0, 16)),
-    [end, setEnd] = useState(endDefault.toISOString().slice(0, 16)),
+    [startDate, setStartDate] = useState<Date | null>(startDefault),
+    [startTime, setStartTime] = useState(`${String(startParts.hour).padStart(2, "0")}:${String(startParts.minute).padStart(2, "0")}`),
+    [endDate, setEndDate] = useState<Date | null>(endDefault),
+    [endTime, setEndTime] = useState(`${String(endParts.hour).padStart(2, "0")}:${String(endParts.minute).padStart(2, "0")}`),
     [wage, setWage] = useState(0),
     [rentalTitle, setRentalTitle] = useState(""),
     [supplierName, setSupplierName] = useState(""),
     [cost, setCost] = useState(0),
     [saving, setSaving] = useState(false);
+  const atTime = (date: Date | null, clock: string) => {
+    if (!date) throw new Error("تاریخ شروع و پایان الزامی است.");
+    const parts = getBusinessDateTimeParts(date);
+    const [hour, minute] = clock.split(":").map(Number);
+    return tehranDateTimeToUtc({ year: parts.year, month: parts.month, day: parts.day, hour, minute });
+  };
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setSaving(true);
     try {
+      const startsAt = atTime(startDate, startTime).toISOString();
+      const endsAt = atTime(endDate, endTime).toISOString();
       const payload =
         action.type === "personnel"
           ? {
               personnelId: resourceId,
-              startsAt: new Date(start).toISOString(),
-              endsAt: new Date(end).toISOString(),
+              startsAt,
+              endsAt,
               wageAmount: wage,
             }
           : action.type === "equipment"
             ? {
                 equipmentId: resourceId,
-                startsAt: new Date(start).toISOString(),
-                endsAt: new Date(end).toISOString(),
+                startsAt,
+                endsAt,
               }
             : {
                 itemTitle: rentalTitle,
                 supplierName,
-                neededAt: new Date(start).toISOString(),
-                returnAt: new Date(end).toISOString(),
+                neededAt: startsAt,
+                returnAt: endsAt,
                 estimatedCost: cost,
               };
       const url = `/api/atelier/planning/${action.item.id}/${action.type === "rental" ? "rentals" : action.type}`;
@@ -337,7 +384,7 @@ function PlanningAction({
       if (!data.success) throw new Error(data.error || "ثبت انجام نشد.");
       onSaved();
     } catch (reason) {
-      window.alert(reason instanceof Error ? reason.message : "ثبت انجام نشد.");
+      atelierToast(reason instanceof Error ? reason.message : "ثبت انجام نشد.", "error");
     } finally {
       setSaving(false);
     }
@@ -432,28 +479,14 @@ function PlanningAction({
           </>
         )}
         <div className="grid gap-3 sm:grid-cols-2">
-          <label>
-            <span className="atelier-label">شروع *</span>
-            <input
-              required
-              type="datetime-local"
-              value={start}
-              onChange={(event) => setStart(event.target.value)}
-              className="atelier-input w-full py-2.5"
-              dir="ltr"
-            />
-          </label>
-          <label>
-            <span className="atelier-label">پایان *</span>
-            <input
-              required
-              type="datetime-local"
-              value={end}
-              onChange={(event) => setEnd(event.target.value)}
-              className="atelier-input w-full py-2.5"
-              dir="ltr"
-            />
-          </label>
+          <div className="grid grid-cols-[1fr_7rem] gap-2">
+            <JalaliDatePicker required label="تاریخ شروع *" value={startDate} onChange={(value) => setStartDate(value)} />
+            <label><span className="atelier-label">ساعت شروع *</span><input required type="time" value={startTime} onChange={(event) => setStartTime(event.target.value)} className="atelier-input w-full py-2.5" dir="ltr" /></label>
+          </div>
+          <div className="grid grid-cols-[1fr_7rem] gap-2">
+            <JalaliDatePicker required label="تاریخ پایان *" value={endDate} onChange={(value) => setEndDate(value)} />
+            <label><span className="atelier-label">ساعت پایان *</span><input required type="time" value={endTime} onChange={(event) => setEndTime(event.target.value)} className="atelier-input w-full py-2.5" dir="ltr" /></label>
+          </div>
         </div>
         <div className="flex justify-end gap-2 border-t border-zinc-900 pt-4">
           <button

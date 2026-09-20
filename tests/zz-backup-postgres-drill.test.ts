@@ -9,7 +9,7 @@ import { db, pool } from "../src/db";
 import { migrateDatabase } from "../src/db/migrate";
 import { requiredMigrationIds } from "../src/db/migrations";
 import { accounts, studioCalendarEvents, studioProductionPlans, studioProductionSteps } from "../src/db/schema";
-import { missingRequiredMigrations } from "../src/app/api/readiness/route";
+import { missingRequiredMigrations } from "../src/lib/readiness";
 import { createStudioCustomer } from "../src/services/studio/customerService";
 import { createStudioEquipment, reserveStudioEquipment } from "../src/services/studio/equipmentService";
 import { createStudioPersonnel, updatePersonnelSalaryStatus } from "../src/services/studio/personnelService";

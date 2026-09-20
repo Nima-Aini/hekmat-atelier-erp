@@ -15,6 +15,7 @@ import { AuditLogsView } from "@/components/views/AuditLogsView";
 import { BackupView } from "@/components/views/BackupView";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import { atelierPrompt, atelierToast } from "@/lib/atelierFeedback";
 
 const TABS = [
   "اطلاعات آتلیه",
@@ -85,11 +86,9 @@ export function FinalSettingsView() {
         body: JSON.stringify({ config }),
       }).then((r) => r.json());
       if (!data.success) throw new Error(data.error || "ذخیره انجام نشد.");
-      window.alert("تنظیمات ذخیره شد.");
+      atelierToast("تنظیمات ذخیره شد.", "success");
     } catch (reason) {
-      window.alert(
-        reason instanceof Error ? reason.message : "ذخیره انجام نشد.",
-      );
+      atelierToast(reason instanceof Error ? reason.message : "ذخیره انجام نشد.", "error");
     } finally {
       setSaving(false);
     }
@@ -281,7 +280,7 @@ function ProjectTypes({ types, reload }: { types: any[]; reload: () => void }) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "project_type", id, value }),
     }).then((r) => r.json());
-    if (!data.success) return window.alert(data.error || "ثبت انجام نشد.");
+    if (!data.success) return atelierToast(data.error || "ثبت انجام نشد.", "error");
     setTitle("");
     reload();
   };
@@ -335,8 +334,8 @@ function ProjectTypes({ types, reload }: { types: any[]; reload: () => void }) {
           </button>
           <button
             type="button"
-            onClick={() => {
-              const next = window.prompt("عنوان نوع پروژه", type.title);
+            onClick={async () => {
+              const next = await atelierPrompt("عنوان نوع پروژه", type.title);
               if (next?.trim())
                 void saveType(
                   {
@@ -463,7 +462,7 @@ function CatalogEditor({
       setForm({ ...empty, sortOrder: rows.length * 10 + 20 });
       reload();
     } catch (reason) {
-      window.alert(reason instanceof Error ? reason.message : "ذخیره انجام نشد.");
+      atelierToast(reason instanceof Error ? reason.message : "ذخیره انجام نشد.", "error");
     } finally {
       setSaving(false);
     }
@@ -484,7 +483,7 @@ function CatalogEditor({
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "catalog", id: row.id, value }),
     }).then((response) => response.json());
-    if (!data.success) window.alert(data.error || "تغییر وضعیت انجام نشد.");
+    if (!data.success) atelierToast(data.error || "تغییر وضعیت انجام نشد.", "error");
     else reload();
   };
   const reorder = async (index: number, direction: -1 | 1) => {
@@ -505,7 +504,7 @@ function CatalogEditor({
       fetch("/api/atelier/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "catalog", id: current.id, value: value(current, Number(target.sortOrder || 0)) }) }).then((response) => response.json()),
       fetch("/api/atelier/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "catalog", id: target.id, value: value(target, Number(current.sortOrder || 0)) }) }).then((response) => response.json()),
     ]);
-    if (responses.some((response) => !response.success)) window.alert("تغییر ترتیب انجام نشد.");
+    if (responses.some((response) => !response.success)) atelierToast("تغییر ترتیب انجام نشد.", "error");
     else reload();
   };
   return (
@@ -580,7 +579,7 @@ function DailyVisitTitleEditor({ rows, reload }: { rows: any[]; reload: () => vo
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "daily_visit_title", id, value }),
     }).then((response) => response.json());
-    if (!data.success) return window.alert(data.error || "ثبت انجام نشد.");
+    if (!data.success) return atelierToast(data.error || "ثبت انجام نشد.", "error");
     setTitle("");
     reload();
   };
@@ -599,7 +598,7 @@ function DailyVisitTitleEditor({ rows, reload }: { rows: any[]; reload: () => vo
           <span className="flex-1 text-sm font-bold">{row.title}</span>
           <button type="button" disabled={index === 0} onClick={() => void move(index, -1)} className="atelier-icon-button disabled:opacity-30" aria-label="انتقال به بالا"><ArrowUp className="h-4 w-4" /></button>
           <button type="button" disabled={index === rows.length - 1} onClick={() => void move(index, 1)} className="atelier-icon-button disabled:opacity-30" aria-label="انتقال به پایین"><ArrowDown className="h-4 w-4" /></button>
-          <button type="button" onClick={() => { const next = window.prompt("عنوان مراجعه روزانه", row.title); if (next?.trim()) void save({ title: next.trim(), active: row.active, sortOrder: row.sortOrder }, row.id); }} className="atelier-icon-button" aria-label="ویرایش"><Pencil className="h-4 w-4" /></button>
+          <button type="button" onClick={async () => { const next = await atelierPrompt("عنوان مراجعه روزانه", row.title); if (next?.trim()) void save({ title: next.trim(), active: row.active, sortOrder: row.sortOrder }, row.id); }} className="atelier-icon-button" aria-label="ویرایش"><Pencil className="h-4 w-4" /></button>
           <button type="button" onClick={() => void save({ title: row.title, active: !row.active, sortOrder: row.sortOrder }, row.id)} className={`rounded-lg px-3 py-1.5 text-xs ${row.active ? "bg-emerald-950 text-emerald-400" : "bg-zinc-900 text-zinc-500"}`}>{row.active ? "فعال" : "غیرفعال"}</button>
         </div>
       ))}

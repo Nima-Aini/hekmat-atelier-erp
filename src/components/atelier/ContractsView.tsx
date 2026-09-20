@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Banknote, CheckCircle2, Edit3, FilePlus2, PackagePlus, Printer, Trash2 } from "lucide-react";
+import { Banknote, CheckCircle2, Edit3, FilePlus2, PackagePlus, Printer, Search, Trash2 } from "lucide-react";
 import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { expandPackageToContractItems } from "@/lib/atelierCatalog";
@@ -12,6 +12,7 @@ import {
 } from "@/lib/dateUtils";
 import { AtelierModal } from "./AtelierModal";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
+import { atelierConfirm, atelierToast } from "@/lib/atelierFeedback";
 
 type ItemForm = {
   title: string;
@@ -51,6 +52,9 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
   const [editing, setEditing] = useState<any | "new" | null>(null);
   const [printing, setPrinting] = useState<any | null>(null);
   const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("date_desc");
+  const visibleContracts = useMemo(() => contracts.filter((contract) => `${contract.contractNumber} ${contract.customer.name} ${contract.customer.mobile} ${contract.projectType.title}`.includes(query.trim())).sort((a, b) => sort === "date_asc" ? +new Date(a.programDate) - +new Date(b.programDate) : sort === "amount_desc" ? Number(b.totalAmount) - Number(a.totalAmount) : +new Date(b.programDate) - +new Date(a.programDate)), [contracts, query, sort]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -90,18 +94,15 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
   }, []);
 
   const approve = async (contract: any) => {
-    if (
-      !window.confirm(
-        `قرارداد ${contract.contractNumber} تایید و سند مالی آن ثبت شود؟`,
-      )
-    )
+    if (!(await atelierConfirm(`قرارداد ${contract.contractNumber} تایید و سند مالی آن ثبت شود؟`)))
       return;
     const response = await fetch(
       `/api/atelier/contracts/${contract.id}/approve`,
       { method: "POST" },
     ).then((r) => r.json());
     if (!response.success)
-      return window.alert(response.error || "تأیید قرارداد انجام نشد.");
+      return atelierToast(response.error || "تأیید قرارداد انجام نشد.", "error");
+    atelierToast("قرارداد تأیید شد.", "success");
     await load();
   };
 
@@ -135,11 +136,15 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
             قرارداد های در انتظار
           </button>
         </div>
+        <div className="atelier-panel grid gap-3 p-3 sm:grid-cols-[1fr_auto]">
+          <label className="relative"><Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جستجو در قراردادها" className="atelier-input w-full py-2.5 pr-9" /></label>
+          <select value={sort} onChange={(event) => setSort(event.target.value)} className="atelier-input py-2.5"><option value="date_desc">جدیدترین برنامه</option><option value="date_asc">نزدیک‌ترین برنامه</option><option value="amount_desc">بیشترین مبلغ</option></select>
+        </div>
         {loading ? (
           <LoadingState />
         ) : error ? (
           <ErrorState text={error} retry={load} />
-        ) : !contracts.length ? (
+        ) : !visibleContracts.length ? (
           <EmptyState
             text={
               status === "pending"
@@ -149,7 +154,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
           />
         ) : (
           <div className="grid gap-3 lg:grid-cols-2">
-            {contracts.map((contract) => (
+            {visibleContracts.map((contract) => (
               <article
                 key={contract.id}
                 className="atelier-panel group p-4 transition hover:border-red-950 sm:p-5"
@@ -262,9 +267,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
                 setEditing(null);
                 await load();
               } catch (reason) {
-                window.alert(
-                  reason instanceof Error ? reason.message : "ذخیره انجام نشد.",
-                );
+                atelierToast(reason instanceof Error ? reason.message : "ذخیره انجام نشد.", "error");
               } finally {
                 setSaving(false);
               }
@@ -331,6 +334,7 @@ function ContractForm({
   const [paidAmount, setPaidAmount] = useState(
     Number(initial?.paidAmount || initial?.depositAmount || 0),
   );
+  const [discountAmount, setDiscountAmount] = useState(Number(initial?.discountAmount || 0));
   const [accountId, setAccountId] = useState(
     initial?.typeMetadata?.paymentDraft?.accountId || accounts[0]?.id || "",
   );
@@ -359,7 +363,7 @@ function ContractForm({
   const addCatalogItem = (catalogItem: any) => setItems((current) => [...current, { title: catalogItem.name, description: catalogItem.description || "", quantity: 1, unitPrice: Number(catalogItem.basePrice || catalogItem.defaultPrice || 0), notes: "" }]);
   const addPackage = (pack: any) => {
     const snapshots = expandPackageToContractItems(pack, activeItems);
-    if (!snapshots.length) return window.alert("این پکیج آیتم فعالی ندارد.");
+    if (!snapshots.length) return atelierToast("این پکیج آیتم فعالی ندارد.", "error");
     setItems((current) => [...current, ...snapshots]);
     setPackagePicker(false);
   };
@@ -372,6 +376,7 @@ function ContractForm({
       ),
     [items],
   );
+  const finalTotal = Math.max(0, total - discountAmount);
   const fields = Array.isArray(selectedType?.fieldSchema)
     ? selectedType.fieldSchema
     : [];
@@ -382,7 +387,7 @@ function ContractForm({
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!projectTypeId || !programDate)
-      return window.alert("نوع پروژه و تاریخ برنامه الزامی است.");
+      return atelierToast("نوع پروژه و تاریخ برنامه الزامی است.", "error");
     await onSave({
       projectTypeId,
       customerName,
@@ -396,6 +401,7 @@ function ContractForm({
       typeMetadata: metadata,
       items: approved ? undefined : items,
       paidAmount: approved ? undefined : paidAmount,
+      discountAmount: approved ? undefined : discountAmount,
       paymentAccountId: paidAmount > 0 ? accountId : undefined,
       notes,
       termsAndConditions: terms,
@@ -472,7 +478,7 @@ function ContractForm({
                 type="time"
                 dir="ltr"
               />
-              <Field label="محل اجرا" value={location} onChange={setLocation} />
+              <div><Field label="تالار / باغ / لوکیشن" value={location} onChange={setLocation} /><p className="mt-1 text-[10px] text-zinc-600">مثال: تالار محمد / باغ احسان</p></div>
             </section>
             {fields.length > 0 && (
               <section className="atelier-panel-red p-4">
@@ -570,13 +576,15 @@ function ContractForm({
                 </div>
               </section>
             )}
-            <section className="grid gap-4 sm:grid-cols-3">
+            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               <div>
-                <label className="atelier-label">مبلغ کل</label>
+                <label className="atelier-label">جمع آیتم‌ها</label>
                 <div className="rounded-xl border border-zinc-800 bg-black/40 px-3 py-3 text-sm font-black">
                   {formatMoney(total)}
                 </div>
               </div>
+              <div><label className="atelier-label">مبلغ تخفیف</label><MoneyInput disabled={approved} value={discountAmount} onChange={setDiscountAmount} unit="تومان" className="!rounded-xl !border-zinc-800 !bg-[#09090b]" /></div>
+              <div><label className="atelier-label">مبلغ نهایی قرارداد</label><div className="rounded-xl border border-zinc-800 bg-black/40 px-3 py-3 text-sm font-black">{formatMoney(finalTotal)}</div></div>
               <div>
                 <label className="atelier-label">مبلغ پرداخت شده</label>
                 <MoneyInput
@@ -590,7 +598,7 @@ function ContractForm({
               <div>
                 <label className="atelier-label">مبلغ مانده</label>
                 <div className="rounded-xl border border-red-950 bg-red-950/15 px-3 py-3 text-sm font-black text-red-400">
-                  {formatMoney(Math.max(0, total - paidAmount))}
+                  {formatMoney(Math.max(0, finalTotal - paidAmount))}
                   <small className="mt-1 block font-normal text-zinc-600">
                     مقدار قطعی در سرور محاسبه می‌شود.
                   </small>
@@ -621,8 +629,9 @@ function ContractForm({
                 <textarea
                   value={notes}
                   onChange={(event) => setNotes(event.target.value)}
-                  className="atelier-input min-h-24 w-full py-3"
+                  className="atelier-input min-h-40 w-full py-3"
                 />
+                <p className="mt-1 text-[10px] text-zinc-600">مثال: مراسم خانه بعد از تالار</p>
               </div>
               <div>
                 <label className="atelier-label">شرایط قرارداد</label>
@@ -783,9 +792,11 @@ function PrintPreview({
             ))}
           </tbody>
         </table>
-        <section className="mt-6 grid grid-cols-3 gap-3 text-sm">
+        <section className="mt-6 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
+          <p><b>جمع آیتم‌ها:</b><br />{formatMoney(contract.itemsTotal)}</p>
+          <p><b>مبلغ تخفیف:</b><br />{formatMoney(contract.discountAmount)}</p>
           <p>
-            <b>مبلغ کل:</b>
+            <b>مبلغ نهایی قرارداد:</b>
             <br />
             {formatMoney(contract.totalAmount)}
           </p>

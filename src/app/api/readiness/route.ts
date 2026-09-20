@@ -5,11 +5,7 @@ import { sql } from "drizzle-orm";
 import { getMaintenanceState } from "@/services/maintenance";
 import { getRuntimeInfo } from "@/services/runtimeInfo";
 import { getBackupStorage } from "@/services/backupStorage";
-
-export function missingRequiredMigrations(appliedIds: Iterable<string>) {
-  const applied = new Set(appliedIds);
-  return requiredMigrationIds.filter((id) => !applied.has(id));
-}
+import { missingRequiredMigrations } from "@/lib/readiness";
 
 export async function GET() {
   const runtime = getRuntimeInfo();

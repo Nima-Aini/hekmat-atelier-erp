@@ -1,4 +1,10 @@
 import { toBusinessGregorianDateString, toJalaliDate } from "@/lib/dateUtils";
+import { db } from "@/db";
+import { studioNotifications } from "@/db/schema";
+import { desc, eq } from "drizzle-orm";
+import { ApiError, assertUuid } from "@/lib/apiError";
+import type { EmployeeContext } from "@/services/access";
+import { logAuditEvent } from "@/services/audit";
 import {
   getAtelierConfig,
   getPlanning,
@@ -193,6 +199,7 @@ export async function getFinalCalendar(allowedCoreProjectIds: string[] | null) {
 
 export async function getFinalNotifications(
   allowedCoreProjectIds: string[] | null,
+  includeArchived = false,
 ) {
   const [contracts, reservations, visits, planning, config] = await Promise.all([
     listContracts(undefined, allowedCoreProjectIds),
@@ -274,16 +281,6 @@ export async function getFinalNotifications(
         reservation.id,
         reservation.reservedAt,
       );
-    if (numeric(reservation.remainingAmount) > 0)
-      push(
-        `reservation-due:${reservation.id}`,
-        "normal",
-        "مانده رزرو",
-        `رزرو ${reservation.customerName} دارای مانده پرداخت است.`,
-        "reservations",
-        reservation.id,
-        reservation.reservedAt,
-      );
   }
   for (const visit of visits) {
     const age = (now - +new Date(visit.visitDate)) / 86400000;
@@ -335,11 +332,60 @@ export async function getFinalNotifications(
       }
     }
   const order = { critical: 0, warning: 1, normal: 2 } as const;
-  return result
+  const sorted = result
     .sort(
       (a, b) =>
         order[a.priority as keyof typeof order] -
         order[b.priority as keyof typeof order],
     )
     .slice(0, 100);
+  const existing = await db.select().from(studioNotifications).orderBy(desc(studioNotifications.createdAt));
+  const currentKeys = new Set(sorted.map((item) => String(item.id)));
+  for (const row of existing.filter((item) => item.conditionKey && !item.resolvedAt && !currentKeys.has(item.conditionKey))) {
+    await db.update(studioNotifications).set({ resolvedAt: new Date(), updatedAt: new Date() }).where(eq(studioNotifications.id, row.id));
+  }
+  const active: Array<Record<string, unknown>> = [];
+  for (const item of sorted) {
+    const conditionKey = String(item.id);
+    const rows = existing.filter((row) => row.conditionKey === conditionKey);
+    const open = rows.find((row) => !row.archivedAt && !row.resolvedAt);
+    const archivedCurrent = rows.find((row) => row.archivedAt && !row.resolvedAt);
+    if (archivedCurrent && !open) continue;
+    let record = open;
+    if (!record) {
+      const [created] = await db.insert(studioNotifications).values({
+        conditionKey,
+        recipientType: "management",
+        recipientName: "مدیریت آتلیه",
+        recipientMobile: "system",
+        notificationType: "operational_alert",
+        messageText: String(item.message),
+        scheduledFor: item.date ? new Date(String(item.date)) : new Date(),
+        status: "pending",
+        payload: item,
+      }).onConflictDoNothing().returning();
+      record = created || (await db.select().from(studioNotifications).where(eq(studioNotifications.conditionKey, conditionKey)).orderBy(desc(studioNotifications.createdAt)).limit(1))[0];
+    }
+    if (record) active.push({ ...item, id: record.id, conditionKey, archivedAt: record.archivedAt });
+  }
+  if (!includeArchived) return active;
+  return existing.filter((row) => row.archivedAt).map((row) => ({
+    ...((row.payload || {}) as Record<string, unknown>),
+    id: row.id,
+    conditionKey: row.conditionKey,
+    message: row.messageText,
+    date: row.scheduledFor,
+    archivedAt: row.archivedAt,
+    archivedById: row.archivedById,
+    resolvedAt: row.resolvedAt,
+  }));
+}
+
+export async function setNotificationArchived(actor: EmployeeContext, id: string, archived: boolean) {
+  assertUuid(id);
+  const [current] = await db.select().from(studioNotifications).where(eq(studioNotifications.id, id)).limit(1);
+  if (!current) throw new ApiError(404, "اعلان یافت نشد.");
+  const [row] = await db.update(studioNotifications).set({ archivedAt: archived ? new Date() : null, archivedById: archived ? actor.employeeId : null, updatedAt: new Date() }).where(eq(studioNotifications.id, id)).returning();
+  await logAuditEvent(archived ? "ATELIER_NOTIFICATION_ARCHIVED" : "ATELIER_NOTIFICATION_RESTORED", "studio_notification", id, { conditionKey: current.conditionKey }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName });
+  return row;
 }

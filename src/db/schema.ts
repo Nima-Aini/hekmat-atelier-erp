@@ -949,6 +949,7 @@ export const studioContracts = pgTable("studio_contracts", {
   invoiceId: uuid("invoice_id").references(() => invoices.id),
   idempotencyKey: text("idempotency_key"),
   financialStatus: text("financial_status").default("draft").notNull(),
+  discountAmount: numeric("discount_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   totalAmount: numeric("total_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   depositAmount: numeric("deposit_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   installmentsCount: integer("installments_count").default(1).notNull(),
@@ -1271,9 +1272,14 @@ export const studioNotifications = pgTable("studio_notifications", {
   sentAt: timestamp("sent_at"),
   status: text("status").default("pending").notNull(), // pending, sent, failed
   providerResponse: text("provider_response"),
+  conditionKey: text("condition_key"),
+  payload: jsonb("payload").default({}),
+  archivedAt: timestamp("archived_at"),
+  archivedById: uuid("archived_by_id").references(() => employees.id, { onDelete: "set null" }),
+  resolvedAt: timestamp("resolved_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [index("idx_studio_notifications_condition").on(t.conditionKey, t.archivedAt, t.resolvedAt)]);
 
 // 16.14. Studio Project Timelines & Change Logs (ثبت تمام رویدادها و تغییرات)
 export const studioProjectTimelines = pgTable("studio_project_timelines", {

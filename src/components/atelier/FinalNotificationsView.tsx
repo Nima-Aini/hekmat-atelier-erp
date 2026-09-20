@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AlertTriangle, Bell, ChevronLeft, Siren } from "lucide-react";
+import { AlertTriangle, Archive, Bell, ChevronLeft, RotateCcw, Siren } from "lucide-react";
 import { toJalaliDate } from "@/lib/dateUtils";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
+import { atelierToast } from "@/lib/atelierFeedback";
 
 export function FinalNotificationsView({
   onNavigate,
@@ -12,10 +13,11 @@ export function FinalNotificationsView({
 }) {
   const [items, setItems] = useState<any[]>([]),
     [loading, setLoading] = useState(true),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [archived, setArchived] = useState(false);
   const load = () => {
     setLoading(true);
-    fetch("/api/atelier/notifications")
+    fetch(`/api/atelier/notifications${archived ? "?archived=true" : ""}`)
       .then((r) => r.json())
       .then((data) => {
         if (!data.success)
@@ -26,7 +28,8 @@ export function FinalNotificationsView({
       .catch((reason) => setError(reason.message))
       .finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(load, [archived]);
+  const toggleArchive = async (item: any) => { const data = await fetch("/api/atelier/notifications", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: item.id, archived: !archived }) }).then((response) => response.json()); if (!data.success) return atelierToast(data.error || "تغییر آرشیو انجام نشد.", "error"); atelierToast(archived ? "اعلان بازگردانی شد." : "اعلان آرشیو شد.", "success"); load(); };
   return (
     <div className="space-y-5">
       <div>
@@ -37,6 +40,7 @@ export function FinalNotificationsView({
           نمی‌شوند.
         </p>
       </div>
+      <div className="inline-flex rounded-2xl border border-zinc-800 bg-zinc-950 p-1"><button onClick={() => setArchived(false)} className={`rounded-xl px-4 py-2 text-xs font-bold ${!archived ? "bg-red-700 text-white" : "text-zinc-500"}`}>اعلان‌های فعال</button><button onClick={() => setArchived(true)} className={`rounded-xl px-4 py-2 text-xs font-bold ${archived ? "bg-red-700 text-white" : "text-zinc-500"}`}>اعلان های آرشیو شده</button></div>
       {loading ? (
         <LoadingState />
       ) : error ? (
@@ -49,20 +53,8 @@ export function FinalNotificationsView({
             const critical = item.priority === "critical",
               warning = item.priority === "warning";
             return (
-              <button
+              <div
                 key={item.id}
-                onClick={() => {
-                  onNavigate(item.tab);
-                  setTimeout(
-                    () =>
-                      window.dispatchEvent(
-                        new CustomEvent("akma:navigate-item", {
-                          detail: { id: item.entityId },
-                        }),
-                      ),
-                    50,
-                  );
-                }}
                 className={`group flex w-full items-center gap-3 rounded-2xl border p-4 text-right transition ${critical ? "border-red-600/80 bg-red-950/35 shadow-[0_0_30px_rgba(239,35,60,.14)]" : warning ? "border-orange-900/70 bg-orange-950/15" : "border-zinc-800 bg-[#0d0d0f]"}`}
               >
                 <span
@@ -91,8 +83,9 @@ export function FinalNotificationsView({
                     </span>
                   )}
                 </span>
-                <ChevronLeft className="h-4 w-4 text-zinc-700 transition group-hover:text-red-400" />
-              </button>
+                <button onClick={() => { if (!archived) { if (item.tab === "planning") sessionStorage.setItem("akma:planning-target", item.entityId); onNavigate(item.tab); setTimeout(() => window.dispatchEvent(new CustomEvent("akma:navigate-item", { detail: { id: item.entityId } })), 50); } }} className="atelier-icon-button" aria-label="رفتن به رکورد"><ChevronLeft className="h-4 w-4" /></button>
+                <button onClick={() => void toggleArchive(item)} className="atelier-button-secondary text-xs">{archived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}{archived ? "بازگردانی" : "آرشیو هشدار"}</button>
+              </div>
             );
           })}
         </div>

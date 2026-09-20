@@ -3,6 +3,7 @@ import { apiError } from "@/lib/apiError";
 import { requirePermission } from "@/services/access";
 import {
   completeReservation,
+  convertReservationToDailyVisit,
   deleteReservation,
   saveReservation,
 } from "@/services/studio/finalWorkflow";
@@ -16,9 +17,10 @@ export async function PUT(
     const body = await req.json();
     return NextResponse.json({
       success: true,
-      reservation:
-        body.action === "complete"
-          ? await completeReservation(actor, id)
+      reservation: body.action === "complete_delete"
+        ? await completeReservation(actor, id)
+        : body.action === "convert_to_daily_visit"
+          ? await convertReservationToDailyVisit(actor, id, body.dailyVisit || {})
           : await saveReservation(actor, body, id),
     });
   } catch (error) {

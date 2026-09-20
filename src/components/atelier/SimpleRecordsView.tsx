@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Edit3, Plus, Search, Trash2 } from "lucide-react";
+import { Banknote, CheckCircle2, Edit3, Eye, Plus, Search, Trash2 } from "lucide-react";
 import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@/lib/dateUtils";
 import { AtelierModal } from "./AtelierModal";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
+import { atelierConfirm, atelierToast } from "@/lib/atelierFeedback";
 
 const money = (value: unknown) =>
   `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
@@ -30,6 +31,9 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
     [payment, setPayment] = useState("all"),
     [filterDate, setFilterDate] = useState<Date | null>(null),
     [editing, setEditing] = useState<any | "new" | null>(null),
+    [converting, setConverting] = useState<any | null>(null),
+    [viewing, setViewing] = useState<any | null>(null),
+    [paying, setPaying] = useState<any | null>(null),
     [saving, setSaving] = useState(false);
   const load = () => {
     setLoading(true);
@@ -83,24 +87,23 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
     [records, query, payment, filterDate, reservation],
   );
   const remove = async (row: any) => {
-    if (
-      !window.confirm(
-        `${reservation ? "رزرو" : "مراجعه"} «${row.title}» حذف شود؟`,
-      )
-    )
+    if (!(await atelierConfirm(`${reservation ? "رزرو" : "مراجعه"} «${row.title}» برای همیشه حذف شود؟`)))
       return;
     const data = await fetch(`/api/atelier/${kind}/${row.id}`, {
       method: "DELETE",
     }).then((r) => r.json());
-    if (!data.success) return window.alert(data.error || "حذف انجام نشد.");
+    if (!data.success) return atelierToast(data.error || "حذف انجام نشد.", "error");
+    atelierToast("رکورد حذف شد.", "success");
     load();
   };
   const complete = async (row: any) => {
+    if (!(await atelierConfirm(`رزرو «${row.title}» تکمیل و برای همیشه حذف شود؟`, "تکمیل شده و حذف"))) return;
     const data = await fetch(`/api/atelier/reservations/${row.id}`, {
-      method: "POST",
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "complete_delete" }),
     }).then((r) => r.json());
     if (!data.success)
-      return window.alert(data.error || "تکمیل رزرو انجام نشد.");
+      return atelierToast(data.error || "تکمیل رزرو انجام نشد.", "error");
+    atelierToast("رزرو تکمیل و حذف شد.", "success");
     load();
   };
 
@@ -135,7 +138,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
             className="atelier-input w-full py-2.5 pr-9"
           />
         </label>
-        <select
+        {!reservation && <select
           value={payment}
           onChange={(event) => setPayment(event.target.value)}
           className="atelier-input min-w-40 py-2.5"
@@ -143,7 +146,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
           <option value="all">همه وضعیت‌ها</option>
           <option value="paid">تسویه شده</option>
           <option value="due">دارای مانده</option>
-        </select>
+        </select>}
         <JalaliDatePicker
           value={filterDate}
           onChange={setFilterDate}
@@ -181,7 +184,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
                   showTime: reservation,
                 })}
               </p>
-              <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-black/30 p-3 text-[10px]">
+              {!reservation && <div className="mt-3 grid grid-cols-3 gap-2 rounded-xl bg-black/30 p-3 text-[10px]">
                 <span>
                   قیمت<b className="block text-zinc-200">{money(row.price)}</b>
                 </span>
@@ -197,7 +200,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
                     {money(row.remainingAmount)}
                   </b>
                 </span>
-              </div>
+              </div>}
               {!reservation && (
                 <div className="mt-3 rounded-xl border border-zinc-900 bg-black/20 p-3 text-xs">
                   <div className="flex justify-between text-zinc-500"><span>هزینه پرسنل</span><b className="text-orange-300">{money(row.personnelCost)}</b></div>
@@ -206,6 +209,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
                 </div>
               )}
               <div className="mt-4 flex gap-2">
+                <button onClick={() => setViewing(row)} className="atelier-button-secondary flex-1"><Eye className="h-4 w-4" />نمایش</button>
                 <button
                   onClick={() => setEditing(row)}
                   className="atelier-button-secondary flex-1"
@@ -213,20 +217,14 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
                   <Edit3 className="h-4 w-4" />
                   ویرایش
                 </button>
-                {reservation && row.status !== "completed" && (
-                  <button
-                    onClick={() => void complete(row)}
-                    className="atelier-button flex-1"
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                    تکمیل شده
-                  </button>
-                )}
+                {!reservation && Number(row.remainingAmount) > 0 && <button onClick={() => setPaying(row)} className="atelier-button flex-1"><Banknote className="h-4 w-4" />ثبت پرداخت</button>}
+                {reservation && <button onClick={() => void complete(row)} className="atelier-button flex-1"><CheckCircle2 className="h-4 w-4" />تکمیل شده و حذف</button>}
+                {reservation && <button onClick={() => setConverting(row)} className="atelier-button-secondary flex-1">تکمیل شده و انتقال به مراجعات روزانه</button>}
                 <button
                   onClick={() => void remove(row)}
-                  className="atelier-icon-button text-red-400"
+                  className={reservation ? "atelier-button-secondary flex-1 text-red-400" : "atelier-icon-button text-red-400"}
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <Trash2 className="h-4 w-4" />{reservation && "لغو و حذف رزرو"}
                 </button>
               </div>
             </article>
@@ -259,15 +257,16 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
               setEditing(null);
               load();
             } catch (reason) {
-              window.alert(
-                reason instanceof Error ? reason.message : "ذخیره انجام نشد.",
-              );
+              atelierToast(reason instanceof Error ? reason.message : "ذخیره انجام نشد.", "error");
             } finally {
               setSaving(false);
             }
           }}
         />
       )}
+      {converting && <RecordForm reservation={false} initial={{ ...converting, visitDate: converting.reservedAt, price: 0, paidAmount: 0, personnelAssignments: [] }} accounts={accounts} personnel={personnel} dailyVisitTitles={dailyVisitTitles} saving={saving} onClose={() => setConverting(null)} onSave={async (dailyVisit) => { setSaving(true); try { const data = await fetch(`/api/atelier/reservations/${converting.id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "convert_to_daily_visit", dailyVisit }) }).then((response) => response.json()); if (!data.success) throw new Error(data.error || "انتقال انجام نشد."); setConverting(null); atelierToast("رزرو به مراجعه روزانه منتقل و سپس حذف شد.", "success"); load(); } catch (reason) { atelierToast(reason instanceof Error ? reason.message : "انتقال انجام نشد.", "error"); } finally { setSaving(false); } }} />}
+      {viewing && <AtelierModal title={reservation ? "جزئیات رزرو" : "جزئیات مراجعه روزانه"} onClose={() => setViewing(null)} wide><div className="space-y-5"><div className="grid gap-3 sm:grid-cols-2"><p><span className="text-zinc-500">عنوان:</span> {viewing.title}</p><p><span className="text-zinc-500">مشتری:</span> {viewing.customerName} — {viewing.mobile}</p><p><span className="text-zinc-500">تاریخ:</span> {toJalaliDate(reservation ? viewing.reservedAt : viewing.visitDate, { showTime: reservation })}</p><p><span className="text-zinc-500">توضیحات:</span> {viewing.notes || "—"}</p></div>{!reservation && <><div className="grid gap-3 rounded-2xl border border-red-900 bg-red-950/20 p-5 text-base sm:grid-cols-2 lg:grid-cols-5"><b>کل: {money(viewing.price)}</b><b className="text-emerald-400">دریافت: {money(viewing.paidAmount)}</b><b className="text-red-400">مانده: {money(viewing.remainingAmount)}</b><b className="text-orange-300">هزینه پرسنل: {money(viewing.personnelCost)}</b><b>سود: {money(viewing.preliminaryProfit)}</b></div><section><h3 className="font-black">پرسنل</h3>{viewing.personnelAssignments?.map((row: any) => <p key={row.id} className="mt-2 text-sm">{row.personnelNameSnapshot} — {row.workTitle} — {money(row.wageSnapshot)}</p>) || null}</section><section><h3 className="font-black">تاریخچه پرداخت‌ها</h3>{viewing.paymentHistory?.map((row: any) => <p key={row.id} className="mt-2 rounded-xl border border-zinc-800 p-3 text-sm">{toJalaliDate(row.paymentDate)} — {money(row.amount)} — {row.accountName} — {row.notes || "بدون توضیح"}</p>)}{!viewing.paymentHistory?.length && <p className="mt-2 text-sm text-zinc-600">پرداختی ثبت نشده است.</p>}</section></>}</div></AtelierModal>}
+      {paying && <DailyVisitPaymentForm visit={paying} accounts={accounts} onClose={() => setPaying(null)} onSaved={() => { setPaying(null); load(); }} />}
     </div>
   );
 }
@@ -330,12 +329,12 @@ function RecordForm({
     await onSave({
       title,
       date: final.toISOString(),
-      price,
+      price: reservation ? undefined : price,
       customerName,
       mobile,
-      paidAmount,
-      accountId: paidAmount > 0 ? accountId : undefined,
-      paymentMethod: "card_transfer",
+      paidAmount: reservation ? undefined : paidAmount,
+      accountId: !reservation && paidAmount > 0 ? accountId : undefined,
+      paymentMethod: reservation ? undefined : "card_transfer",
       notes,
       personnelAssignments: reservation ? undefined : assignments,
     });
@@ -386,7 +385,7 @@ function RecordForm({
             required
             dir="ltr"
           />
-          <div>
+          {!reservation && <div>
             <label className="atelier-label">قیمت *</label>
             <MoneyInput
               value={price}
@@ -394,8 +393,8 @@ function RecordForm({
               unit="تومان"
               className="!rounded-xl !border-zinc-800 !bg-black"
             />
-          </div>
-          <div>
+          </div>}
+          {!reservation && <div>
             <label className="atelier-label">مبلغ پرداخت شده *</label>
             <MoneyInput
               value={paidAmount}
@@ -404,8 +403,8 @@ function RecordForm({
               unit="تومان"
               className="!rounded-xl !border-zinc-800 !bg-black"
             />
-          </div>
-          {paidAmount > 0 && !initial && (
+          </div>}
+          {!reservation && paidAmount > 0 && !initial && (
             <label>
               <span className="atelier-label">حساب مقصد *</span>
               <select required value={accountId} onChange={(event) => setAccountId(event.target.value)} className="atelier-input w-full py-2.5">
@@ -414,13 +413,13 @@ function RecordForm({
               </select>
             </label>
           )}
-          <div className="rounded-xl border border-red-950 bg-red-950/10 p-3 text-xs">
+          {!reservation && <div className="rounded-xl border border-red-950 bg-red-950/10 p-3 text-xs">
             <span className="text-zinc-500">مبلغ مانده</span>
             <b className="mt-1 block text-red-400">
               {money(Math.max(0, price - paidAmount))}
             </b>
             <small className="text-zinc-600">محاسبه قطعی در سرور</small>
-          </div>
+          </div>}
         </div>
         {!reservation && (
           <fieldset className="rounded-2xl border border-zinc-800 bg-black/20 p-4">
@@ -464,6 +463,16 @@ function RecordForm({
       </form>
     </AtelierModal>
   );
+}
+
+function DailyVisitPaymentForm({ visit, accounts, onClose, onSaved }: { visit: any; accounts: any[]; onClose: () => void; onSaved: () => void }) {
+  const [amount, setAmount] = useState(Number(visit.remainingAmount || 0));
+  const [date, setDate] = useState<Date | null>(new Date());
+  const [accountId, setAccountId] = useState(accounts[0]?.id || "");
+  const [method, setMethod] = useState("card_transfer");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  return <AtelierModal title="ثبت پرداخت مراجعه روزانه" onClose={onClose}><form className="space-y-4" onSubmit={async (event) => { event.preventDefault(); if (!date) return; setSaving(true); try { const data = await fetch(`/api/atelier/daily-visits/${visit.id}/payments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ amount, paidAt: date.toISOString(), accountId, paymentMethod: method, notes, idempotencyKey: crypto.randomUUID() }) }).then((response) => response.json()); if (!data.success) throw new Error(data.error || "ثبت پرداخت انجام نشد."); atelierToast("پرداخت مراجعه ثبت شد.", "success"); onSaved(); } catch (reason) { atelierToast(reason instanceof Error ? reason.message : "ثبت پرداخت انجام نشد.", "error"); } finally { setSaving(false); } }}><div><label className="atelier-label">مبلغ *</label><MoneyInput value={amount} onChange={setAmount} unit="تومان" className="!rounded-xl !border-zinc-800 !bg-black" /></div><JalaliDatePicker label="تاریخ پرداخت" value={date} onChange={setDate} required /><label><span className="atelier-label">حساب *</span><select required value={accountId} onChange={(event) => setAccountId(event.target.value)} className="atelier-input w-full py-2.5"><option value="">انتخاب حساب</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><label><span className="atelier-label">روش پرداخت *</span><select value={method} onChange={(event) => setMethod(event.target.value)} className="atelier-input w-full py-2.5"><option value="cash">نقدی</option><option value="card_transfer">کارت به کارت</option><option value="pos">کارت‌خوان</option><option value="bank_transfer">انتقال بانکی</option></select></label><label><span className="atelier-label">یادداشت</span><textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="atelier-input min-h-24 w-full py-3" /></label><div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="atelier-button-secondary">انصراف</button><button disabled={saving} className="atelier-button">{saving ? "در حال ثبت…" : "ثبت پرداخت"}</button></div></form></AtelierModal>;
 }
 
 function Input({

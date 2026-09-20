@@ -5,6 +5,7 @@ import { Edit3, Search, UsersRound } from "lucide-react";
 import { toJalaliDate } from "@/lib/dateUtils";
 import { AtelierModal } from "./AtelierModal";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
+import { atelierToast } from "@/lib/atelierFeedback";
 
 const money = (value: unknown) =>
   value === null || value === undefined ? "—" : `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
@@ -199,9 +200,7 @@ function CustomerEdit({
               throw new Error(data.error || "ویرایش انجام نشد.");
             onSaved();
           } catch (reason) {
-            window.alert(
-              reason instanceof Error ? reason.message : "ویرایش انجام نشد.",
-            );
+            atelierToast(reason instanceof Error ? reason.message : "ویرایش انجام نشد.", "error");
           } finally {
             setSaving(false);
           }

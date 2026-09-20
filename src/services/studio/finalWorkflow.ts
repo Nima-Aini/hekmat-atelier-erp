@@ -104,6 +104,7 @@ type ContractInput = {
   termsAndConditions?: unknown;
   items?: unknown;
   paidAmount?: unknown;
+  discountAmount?: unknown;
   paymentAccountId?: unknown;
   paymentMethod?: unknown;
 };
@@ -285,10 +286,14 @@ export async function createPendingContract(
   if (programEndDate <= programDate)
     throw new ApiError(400, "زمان پایان برنامه باید بعد از شروع باشد.");
   const items = parseItems(value.items);
-  const total = items.reduce(
+  const itemsTotal = items.reduce(
     (sum, item) => sum + item.quantity * item.unitPrice,
     0,
   );
+  const discountAmount = money(value.discountAmount, "مبلغ تخفیف");
+  if (discountAmount > itemsTotal)
+    throw new ApiError(400, "مبلغ تخفیف نمی‌تواند بیشتر از جمع آیتم‌ها باشد.");
+  const total = itemsTotal - discountAmount;
   const paidAmount = money(value.paidAmount, "مبلغ پرداخت‌شده");
   if (paidAmount > total)
     throw new ApiError(
@@ -410,6 +415,7 @@ export async function createPendingContract(
               : null,
         },
         totalAmount: total.toFixed(2),
+        discountAmount: discountAmount.toFixed(2),
         depositAmount: paidAmount.toFixed(2),
         contractDate,
         deliveryCommitmentDate: programDate,
@@ -522,6 +528,7 @@ export async function approveContract(
         requestHash: requestHash({
           contractId: contract.id,
           total: contract.totalAmount,
+          discountAmount: contract.discountAmount,
           items: items.map((item) => [
             item.title,
             item.quantity,
@@ -541,6 +548,7 @@ export async function approveContract(
           unitPrice: Number(item.unitPrice),
           unitCost: 0,
         })),
+        invoiceDiscount: Number(contract.discountAmount),
         initialPayment:
           Number(contract.depositAmount) > 0
             ? {
@@ -698,6 +706,7 @@ export async function getContractById(
       title: row.projectTypeTitle || row.project.eventType,
     },
     items,
+    itemsTotal: items.reduce((sum, item) => sum + Number(item.quantity) * Number(item.unitPrice), 0),
     paidAmount: Number(row.invoicePaid ?? row.contract.depositAmount),
     remainingAmount: Number(
       row.invoiceBalance ??
@@ -778,7 +787,7 @@ export async function updateContract(
     if (!current) throw new ApiError(404, "قرارداد یافت نشد.");
     const approved =
       current.status === CONTRACT_APPROVED || Boolean(current.invoiceId);
-    if (approved && value.items !== undefined)
+    if (approved && (value.items !== undefined || value.discountAmount !== undefined))
       throw new ApiError(
         409,
         "آیتم مالی قرارداد تأییدشده از این مسیر قابل تغییر نیست.",
@@ -832,10 +841,13 @@ export async function updateContract(
     }
     if (!approved && value.items !== undefined) {
       const items = parseItems(value.items),
-        total = items.reduce(
+        itemsTotal = items.reduce(
           (sum, item) => sum + item.quantity * item.unitPrice,
           0,
         );
+      const discountAmount = value.discountAmount === undefined ? Number(current.discountAmount) : money(value.discountAmount, "مبلغ تخفیف");
+      if (discountAmount > itemsTotal) throw new ApiError(400, "مبلغ تخفیف نمی‌تواند بیشتر از جمع آیتم‌ها باشد.");
+      const total = itemsTotal - discountAmount;
       const paid =
         value.paidAmount === undefined
           ? Number(current.depositAmount)
@@ -843,6 +855,7 @@ export async function updateContract(
       if (paid > total)
         throw new ApiError(400, "مبلغ پرداخت‌شده بیشتر از مبلغ قرارداد است.");
       patch.totalAmount = total.toFixed(2);
+      patch.discountAmount = discountAmount.toFixed(2);
       patch.depositAmount = paid.toFixed(2);
       await tx
         .delete(studioContractItems)
@@ -949,7 +962,9 @@ export async function listDailyVisits(
     .orderBy(desc(studioDailyVisits.visitDate))
     .limit(300);
   const visitIds = rows.map(({ record }) => record.id);
+  const invoiceIds = rows.map(({ record }) => record.invoiceId).filter((id): id is string => Boolean(id));
   const assignments = visitIds.length ? await db.select().from(studioDailyVisitPersonnel).where(and(inArray(studioDailyVisitPersonnel.dailyVisitId, visitIds), eq(studioDailyVisitPersonnel.status, "active"))).orderBy(asc(studioDailyVisitPersonnel.createdAt)) : [];
+  const paymentHistory = invoiceIds.length ? await db.select({ payment: payments, accountName: accounts.name }).from(payments).innerJoin(accounts, eq(accounts.id, payments.accountId)).where(and(inArray(payments.invoiceId, invoiceIds), eq(payments.status, "completed"))).orderBy(asc(payments.paymentDate)) : [];
   return rows.map(({ record: row, invoicePaid, invoiceBalance }) => ({
     ...row,
     paidAmount: Number(invoicePaid ?? row.paidAmount),
@@ -957,6 +972,7 @@ export async function listDailyVisits(
     personnelAssignments: assignments.filter((assignment) => assignment.dailyVisitId === row.id),
     personnelCost: assignments.filter((assignment) => assignment.dailyVisitId === row.id).reduce((sum, assignment) => sum + Number(assignment.wageSnapshot), 0),
     preliminaryProfit: Number(row.price) - assignments.filter((assignment) => assignment.dailyVisitId === row.id).reduce((sum, assignment) => sum + Number(assignment.wageSnapshot), 0),
+    paymentHistory: paymentHistory.filter(({ payment }) => payment.invoiceId === row.invoiceId).map(({ payment, accountName }) => ({ ...payment, accountName, amount: Number(payment.amount) })),
   }));
 }
 
@@ -1138,39 +1154,29 @@ export async function deleteDailyVisit(actor: EmployeeContext, id: string) {
 }
 
 export async function listReservations() {
-  return (
-    await db
-      .select({ record: studioReservations, invoicePaid: invoices.paidAmount, invoiceBalance: invoices.balanceDue })
-      .from(studioReservations)
-      .leftJoin(invoices, eq(invoices.id, studioReservations.invoiceId))
-      .orderBy(asc(studioReservations.reservedAt))
-      .limit(300)
-  ).map(({ record: row, invoicePaid, invoiceBalance }) => ({
-    ...row,
-    paidAmount: Number(invoicePaid ?? row.paidAmount),
-    remainingAmount: Number(invoiceBalance ?? (Number(row.price) - Number(row.paidAmount))),
-  }));
+  return db.select().from(studioReservations).orderBy(asc(studioReservations.reservedAt)).limit(300);
 }
 export async function saveReservation(
   actor: EmployeeContext,
   value: SimpleMoneyInput & { status?: unknown },
   id?: string,
 ) {
-  const vals = simpleValues(
-    value,
-    "reservedAt",
-  ) as typeof studioReservations.$inferInsert;
+  const vals = {
+    title: cleanText(value.title, "عنوان", true, 180)!,
+    reservedAt: validDate(value.date, "تاریخ رزرو"),
+    customerName: cleanText(value.customerName, "اسم مشتری", true, 180)!,
+    mobile: cleanPhone(value.mobile),
+    notes: cleanText(value.notes, "توضیحات"),
+  };
   return db.transaction(async (tx) => {
     let row;
     if (id) {
       assertUuid(id);
       const [existing] = await tx.select().from(studioReservations).where(eq(studioReservations.id, id)).for("update").limit(1);
       if (!existing || existing.status === "cancelled") throw new ApiError(404, "رزرو یافت نشد.");
-      if (!existing.invoiceId) throw new ApiError(409, "اتصال مالی رزرو کامل نیست.");
-      const financial = await updateSimpleInvoice(tx, existing.invoiceId, vals as ReturnType<typeof simpleValues>);
       [row] = await tx
         .update(studioReservations)
-        .set({ ...vals, paidAmount: financial.paid.toFixed(2), updatedAt: new Date() })
+        .set({ ...vals, updatedAt: new Date() })
         .where(eq(studioReservations.id, id))
         .returning();
     } else {
@@ -1178,10 +1184,9 @@ export async function saveReservation(
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`reservation:${key}`}, 0))`);
       const [prior] = await tx.select().from(studioReservations).where(eq(studioReservations.idempotencyKey, key)).limit(1);
       if (prior) return { ...prior, remainingAmount: Number(prior.price) - Number(prior.paidAmount) };
-      const canonical = await createSimpleInvoice(tx, actor, "reservation", key, vals as ReturnType<typeof simpleValues>, cleanText(value.accountId, "حساب", false, 80), cleanText(value.paymentMethod, "روش پرداخت", false, 50));
       [row] = await tx
         .insert(studioReservations)
-        .values({ ...vals, customerId: canonical.customer.id, invoiceId: canonical.invoice.id, idempotencyKey: key, financialStatus: "posted", status: "pending", createdById: actor.employeeId })
+        .values({ ...vals, price: "0", paidAmount: "0", idempotencyKey: key, financialStatus: "not_applicable", status: "pending", createdById: actor.employeeId })
         .returning();
     }
     if (!row) throw new ApiError(404, "رزرو یافت نشد.");
@@ -1199,53 +1204,23 @@ export async function saveReservation(
     );
     return {
       ...row,
-      remainingAmount: Number(row.price) - Number(row.paidAmount),
+      remainingAmount: 0,
     };
   });
 }
 export async function completeReservation(actor: EmployeeContext, id: string) {
-  assertUuid(id);
-  return db.transaction(async (tx) => {
-    const [row] = await tx
-      .update(studioReservations)
-      .set({
-        status: "completed",
-        completedAt: new Date(),
-        completedById: actor.employeeId,
-        updatedAt: new Date(),
-      })
-      .where(eq(studioReservations.id, id))
-      .returning();
-    if (!row) throw new ApiError(404, "رزرو یافت نشد.");
-    await logAuditEvent(
-      "RESERVATION_COMPLETED",
-      "studio_reservation",
-      id,
-      { convertedToContract: false },
-      {
-        userId: actor.employeeId,
-        employeeId: actor.employeeId,
-        userName: actor.employeeName,
-      },
-      tx,
-    );
-    return row;
-  });
+  return hardDeleteReservation(actor, id, "RESERVATION_COMPLETED_AND_DELETED");
 }
-export async function deleteReservation(actor: EmployeeContext, id: string) {
+async function hardDeleteReservation(actor: EmployeeContext, id: string, action: string) {
   assertUuid(id);
   return db.transaction(async (tx) => {
     const [current] = await tx.select().from(studioReservations).where(eq(studioReservations.id, id)).for("update").limit(1);
     if (!current) throw new ApiError(404, "رزرو یافت نشد.");
-    if (Number(current.paidAmount) > 0) throw new ApiError(409, "رزرو دارای دریافت مالی است و باید از فرآیند برگشت وجه ابطال شود.");
-    if (current.invoiceId) await tx.update(invoices).set({ status: "cancelled", reversalReason: "ابطال رزرو", updatedAt: new Date() }).where(eq(invoices.id, current.invoiceId));
-    const [row] = await tx.update(studioReservations).set({ status: "cancelled", financialStatus: "voided", updatedAt: new Date() }).where(eq(studioReservations.id, id)).returning();
-    if (!row) throw new ApiError(404, "رزرو یافت نشد.");
     await logAuditEvent(
-      "RESERVATION_DELETED",
+      action,
       "studio_reservation",
       id,
-      { title: row.title },
+      { before: current, permanentDelete: true, historicalInvoicePreserved: Boolean(current.invoiceId) },
       {
         userId: actor.employeeId,
         employeeId: actor.employeeId,
@@ -1253,8 +1228,35 @@ export async function deleteReservation(actor: EmployeeContext, id: string) {
       },
       tx,
     );
+    const [row] = await tx.delete(studioReservations).where(eq(studioReservations.id, id)).returning();
     return row;
   });
+}
+export async function deleteReservation(actor: EmployeeContext, id: string) {
+  return hardDeleteReservation(actor, id, "RESERVATION_CANCELLED_AND_DELETED");
+}
+
+export async function convertReservationToDailyVisit(actor: EmployeeContext, id: string, value: SimpleMoneyInput) {
+  assertUuid(id);
+  const [reservation] = await db.select().from(studioReservations).where(eq(studioReservations.id, id)).limit(1);
+  if (!reservation) {
+    const converted = (await listDailyVisits()).find(
+      (visit) => visit.idempotencyKey === `reservation-conversion:${id}`,
+    );
+    if (converted) return converted;
+    throw new ApiError(404, "رزرو یافت نشد.");
+  }
+  const visit = await saveDailyVisit(actor, {
+    ...value,
+    title: value.title ?? reservation.title,
+    date: value.date ?? reservation.reservedAt,
+    customerName: value.customerName ?? reservation.customerName,
+    mobile: value.mobile ?? reservation.mobile,
+    notes: value.notes ?? reservation.notes,
+    idempotencyKey: `reservation-conversion:${id}`,
+  });
+  await hardDeleteReservation(actor, id, "RESERVATION_CONVERTED_TO_DAILY_VISIT");
+  return visit;
 }
 
 async function approvedItem(tx: Transaction, itemId: string) {
@@ -1399,10 +1401,11 @@ export async function assignPersonnelToItem(
     const conflict = await tx
       .select({ id: studioPlanningPersonnel.id })
       .from(studioPlanningPersonnel)
+      .innerJoin(studioContractItems, eq(studioContractItems.id, studioPlanningPersonnel.contractItemId))
       .where(
         and(
           eq(studioPlanningPersonnel.personnelId, personnelId),
-          ne(studioPlanningPersonnel.contractItemId, itemId),
+          ne(studioContractItems.contractId, info.item.contractId),
           lt(studioPlanningPersonnel.startsAt, end),
           gt(studioPlanningPersonnel.endsAt, start),
         ),
