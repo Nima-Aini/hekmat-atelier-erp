@@ -55,10 +55,10 @@ export function FinalNotificationsView({
             return (
               <div
                 key={item.id}
-                className={`group flex w-full items-center gap-3 rounded-2xl border p-4 text-right transition ${critical ? "border-red-600/80 bg-red-950/35 shadow-[0_0_30px_rgba(239,35,60,.14)]" : warning ? "border-orange-900/70 bg-orange-950/15" : "border-zinc-800 bg-[#0d0d0f]"}`}
+                className={`group flex w-full items-center gap-3 rounded-2xl border p-4 text-right transition ${archived ? "border-emerald-900/70 bg-emerald-950/10" : critical ? "border-red-600/80 bg-red-950/35 shadow-[0_0_30px_rgba(239,35,60,.14)]" : warning ? "border-amber-700/70 bg-amber-950/15 shadow-[0_0_20px_rgba(245,158,11,.1)]" : "border-cyan-900/70 bg-cyan-950/10 shadow-[0_0_20px_rgba(6,182,212,.08)]"}`}
               >
                 <span
-                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${critical ? "bg-red-600 text-white shadow-[0_0_20px_rgba(239,35,60,.35)]" : warning ? "bg-orange-950 text-orange-400" : "bg-zinc-900 text-zinc-400"}`}
+                  className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ${archived ? "bg-emerald-950 text-emerald-300" : critical ? "bg-red-600 text-white shadow-[0_0_20px_rgba(239,35,60,.35)]" : warning ? "bg-amber-950 text-amber-300 shadow-[0_0_14px_rgba(245,158,11,.2)]" : "bg-cyan-950 text-cyan-300 shadow-[0_0_14px_rgba(6,182,212,.16)]"}`}
                 >
                   {critical ? (
                     <Siren className="h-5 w-5" />

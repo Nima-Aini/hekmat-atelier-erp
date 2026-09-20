@@ -12,6 +12,7 @@ import {
   listDailyVisits,
   listReservations,
 } from "@/services/studio/finalWorkflow";
+import { getAtelierFinanceCenter } from "@/services/studio/financeCenter";
 
 type ContractRecord = Awaited<ReturnType<typeof listContracts>>[number];
 
@@ -201,12 +202,13 @@ export async function getFinalNotifications(
   allowedCoreProjectIds: string[] | null,
   includeArchived = false,
 ) {
-  const [contracts, reservations, visits, planning, config] = await Promise.all([
+  const [contracts, reservations, visits, planning, config, finance] = await Promise.all([
     listContracts(undefined, allowedCoreProjectIds),
     listReservations(),
     listDailyVisits(),
     getPlanning(allowedCoreProjectIds),
     getAtelierConfig(),
+    getAtelierFinanceCenter(allowedCoreProjectIds),
   ]);
   const now = Date.now();
   const reminder = (config.notifications || {}) as Record<string, unknown>;
@@ -331,6 +333,21 @@ export async function getFinalNotifications(
           );
       }
     }
+  for (const installment of finance.installments) {
+    if (installment.remainingAmount <= 0) continue;
+    const days = installment.daysToDue;
+    if (days > 7) continue;
+    const timing = days < 0 ? "سررسید گذشته" : days === 0 ? "امروز سررسید دارد" : `${days.toLocaleString("fa-IR")} روز تا سررسید`;
+    push(
+      `installment-due:${installment.id}`,
+      days <= 0 ? "critical" : "warning",
+      days < 0 ? "قسط سررسید گذشته" : days === 0 ? "سررسید قسط امروز" : "سررسید قسط نزدیک است",
+      `قسط «${installment.title}» قرارداد ${installment.customerName || installment.contractNumber} ${timing}؛ مانده ${Number(installment.remainingAmount).toLocaleString("fa-IR")} تومان.`,
+      "finance",
+      installment.id,
+      installment.dueDate,
+    );
+  }
   const order = { critical: 0, warning: 1, normal: 2 } as const;
   const sorted = result
     .sort(

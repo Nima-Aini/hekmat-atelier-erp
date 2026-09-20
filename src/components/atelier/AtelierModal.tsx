@@ -16,13 +16,13 @@ export function AtelierModal({
 }) {
   return (
     <div
-      className="app-modal fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-3 backdrop-blur-sm"
+      className="app-modal fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-0 backdrop-blur-sm sm:p-3"
       role="dialog"
       aria-modal="true"
       aria-label={title}
     >
       <div
-        className={`max-h-[calc(100dvh-2rem)] w-full overflow-y-auto rounded-2xl border border-red-950 bg-[#0b0b0d] p-4 shadow-[0_0_80px_rgba(127,16,31,.25)] sm:p-6 ${wide ? "max-w-5xl" : "max-w-2xl"}`}
+        className={`h-full max-h-dvh w-full overflow-y-auto border border-red-950 bg-[#0b0b0d] p-4 shadow-[0_0_80px_rgba(127,16,31,.25)] sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:rounded-2xl sm:p-6 ${wide ? "max-w-5xl" : "max-w-2xl"}`}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-5 flex items-center justify-between border-b border-zinc-900 pb-4">

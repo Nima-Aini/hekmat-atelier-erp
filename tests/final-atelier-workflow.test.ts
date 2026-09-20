@@ -5,20 +5,21 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { db } from "../src/db";
 import { migrateDatabase } from "../src/db/migrate";
 import {
-  accounts, atelierExpenseSources, customers, employees, equipmentReservations, expenses, invoices, rentalEquipment,
+  accountBalanceAdjustments, accounts, atelierExpenseSources, auditLogs, customers, employees, equipmentReservations, expenses, invoices, rentalEquipment,
   studioCalendarEvents, studioContracts, studioCustomers, studioDailyVisits, studioEquipment,
-  studioPersonnel, studioPlanningPersonnel, studioProjectTypes, studioReservations,
+  studioInstallmentAllocations, studioInstallments, studioPersonnel, studioPlanningPersonnel, studioProjectTypes, studioReservations,
 } from "../src/db/schema";
 import type { EmployeeContext } from "../src/services/access";
 import {
   addRentalRequirement, approveContract, assignEquipmentToItem, assignPersonnelToItem,
   completeReservation, convertReservationToDailyVisit, createPendingContract, getPlanning, listDailyVisits, listReservations,
-  markRentalAsRented, saveDailyVisit, saveReservation, updateContract,
+  markRentalAsRented, saveDailyVisit, saveReservation, updateContract, updatePersonnelAssignment, deletePersonnelAssignment,
+  updateEquipmentAssignment, deleteEquipmentAssignment,
 } from "../src/services/studio/finalWorkflow";
 import { getFinalCalendar, getFinalNotifications, listContractCustomers, setNotificationArchived } from "../src/services/studio/finalInsights";
 import { createStudioEquipment } from "../src/services/studio/equipmentService";
 import { createStudioPersonnel } from "../src/services/studio/personnelService";
-import { recordAtelierReceipt } from "../src/services/studio/financeCenter";
+import { adjustAtelierAccountBalance, getAtelierFinanceCenter, payAtelierInstallment, recordAtelierReceipt, saveContractInstallments, updateContractFinance } from "../src/services/studio/financeCenter";
 
 const actorId = "c7000000-0000-4000-8000-000000000001";
 const actor: EmployeeContext = { employeeId: actorId, employeeName: "مدیر تست جریان نهایی", permissions: new Set(["*"]) };
@@ -97,10 +98,45 @@ describe("Final Iranian atelier workflow", () => {
     const other = await createPendingContract(actor, { idempotencyKey: randomUUID(), projectTypeId: typeId, customerName: "تداخل قرارداد دیگر", mobile: `0918${Date.now().toString().slice(-7)}`, programDate: startsAt, programEndDate: endsAt, items: [{ title: "کار همزمان", quantity: 1, unitPrice: 1_000_000 }] });
     const approvedOther = await approveContract(actor, other.id);
     await expect(assignPersonnelToItem(actor, approvedOther.items[0].id, { personnelId: person.id, startsAt, endsAt, wageAmount: 1_000_000 })).rejects.toThrow("برنامه دیگری");
-    await assignEquipmentToItem(actor, photo.id, { equipmentId: equipment.id, startsAt, endsAt });
+    const equipmentAssignment = await assignEquipmentToItem(actor, photo.id, { equipmentId: equipment.id, startsAt, endsAt });
     await expect(assignEquipmentToItem(actor, video.id, { equipmentId: equipment.id, startsAt, endsAt })).rejects.toThrow("تداخل زمانی");
     expect(await db.select().from(equipmentReservations).where(eq(equipmentReservations.contractItemId, photo.id))).toHaveLength(1);
+    const shorterEnd = new Date(+new Date(endsAt) - 30 * 60_000);
+    const editedPerson = await updatePersonnelAssignment(actor, photo.id, assignment.id, { personnelId: person.id, startsAt, endsAt: shorterEnd, wageAmount: 5_500_000 });
+    expect(Number(editedPerson.wageSnapshot)).toBe(5_500_000);
+    const editedEquipment = await updateEquipmentAssignment(actor, photo.id, equipmentAssignment.id, { equipmentId: equipment.id, startsAt, endsAt: shorterEnd });
+    expect(+new Date(editedEquipment.reservedTo)).toBe(+shorterEnd);
+    await deleteEquipmentAssignment(actor, photo.id, equipmentAssignment.id);
+    await deletePersonnelAssignment(actor, photo.id, assignment.id);
+    expect(await db.select().from(studioPlanningPersonnel).where(eq(studioPlanningPersonnel.id, assignment.id))).toHaveLength(0);
+    expect(await db.select().from(equipmentReservations).where(eq(equipmentReservations.id, equipmentAssignment.id))).toHaveLength(0);
     expect((await getPlanning(null)).contracts.some((row) => row.id === contract.id)).toBe(true);
+  });
+
+  it("edits contract finance, preserves installment allocations, and records auditable balance adjustments", async () => {
+    await expect(updateContractFinance(actor, contract.id, { discountAmount: 75_000_000 })).rejects.toThrow("دریافت‌شده");
+    const finance = await updateContractFinance(actor, contract.id, { discountAmount: 15_000_000, financialNotes: "اصلاح توافق نهایی" });
+    expect(finance).toMatchObject({ finalAmount: 85_000_000, paidAmount: 30_000_000, balanceDue: 55_000_000 });
+    const dueSoon = new Date(Date.now() + 2 * 86400000), later = new Date(Date.now() + 20 * 86400000);
+    const installments = await saveContractInstallments(actor, contract.id, [{ title: "روز مراسم", amount: 25_000_000, dueDate: dueSoon }, { title: "تحویل فایل", amount: 30_000_000, dueDate: later }]);
+    const paymentKey = randomUUID();
+    const payment = await payAtelierInstallment(actor, installments[0].id, { amount: 5_000_000, accountId, paidAt: new Date(), paymentMethod: "card_transfer", idempotencyKey: paymentKey });
+    const replay = await payAtelierInstallment(actor, installments[0].id, { amount: 5_000_000, accountId, paidAt: new Date(), paymentMethod: "card_transfer", idempotencyKey: paymentKey });
+    expect(replay.id).toBe(payment.id);
+    expect((await db.select().from(studioInstallmentAllocations).where(eq(studioInstallmentAllocations.installmentId, installments[0].id))).reduce((sum, row) => sum + Number(row.amount), 0)).toBe(5_000_000);
+    await expect(payAtelierInstallment(actor, installments[0].id, { amount: 20_000_001, accountId, idempotencyKey: randomUUID() })).rejects.toThrow("مانده قسط");
+    const changedDue = new Date(Date.now() + 3 * 86400000);
+    await saveContractInstallments(actor, contract.id, [{ id: installments[0].id, title: "روز مراسم", amount: 25_000_000, dueDate: changedDue }, { id: installments[1].id, title: "تحویل فایل", amount: 30_000_000, dueDate: later }]);
+    expect(Math.floor(+new Date((await db.select().from(studioInstallments).where(eq(studioInstallments.id, installments[0].id)))[0].dueDate) / 1000)).toBe(Math.floor(+changedDue / 1000));
+    const before = Number((await db.select().from(accounts).where(eq(accounts.id, accountId)))[0].balance), target = before + 1_234_567;
+    const adjustment = await adjustAtelierAccountBalance(actor, accountId, { newBalance: target, reason: "اصلاح مغایرت موجودی بانک", idempotencyKey: randomUUID() });
+    expect(Number(adjustment.delta)).toBe(1_234_567);
+    expect(Number((await db.select().from(accounts).where(eq(accounts.id, accountId)))[0].balance)).toBe(target);
+    expect(await db.select().from(accountBalanceAdjustments).where(eq(accountBalanceAdjustments.id, adjustment.id))).toHaveLength(1);
+    expect((await db.select().from(auditLogs).where(eq(auditLogs.entityId, accountId))).some((row) => row.action === "ATELIER_ACCOUNT_BALANCE_ADJUSTED")).toBe(true);
+    const center = await getAtelierFinanceCenter(null);
+    expect(center.installments.find((row) => row.id === installments[0].id)).toMatchObject({ paidAmount: 5_000_000, remainingAmount: 20_000_000 });
+    expect((await getFinalNotifications(null)).some((row) => row.conditionKey === `installment-due:${installments[0].id}`)).toBe(true);
   });
 
   it("creates and resolves the critical rented-equipment reminder without deleting history", async () => {
@@ -180,5 +216,17 @@ describe("Final Iranian atelier workflow", () => {
     expect(layout).toContain("-translate-x-full");
     expect(layout).toContain("lg:ml-[17rem]");
     for (const forbidden of ["سرنخ‌ها و CRM", "Workboard", "Project 360", "مواد اولیه", "BOM", "تولید", "انبار", "سفارشات"]) expect(layout).not.toContain(forbidden);
+  });
+
+  it("uses shared name-based financial controls and a portal calendar", () => {
+    const finance = readFileSync(new URL("../src/components/atelier/AtelierFinanceView.tsx", import.meta.url), "utf8");
+    const controls = readFileSync(new URL("../src/components/atelier/FinanceControls.tsx", import.meta.url), "utf8");
+    const calendar = readFileSync(new URL("../src/components/ui/JalaliDatePicker.tsx", import.meta.url), "utf8");
+    const reservations = readFileSync(new URL("../src/components/atelier/SimpleRecordsView.tsx", import.meta.url), "utf8");
+    expect(finance).toContain('"اقساط"');
+    expect(finance).not.toContain("شناسه حساب");
+    expect(controls).toContain("موجودی");
+    expect(calendar).toContain("createPortal");
+    expect((reservations.match(/لغو و حذف رزرو|تکمیل شده و حذف/g) || [])).toHaveLength(0);
   });
 });

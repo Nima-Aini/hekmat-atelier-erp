@@ -10,6 +10,7 @@ import {
   Clock3,
   Edit3,
   Eye,
+  Trash2,
   UserPlus,
   UsersRound,
   Wrench,
@@ -21,6 +22,7 @@ import { AtelierModal } from "./AtelierModal";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 import { atelierPrompt, atelierToast } from "@/lib/atelierFeedback";
 import { formatPlanningCopyText } from "@/lib/planningText";
+import { NeonStatus } from "./FinanceControls";
 
 const money = (value: unknown) =>
   `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
@@ -28,7 +30,9 @@ type Action = {
   type: "personnel" | "equipment" | "rental";
   item: any;
   contract: any;
+  assignment?: any;
 } | null;
+const time = (value: unknown) => new Intl.DateTimeFormat("fa-IR", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tehran" }).format(new Date(String(value)));
 
 export function PlanningView({ onEditContract }: { onEditContract?: (id: string) => void }) {
   const [planning, setPlanning] = useState<any>(null),
@@ -36,7 +40,8 @@ export function PlanningView({ onEditContract }: { onEditContract?: (id: string)
     [error, setError] = useState(""),
     [action, setAction] = useState<Action>(null),
     [expanded, setExpanded] = useState<Set<string>>(new Set()),
-    [summary, setSummary] = useState<any>(null);
+    [summary, setSummary] = useState<any>(null),
+    [pendingDelete, setPendingDelete] = useState<{ type: "personnel" | "equipment"; item: any; row: any } | null>(null);
   const load = () => {
     setLoading(true);
     setError("");
@@ -144,12 +149,9 @@ export function PlanningView({ onEditContract }: { onEditContract?: (id: string)
                         {item.personnelAssignments.map((row: any) => (
                           <div
                             key={row.id}
-                            className="flex items-center justify-between text-xs"
+                            className="rounded-xl border border-zinc-900 bg-zinc-950/60 p-2 text-xs"
                           >
-                            <span>{row.personnelName}</span>
-                            <span className="text-zinc-500">
-                              دستمزد: {money(row.wageSnapshot)}
-                            </span>
+                            <div className="flex items-start justify-between gap-2"><div><strong>{row.personnelName}</strong><p className="mt-1 text-zinc-400">{toJalaliDate(row.startsAt)} · {time(row.startsAt)} تا {time(row.endsAt)}</p><p className="mt-1 text-zinc-600">دستمزد: {money(row.wageSnapshot)}</p></div><div className="flex gap-1"><button onClick={() => setAction({ type: "personnel", item, contract, assignment: row })} className="atelier-icon-button" aria-label="ویرایش تخصیص پرسنل"><Edit3 className="h-3.5 w-3.5" /></button><button onClick={() => setPendingDelete({ type: "personnel", item, row })} className="atelier-icon-button !text-red-300" aria-label="حذف تخصیص پرسنل"><Trash2 className="h-3.5 w-3.5" /></button></div></div>
                           </div>
                         ))}
                       </AssignmentBlock>
@@ -159,9 +161,8 @@ export function PlanningView({ onEditContract }: { onEditContract?: (id: string)
                         empty="تجهیزی تخصیص داده نشده است."
                       >
                         {item.equipmentAssignments.map((row: any) => (
-                          <div key={row.id} className="text-xs">
-                            {(equipmentMap.get(row.equipmentId) as string) ||
-                              "تجهیزات"}
+                          <div key={row.id} className="rounded-xl border border-zinc-900 bg-zinc-950/60 p-2 text-xs">
+                            <div className="flex items-start justify-between gap-2"><div><strong>{(equipmentMap.get(row.equipmentId) as string) || "تجهیزات"}</strong><p className="mt-1 text-zinc-400">{toJalaliDate(row.reservedFrom)} · {time(row.reservedFrom)} تا {time(row.reservedTo)}</p></div><div className="flex gap-1"><button onClick={() => setAction({ type: "equipment", item, contract, assignment: row })} className="atelier-icon-button" aria-label="ویرایش تخصیص تجهیزات"><Edit3 className="h-3.5 w-3.5" /></button><button onClick={() => setPendingDelete({ type: "equipment", item, row })} className="atelier-icon-button !text-red-300" aria-label="حذف تخصیص تجهیزات"><Trash2 className="h-3.5 w-3.5" /></button></div></div>
                           </div>
                         ))}
                       </AssignmentBlock>
@@ -185,11 +186,7 @@ export function PlanningView({ onEditContract }: { onEditContract?: (id: string)
                               >
                                 {row.itemTitle}
                               </span>
-                              <span>
-                                {row.status === "planned"
-                                  ? "اجاره تکمیل نشده"
-                                  : "اجاره شد"}
-                              </span>
+                              <NeonStatus tone={row.status === "planned" ? "critical" : "success"}>{row.status === "planned" ? "اجاره تکمیل نشده" : "اجاره شد"}</NeonStatus>
                             </div>
                             <p className="mt-1 text-zinc-500">
                               {toJalaliDate(row.pickupDate)} •{" "}
@@ -283,6 +280,7 @@ export function PlanningView({ onEditContract }: { onEditContract?: (id: string)
           {summary.items.map((item: any) => <div key={item.id} className="rounded-2xl border border-zinc-800 p-4"><h3 className="font-black">{item.title}</h3><p className={`mt-2 text-xs ${item.personnelAssignments.length ? "text-zinc-300" : "text-red-400"}`}>پرسنل: {item.personnelAssignments.map((row: any) => row.personnelName).join("، ") || "تخصیص داده نشده"}</p><p className={`mt-1 text-xs ${item.equipmentAssignments.length ? "text-zinc-300" : "text-red-400"}`}>تجهیزات آتلیه: {item.equipmentAssignments.map((row: any) => equipmentMap.get(row.equipmentId)).filter(Boolean).join("، ") || "تخصیص داده نشده"}</p><p className={`mt-1 text-xs ${item.rentalRequirements.some((row: any) => row.status === "planned") ? "font-black text-red-400" : "text-zinc-300"}`}>تجهیزات اجاره‌ای: {item.rentalRequirements.map((row: any) => `${row.itemTitle} (${row.status === "planned" ? "اجاره تکمیل نشده" : "اجاره شد"})`).join("، ") || "نیازی ثبت نشده"}</p></div>)}
         </div>
       </AtelierModal>}
+      {pendingDelete && <AtelierModal title="حذف تخصیص" onClose={() => setPendingDelete(null)}><div className="space-y-5"><p className="text-sm text-zinc-300">این تخصیص از برنامه حذف می‌شود. سوابق مالی پرداخت‌شده هرگز به‌صورت خودکار تغییر نمی‌کنند.</p><div className="flex justify-end gap-2"><button onClick={() => setPendingDelete(null)} className="atelier-button-secondary">انصراف</button><button onClick={async () => { const response = await fetch(`/api/atelier/planning/${pendingDelete.item.id}/${pendingDelete.type}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify({ assignmentId: pendingDelete.row.id }) }); const result = await response.json(); if (!response.ok || !result.success) return atelierToast(result.error || "حذف انجام نشد.", "error"); setPendingDelete(null); atelierToast("تخصیص حذف شد.", "success"); load(); }} className="atelier-button !bg-red-700"><Trash2 className="h-4 w-4" />حذف تخصیص</button></div></div></AtelierModal>}
     </div>
   );
 }
@@ -326,18 +324,18 @@ function PlanningAction({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const startDefault = new Date(action.contract.programDate),
+  const startDefault = new Date(action.assignment?.startsAt || action.assignment?.reservedFrom || action.contract.programDate),
     endDefault = new Date(
-      action.contract.programEndDate || +startDefault + 4 * 3600000,
+      action.assignment?.endsAt || action.assignment?.reservedTo || action.contract.programEndDate || +startDefault + 4 * 3600000,
     );
   const startParts = getBusinessDateTimeParts(startDefault);
   const endParts = getBusinessDateTimeParts(endDefault);
-  const [resourceId, setResourceId] = useState(""),
+  const [resourceId, setResourceId] = useState(action.assignment?.personnelId || action.assignment?.equipmentId || ""),
     [startDate, setStartDate] = useState<Date | null>(startDefault),
     [startTime, setStartTime] = useState(`${String(startParts.hour).padStart(2, "0")}:${String(startParts.minute).padStart(2, "0")}`),
     [endDate, setEndDate] = useState<Date | null>(endDefault),
     [endTime, setEndTime] = useState(`${String(endParts.hour).padStart(2, "0")}:${String(endParts.minute).padStart(2, "0")}`),
-    [wage, setWage] = useState(0),
+    [wage, setWage] = useState(Number(action.assignment?.wageSnapshot || 0)),
     [rentalTitle, setRentalTitle] = useState(""),
     [supplierName, setSupplierName] = useState(""),
     [cost, setCost] = useState(0),
@@ -377,9 +375,9 @@ function PlanningAction({
               };
       const url = `/api/atelier/planning/${action.item.id}/${action.type === "rental" ? "rentals" : action.type}`;
       const data = await fetch(url, {
-        method: "POST",
+        method: action.assignment ? "PUT" : "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, assignmentId: action.assignment?.id }),
       }).then((r) => r.json());
       if (!data.success) throw new Error(data.error || "ثبت انجام نشد.");
       onSaved();
@@ -396,7 +394,7 @@ function PlanningAction({
         ? "تخصیص تجهیزات آتلیه"
         : "ثبت تجهیزات اجاره‌ای";
   return (
-    <AtelierModal title={`${title} — ${action.item.title}`} onClose={onClose}>
+    <AtelierModal title={`${action.assignment ? "ویرایش" : title} — ${action.item.title}`} onClose={onClose} wide>
       <form onSubmit={(event) => void submit(event)} className="space-y-4">
         {action.type === "personnel" && (
           <>
@@ -497,7 +495,7 @@ function PlanningAction({
             انصراف
           </button>
           <button disabled={saving} className="atelier-button">
-            {saving ? "در حال ثبت…" : "ثبت تخصیص"}
+            {saving ? "در حال ثبت…" : action.assignment ? "ذخیره تغییرات" : "ثبت تخصیص"}
           </button>
         </div>
       </form>

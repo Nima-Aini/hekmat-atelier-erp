@@ -39,7 +39,7 @@ describe("native backup and restore safety", () => {
     const temporary = await storage.createTemporary(id); await temporary.handle.writeFile(archive); await temporary.handle.close(); await storage.commit(id, temporary.path);
     const checksum = crypto.createHash("sha256").update(archive).digest("hex");
     await storage.writeMetadata(id, { backupId: id, checksum, format: "postgres_custom", formatVersion: 1 });
-    await db.insert(backups).values({ id, filename: `${id}.dump`, sizeBytes: archive.length, sizeBytesBigint: archive.length, checksum, status: "completed", storageDriver: "local", storageKey: id, format: "postgres_custom", formatVersion: 1, schemaVersion: "010_atelier_final_polish" });
+    await db.insert(backups).values({ id, filename: `${id}.dump`, sizeBytes: archive.length, sizeBytesBigint: archive.length, checksum, status: "completed", storageDriver: "local", storageKey: id, format: "postgres_custom", formatVersion: 1, schemaVersion: "011_atelier_finance_planning_polish" });
     const fakeRestore = path.join(root, "pg_restore"); await writeFile(fakeRestore, "#!/bin/sh\nexit 0\n", { mode: 0o700 }); vi.stubEnv("PG_RESTORE_BIN", fakeRestore);
     await expect(verifySystemBackup(id, undefined, storage)).resolves.toMatchObject({ valid: true, checksum });
     const report = await validateRestore(id, undefined, storage); expect(report).toMatchObject({ backupValid: true, checksumValid: true, readable: true, metadataValid: true });
@@ -102,7 +102,7 @@ describe("native backup and restore safety", () => {
   it("reports safe deployment and schema identity in readiness", async () => {
     vi.stubEnv("GIT_SHA", "bb22e48c2299ddbefe6cee6854a21e6798a2e2df"); vi.stubEnv("APP_ENV", "staging");
     const response = await readiness(); const body = await response.json();
-    expect(response.status).toBe(200); expect(body).toMatchObject({ status: "ready", gitSha: "bb22e48c2299ddbefe6cee6854a21e6798a2e2df", schemaVersion: "010_atelier_final_polish", environment: "staging" });
+    expect(response.status).toBe(200); expect(body).toMatchObject({ status: "ready", gitSha: "bb22e48c2299ddbefe6cee6854a21e6798a2e2df", schemaVersion: "011_atelier_finance_planning_polish", environment: "staging" });
     expect(JSON.stringify(body)).not.toMatch(/password|DATABASE_URL/i);
   });
 });

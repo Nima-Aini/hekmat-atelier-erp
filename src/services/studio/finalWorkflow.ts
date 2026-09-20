@@ -1514,6 +1514,53 @@ export async function assignPersonnelToItem(
   });
 }
 
+export async function updatePersonnelAssignment(actor: EmployeeContext, itemId: string, assignmentId: string, value: Record<string, unknown>) {
+  assertUuid(assignmentId);
+  const personnelId = String(value.personnelId || ""); assertUuid(personnelId);
+  const start = validDate(value.startsAt, "زمان شروع"), end = validDate(value.endsAt, "زمان پایان");
+  if (end <= start) throw new ApiError(400, "زمان پایان باید بعد از شروع باشد.");
+  if (value.wageAmount === undefined || value.wageAmount === "") throw new ApiError(400, "دستمزد این کار باید وارد شود.");
+  const wage = money(value.wageAmount, "دستمزد");
+  return db.transaction(async (tx) => {
+    const info = await approvedItem(tx, itemId); await assertPlanningScope(actor, info.project);
+    const [current] = await tx.select().from(studioPlanningPersonnel).where(and(eq(studioPlanningPersonnel.id, assignmentId), eq(studioPlanningPersonnel.contractItemId, itemId))).for("update").limit(1);
+    if (!current) throw new ApiError(404, "تخصیص پرسنل یافت نشد.");
+    await lockScheduleResources(tx, [], [...new Set([current.personnelId, personnelId])]);
+    const [person] = await tx.select().from(studioPersonnel).where(and(eq(studioPersonnel.id, personnelId), eq(studioPersonnel.status, "active"))).limit(1);
+    if (!person) throw new ApiError(404, "پرسنل فعال یافت نشد.");
+    const conflict = await tx.select({ id: studioPlanningPersonnel.id }).from(studioPlanningPersonnel).innerJoin(studioContractItems, eq(studioContractItems.id, studioPlanningPersonnel.contractItemId)).where(and(eq(studioPlanningPersonnel.personnelId, personnelId), ne(studioPlanningPersonnel.id, assignmentId), ne(studioContractItems.contractId, info.item.contractId), lt(studioPlanningPersonnel.startsAt, end), gt(studioPlanningPersonnel.endsAt, start))).limit(1);
+    if (conflict.length) throw new ApiError(409, `پرسنل «${person.fullName}» در این بازه برنامه دیگری دارد.`, "PERSONNEL_CONFLICT");
+    if (!current.salaryRecordId) throw new ApiError(409, "پیوند مالی دستمزد این تخصیص ناقص است.");
+    const [salary] = await tx.select().from(personnelSalaryRecords).where(eq(personnelSalaryRecords.id, current.salaryRecordId)).for("update").limit(1);
+    if (!salary) throw new ApiError(409, "رکورد دستمزد یافت نشد.");
+    if (salary.financialStatus === "posted" || salary.paymentStatus === "paid") throw new ApiError(409, "تخصیصی که دستمزد آن پرداخت شده قابل تغییر نیست؛ ابتدا اصلاح مالی ثبت کنید.");
+    await tx.update(personnelSalaryRecords).set({ personnelId, rateAmount: wage.toFixed(2), totalCalculated: wage.toFixed(2), updatedAt: new Date() }).where(eq(personnelSalaryRecords.id, salary.id));
+    await recognizePlanningObligation(tx, actor, { sourceType: "personnel_wage", sourceId: salary.id, projectId: info.project.projectId, title: `دستمزد ${person.fullName} برای ${info.item.title}`, category: "salary", amount: wage, dueDate: end });
+    const [updated] = await tx.update(studioPlanningPersonnel).set({ personnelId, startsAt: start, endsAt: end, wageSnapshot: wage.toFixed(2), notes: cleanText(value.notes, "توضیحات"), assignedById: actor.employeeId, updatedAt: new Date() }).where(eq(studioPlanningPersonnel.id, assignmentId)).returning();
+    await logAuditEvent("PLANNING_PERSONNEL_UPDATED", "studio_contract_item", itemId, { assignmentId, before: current, after: updated }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
+    return updated;
+  });
+}
+
+export async function deletePersonnelAssignment(actor: EmployeeContext, itemId: string, assignmentId: string) {
+  assertUuid(assignmentId);
+  return db.transaction(async (tx) => {
+    const info = await approvedItem(tx, itemId); await assertPlanningScope(actor, info.project);
+    const [current] = await tx.select().from(studioPlanningPersonnel).where(and(eq(studioPlanningPersonnel.id, assignmentId), eq(studioPlanningPersonnel.contractItemId, itemId))).for("update").limit(1);
+    if (!current) throw new ApiError(404, "تخصیص پرسنل یافت نشد.");
+    if (current.salaryRecordId) {
+      const [salary] = await tx.select().from(personnelSalaryRecords).where(eq(personnelSalaryRecords.id, current.salaryRecordId)).for("update").limit(1);
+      if (salary && (salary.financialStatus === "posted" || Number(salary.paymentId ? 1 : 0) > 0)) throw new ApiError(409, "تخصیصی که دستمزد آن پرداخت شده قابل حذف نیست.");
+      const [link] = await tx.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "personnel_wage"), eq(atelierExpenseSources.sourceId, current.salaryRecordId))).limit(1);
+      if (link) { await tx.delete(atelierExpenseSources).where(eq(atelierExpenseSources.id, link.id)); await tx.delete(expenses).where(and(eq(expenses.id, link.expenseId), eq(expenses.paidAmount, "0"))); }
+      await tx.delete(studioPlanningPersonnel).where(eq(studioPlanningPersonnel.id, assignmentId));
+      if (salary) await tx.delete(personnelSalaryRecords).where(eq(personnelSalaryRecords.id, salary.id));
+    } else await tx.delete(studioPlanningPersonnel).where(eq(studioPlanningPersonnel.id, assignmentId));
+    await logAuditEvent("PLANNING_PERSONNEL_DELETED", "studio_contract_item", itemId, { assignmentId, before: current }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
+    return current;
+  });
+}
+
 export async function assignEquipmentToItem(
   actor: EmployeeContext,
   itemId: string,
@@ -1587,6 +1634,34 @@ export async function assignEquipmentToItem(
       tx,
     );
     return row;
+  });
+}
+
+export async function updateEquipmentAssignment(actor: EmployeeContext, itemId: string, assignmentId: string, value: Record<string, unknown>) {
+  assertUuid(assignmentId); const equipmentId = String(value.equipmentId || ""); assertUuid(equipmentId);
+  const start = validDate(value.startsAt, "زمان شروع"), end = validDate(value.endsAt, "زمان پایان");
+  if (end <= start) throw new ApiError(400, "زمان پایان باید بعد از شروع باشد.");
+  return db.transaction(async (tx) => {
+    const info = await approvedItem(tx, itemId); await assertPlanningScope(actor, info.project);
+    const [current] = await tx.select().from(equipmentReservations).where(and(eq(equipmentReservations.id, assignmentId), eq(equipmentReservations.contractItemId, itemId))).for("update").limit(1);
+    if (!current) throw new ApiError(404, "تخصیص تجهیزات یافت نشد.");
+    await lockScheduleResources(tx, [...new Set([current.equipmentId, equipmentId])], []);
+    await assertEquipmentScheduleAvailable(tx, equipmentId, start, end, assignmentId);
+    const [updated] = await tx.update(equipmentReservations).set({ equipmentId, reservedFrom: start, reservedTo: end, notes: cleanText(value.notes, "توضیحات"), updatedAt: new Date() }).where(eq(equipmentReservations.id, assignmentId)).returning();
+    await logAuditEvent("PLANNING_EQUIPMENT_UPDATED", "studio_contract_item", itemId, { assignmentId, before: current, after: updated }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
+    return updated;
+  });
+}
+
+export async function deleteEquipmentAssignment(actor: EmployeeContext, itemId: string, assignmentId: string) {
+  assertUuid(assignmentId);
+  return db.transaction(async (tx) => {
+    const info = await approvedItem(tx, itemId); await assertPlanningScope(actor, info.project);
+    const [current] = await tx.select().from(equipmentReservations).where(and(eq(equipmentReservations.id, assignmentId), eq(equipmentReservations.contractItemId, itemId))).for("update").limit(1);
+    if (!current) throw new ApiError(404, "تخصیص تجهیزات یافت نشد.");
+    await tx.delete(equipmentReservations).where(eq(equipmentReservations.id, assignmentId));
+    await logAuditEvent("PLANNING_EQUIPMENT_DELETED", "studio_contract_item", itemId, { assignmentId, before: current }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
+    return current;
   });
 }
 

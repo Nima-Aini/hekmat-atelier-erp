@@ -533,6 +533,19 @@ export const accounts = pgTable("accounts", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const accountBalanceAdjustments = pgTable("account_balance_adjustments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  oldBalance: numeric("old_balance", { precision: 15, scale: 2 }).notNull(),
+  newBalance: numeric("new_balance", { precision: 15, scale: 2 }).notNull(),
+  delta: numeric("delta", { precision: 15, scale: 2 }).notNull(),
+  reason: text("reason").notNull(),
+  adjustedAt: timestamp("adjusted_at").notNull(),
+  createdById: uuid("created_by_id").references(() => employees.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [index("idx_account_adjustments_account_date").on(t.accountId, t.adjustedAt)]);
+
 export const payments = pgTable("payments", {
   requestKey: text("request_key").unique(),
   requestHash: text("request_hash"),
@@ -964,6 +977,7 @@ export const studioContracts = pgTable("studio_contracts", {
   programEndDate: timestamp("program_end_date"),
   executionLocation: text("execution_location"),
   notes: text("notes"),
+  financialNotes: text("financial_notes"),
   approvedAt: timestamp("approved_at"),
   approvedById: uuid("approved_by_id").references(() => employees.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1590,6 +1604,7 @@ export const studioInstallments = pgTable("studio_installments", {
   dueDate: timestamp("due_date").notNull(),
   position: integer("position").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 export const studioInstallmentAllocations = pgTable("studio_installment_allocations", {
   id: uuid("id").defaultRandom().primaryKey(),
