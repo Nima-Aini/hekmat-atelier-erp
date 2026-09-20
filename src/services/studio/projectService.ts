@@ -113,7 +113,7 @@ export interface UpdateContractInput {
 export interface CreatePaymentInput {
   amount: number | string;
   paymentType?: "deposit" | "installment_1" | "installment_2" | "settlement" | "extra";
-  paymentMethod?: "card_transfer" | "pos" | "cash" | "cheque" | "online";
+  paymentMethod?: "card_transfer" | "pos" | "cash" | "cheque" | "online" | "bank_transfer" | "other";
   referenceCode?: string | null;
   paidAt?: Date | string | null;
   status?: "received" | "pending" | "verified";
@@ -122,6 +122,7 @@ export interface CreatePaymentInput {
   actorId?: string;
   accountId: string;
   invoiceId?: string | null;
+  targetInstallmentId?: string | null;
   idempotencyKey?: string;
 }
 
@@ -1250,6 +1251,7 @@ export async function listProjectPayments(projectId: string) {
 export async function createStudioPayment(projectId: string, input: CreatePaymentInput) {
   assertUuid(projectId);
   assertUuid(input.accountId);
+  if (input.targetInstallmentId) assertUuid(input.targetInstallmentId);
   const idempotencyKey = input.idempotencyKey?.trim() || crypto.randomUUID();
   const amount = Number(decimal(input.amount, "مبلغ دریافتی", 2, true));
   const paidAt = input.paidAt ? new Date(input.paidAt) : new Date();
@@ -1303,6 +1305,14 @@ export async function createStudioPayment(projectId: string, input: CreatePaymen
       if (contract) {
         const dueInstallments = await tx.select().from(studioInstallments).where(eq(studioInstallments.contractId, contract.id)).orderBy(asc(studioInstallments.position));
         const existingAllocations = dueInstallments.length ? await tx.select().from(studioInstallmentAllocations).where(inArray(studioInstallmentAllocations.installmentId, dueInstallments.map(row => row.id))) : [];
+        if (input.targetInstallmentId) {
+          const target = dueInstallments.find((row) => row.id === input.targetInstallmentId);
+          if (!target) throw new ApiError(404, "قسط متعلق به این قرارداد یافت نشد.");
+          const allocated = existingAllocations.filter((row) => row.installmentId === target.id).reduce((sum, row) => sum + Number(row.amount), 0);
+          const remaining = Math.max(0, Number(target.amount) - allocated);
+          if (amount > remaining) throw new ApiError(422, "مبلغ دریافت از مانده قسط بیشتر است.");
+          await tx.insert(studioInstallmentAllocations).values({ installmentId: target.id, studioPaymentId: payment.id, amount: amount.toFixed(2) });
+        } else {
         let remaining = amount;
         for (const installment of dueInstallments) {
           const allocated = existingAllocations.filter(row => row.installmentId === installment.id).reduce((sum, row) => sum + Number(row.amount), 0);
@@ -1311,6 +1321,7 @@ export async function createStudioPayment(projectId: string, input: CreatePaymen
           if (applied > 0) await tx.insert(studioInstallmentAllocations).values({ installmentId: installment.id, studioPaymentId: payment.id, amount: applied.toFixed(2) });
           remaining -= applied;
           if (remaining <= 0) break;
+        }
         }
       }
     }

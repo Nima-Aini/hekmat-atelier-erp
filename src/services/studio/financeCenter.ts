@@ -2,9 +2,9 @@ import crypto from "node:crypto";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
-  accounts, atelierExpenseSources, customers, expensePaymentAllocations, expenses, invoices, payments,
+  accountBalanceAdjustments, accounts, atelierExpenseSources, auditLogs, customers, expensePaymentAllocations, expenses, invoices, payments,
   personnelSalaryRecords, rentalEquipment, studioContracts, studioDailyVisits, studioInstallmentAllocations,
-  studioInstallments, studioPersonnel, studioProjects, studioProjectTypes, studioReservations, studioDailyVisitPersonnel,
+  studioInstallments, studioPersonnel, studioProjects, studioProjectTypes, studioReservations, studioDailyVisitPersonnel, studioContractItems,
 } from "@/db/schema";
 import { ApiError, assertUuid, decimal } from "@/lib/apiError";
 import { canAccessPermission, type EmployeeContext } from "@/services/access";
@@ -23,7 +23,7 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
     db.select().from(accounts).where(eq(accounts.status, "active")).orderBy(desc(accounts.isDefault), asc(accounts.name)),
     db.select({ payment: payments, accountName: accounts.name }).from(payments).innerJoin(accounts, eq(accounts.id, payments.accountId)).where(eq(payments.status, "completed")).orderBy(desc(payments.paymentDate)),
     db.select({ expense: expenses, accountName: accounts.name }).from(expenses).leftJoin(accounts, eq(accounts.id, expenses.accountId)).where(eq(expenses.status, "posted")).orderBy(desc(expenses.expenseDate)),
-    db.select({ contract: studioContracts, projectTitle: studioProjects.title, projectType: studioProjectTypes.title, invoice: invoices, customerName: customers.name })
+    db.select({ contract: studioContracts, projectTitle: studioProjects.title, projectType: studioProjectTypes.title, invoice: invoices, customerName: customers.name, customerMobile: customers.mobile })
       .from(studioContracts).innerJoin(studioProjects, eq(studioProjects.id, studioContracts.studioProjectId))
       .leftJoin(studioProjectTypes, eq(studioProjectTypes.id, studioContracts.projectTypeId))
       .leftJoin(invoices, eq(invoices.id, studioContracts.invoiceId)).leftJoin(customers, eq(customers.id, invoices.customerId)),
@@ -46,6 +46,9 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   const dailySalarySources = rawSalaries.length ? await db.select({ salaryRecordId: studioDailyVisitPersonnel.salaryRecordId, visitTitle: studioDailyVisits.title }).from(studioDailyVisitPersonnel).innerJoin(studioDailyVisits, eq(studioDailyVisits.id, studioDailyVisitPersonnel.dailyVisitId)).where(inArray(studioDailyVisitPersonnel.salaryRecordId, rawSalaries.map((row) => row.salary.id))) : [];
   const expenseSources = await db.select().from(atelierExpenseSources);
   const installmentAllocations = await db.select().from(studioInstallmentAllocations);
+  const contractItems = visibleContractIds.size ? await db.select().from(studioContractItems).where(inArray(studioContractItems.contractId, [...visibleContractIds])) : [];
+  const correctionRows = visibleContractIds.size ? await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "studio_contract"), inArray(auditLogs.entityId, [...visibleContractIds]))).orderBy(desc(auditLogs.createdAt)) : [];
+  const adjustmentRows = accountRows.length ? await db.select().from(accountBalanceAdjustments).where(inArray(accountBalanceAdjustments.accountId, accountRows.map((row) => row.id))).orderBy(desc(accountBalanceAdjustments.adjustedAt)) : [];
   const paidByExpense = new Map<string, number>();
   for (const row of allocations) paidByExpense.set(row.expenseId, (paidByExpense.get(row.expenseId) || 0) + n(row.allocatedAmount));
   const income = paymentRows.filter(({ payment }) => payment.paymentType === "customer_receipt").reduce((sum, row) => sum + n(row.payment.amount), 0);
@@ -76,7 +79,23 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   const sourceExpense = (sourceType: string, sourceId: string) => { const link = expenseSources.find((row) => row.sourceType === sourceType && row.sourceId === sourceId); return link ? expenseList.find((row) => row.id === link.expenseId) : undefined; };
   const salaryList = salaries.map(({ salary, ...rest }) => { const expense = sourceExpense("personnel_wage", salary.id); const daily = dailySalarySources.find((row) => row.salaryRecordId === salary.id); return { ...salary, ...rest, sourceType: daily ? "daily_visit" : "contract", sourceLabel: daily ? "مراجعه روزانه" : "قرارداد", sourceTitle: daily?.visitTitle || rest.projectTitle || "—", totalCalculated: n(salary.totalCalculated), paidAmount: expense?.paidAmount || 0, remainingAmount: expense?.remainingAmount ?? n(salary.totalCalculated) }; });
   const rentalList = rentals.map(({ rental, ...rest }) => { const expense = sourceExpense("rental", rental.id); return { ...rental, ...rest, rentalCost: n(rental.rentalCost), paidAmount: expense?.paidAmount || 0, remainingAmount: expense?.remainingAmount ?? n(rental.rentalCost) }; });
-  const installments = installmentRows.map((row) => ({ ...row, amount: n(row.amount), paidAmount: installmentAllocations.filter((a) => a.installmentId === row.id).reduce((s, a) => s + n(a.amount), 0) }));
+  const now = new Date();
+  const installments = installmentRows.map((row) => {
+    const contract = contracts.find((entry) => entry.contract.id === row.contractId)!;
+    const paidAmount = installmentAllocations.filter((a) => a.installmentId === row.id).reduce((s, a) => s + n(a.amount), 0);
+    const remainingAmount = Math.max(0, n(row.amount) - paidAmount);
+    const daysToDue = Math.ceil((new Date(row.dueDate).getTime() - now.getTime()) / 86_400_000);
+    const status = remainingAmount === 0 ? "paid" : paidAmount > 0 ? "partial" : daysToDue < 0 ? "overdue" : daysToDue <= 7 ? "due_soon" : "pending";
+    return { ...row, amount: n(row.amount), paidAmount, remainingAmount, status, daysToDue, customerName: contract.customerName, customerMobile: contract.customerMobile, contractNumber: contract.contract.contractNumber, projectTitle: contract.projectTitle, projectType: contract.projectType, programDate: contract.contract.programDate };
+  });
+  const contractFinance = contracts.map(({ contract, invoice, customerName, customerMobile, projectTitle, projectType }) => ({
+    id: contract.id, contractNumber: contract.contractNumber, customerName, customerMobile, projectTitle, projectType,
+    itemsSubtotal: contractItems.filter((row) => row.contractId === contract.id).reduce((sum, row) => sum + n(row.quantity) * n(row.unitPrice), 0),
+    discountAmount: n(contract.discountAmount), finalAmount: n(invoice?.grandTotal || contract.totalAmount), paidAmount: n(invoice?.paidAmount), remainingAmount: n(invoice?.balanceDue),
+    financialNotes: contract.financialNotes, programDate: contract.programDate,
+    receipts: receipts.filter((row) => row.invoiceId === contract.invoiceId),
+    corrections: correctionRows.filter((row) => row.entityId === contract.id && ["ATELIER_CONTRACT_FINANCE_UPDATED", "ATELIER_INSTALLMENTS_UPDATED"].includes(row.action)),
+  }));
   const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
   const receivedThisMonth = receipts.filter((row) => new Date(row.paymentDate) >= startOfMonth).reduce((sum, row) => sum + row.amount, 0);
   const paidThisMonth = outgoings.filter((row) => new Date(row.paymentDate) >= startOfMonth).reduce((sum, row) => sum + row.amount, 0);
@@ -101,9 +120,9 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   };
   return {
     summary: { liquidity: accountRows.reduce((sum, row) => sum + n(row.balance), 0), received: income, paid: outcome, receivable, payable, personnelDebt, rentalDebt, netCashflow: income - outcome, receivedThisMonth, paidThisMonth, expensesThisMonth, contractedThisMonth, estimatedProfitThisMonth },
-    accounts: accountRows.map((row) => ({ ...row, balance: n(row.balance) })), receipts, payments: outgoings, expenses: expenseList,
+    accounts: accountRows.map((row) => ({ ...row, balance: n(row.balance), adjustments: adjustmentRows.filter((item) => item.accountId === row.id) })), receipts, payments: outgoings, expenses: expenseList,
     receivables: contracts.filter((row) => row.invoice && n(row.invoice.balanceDue) > 0).map((row) => ({ contractId: row.contract.id, contractNumber: row.contract.contractNumber, projectTitle: row.projectTitle, customerName: row.customerName, dueDate: row.invoice!.dueDate, amount: n(row.invoice!.balanceDue) })), receivableSources,
-    payables: expenseList.filter((row) => row.remainingAmount > 0 && row.sourceType !== "personnel_wage"), salaries: salaryList, rentals: rentalList, profitability: profitRows, installments,
+    payables: expenseList.filter((row) => row.remainingAmount > 0 && row.sourceType !== "personnel_wage"), salaries: salaryList, rentals: rentalList, profitability: profitRows, installments, contractFinance,
     cashflow: buildCashflow(receipts, outgoings, installments, expenseList), forecast, reports,
   };
 }
@@ -168,6 +187,72 @@ export async function saveContractInstallments(actor: EmployeeContext, contractI
     const created = values.length ? await tx.insert(studioInstallments).values(values).returning() : [];
     await logAuditEvent("ATELIER_INSTALLMENTS_UPDATED", "studio_contract", contractId, { count: created.length, total }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
     return created;
+  });
+}
+
+export async function updateContractFinance(actor: EmployeeContext, contractId: string, input: Record<string, unknown>) {
+  assertUuid(contractId);
+  return db.transaction(async (tx) => {
+    const [contract] = await tx.select().from(studioContracts).where(eq(studioContracts.id, contractId)).for("update").limit(1);
+    if (!contract || contract.status !== "signed" || !contract.invoiceId) throw new ApiError(404, "پرونده مالی قرارداد یافت نشد.");
+    const [project] = await tx.select({ coreProjectId: studioProjects.projectId }).from(studioProjects).where(eq(studioProjects.id, contract.studioProjectId)).limit(1);
+    await assertFinanceScope(actor, project?.coreProjectId);
+    const [invoice] = await tx.select().from(invoices).where(eq(invoices.id, contract.invoiceId)).for("update").limit(1);
+    if (!invoice) throw new ApiError(422, "فاکتور قرارداد یافت نشد.");
+    const items = await tx.select().from(studioContractItems).where(eq(studioContractItems.contractId, contractId));
+    const subtotal = items.reduce((sum, row) => sum + n(row.quantity) * n(row.unitPrice), 0);
+    const discount = Number(decimal(input.discountAmount ?? contract.discountAmount, "تخفیف ثابت", 2));
+    if (discount < 0 || discount > subtotal) throw new ApiError(422, "تخفیف ثابت باید بین صفر و جمع آیتم‌های قرارداد باشد.");
+    const finalAmount = subtotal - discount;
+    const paidAmount = n(invoice.paidAmount);
+    if (paidAmount > finalAmount) throw new ApiError(422, "مبلغ دریافت‌شده از مبلغ نهایی جدید بیشتر می‌شود؛ ابتدا اصلاح یا برگشت دریافت را ثبت کنید.");
+    const installments = await tx.select().from(studioInstallments).where(eq(studioInstallments.contractId, contractId));
+    const installmentTotal = installments.reduce((sum, row) => sum + n(row.amount), 0);
+    if (installmentTotal > finalAmount) throw new ApiError(422, "جمع اقساط از مبلغ نهایی جدید بیشتر است؛ ابتدا برنامه اقساط را اصلاح کنید.");
+    const balanceDue = finalAmount - paidAmount;
+    const financialNotes = String(input.financialNotes ?? contract.financialNotes ?? "").trim() || null;
+    await tx.update(studioContracts).set({ discountAmount: discount.toFixed(2), totalAmount: finalAmount.toFixed(2), financialNotes, updatedAt: new Date() }).where(eq(studioContracts.id, contractId));
+    await tx.update(invoices).set({ subtotal: subtotal.toFixed(2), invoiceDiscount: discount.toFixed(2), grandTotal: finalAmount.toFixed(2), balanceDue: balanceDue.toFixed(2), paymentStatus: balanceDue === 0 ? "paid" : paidAmount > 0 ? "partial" : "unpaid", settlementDate: balanceDue === 0 ? invoice.settlementDate || new Date() : null, notes: financialNotes, updatedAt: new Date() }).where(eq(invoices.id, invoice.id));
+    await logAuditEvent("ATELIER_CONTRACT_FINANCE_UPDATED", "studio_contract", contractId, { before: { discountAmount: contract.discountAmount, totalAmount: contract.totalAmount, financialNotes: contract.financialNotes }, after: { discountAmount: discount, totalAmount: finalAmount, financialNotes }, paidAmount, balanceDue }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
+    return { subtotal, discountAmount: discount, finalAmount, paidAmount, balanceDue, financialNotes };
+  });
+}
+
+export async function payAtelierInstallment(actor: EmployeeContext, installmentId: string, input: Record<string, unknown>) {
+  assertUuid(installmentId);
+  const [record] = await db.select({ installment: studioInstallments, contract: studioContracts, coreProjectId: studioProjects.projectId }).from(studioInstallments).innerJoin(studioContracts, eq(studioContracts.id, studioInstallments.contractId)).innerJoin(studioProjects, eq(studioProjects.id, studioContracts.studioProjectId)).where(eq(studioInstallments.id, installmentId)).limit(1);
+  if (!record || !record.contract.invoiceId) throw new ApiError(404, "قسط قرارداد یافت نشد.");
+  await assertFinanceScope(actor, record.coreProjectId);
+  return createStudioPayment(record.contract.studioProjectId, {
+    amount: input.amount as number | string, accountId: String(input.accountId || ""), invoiceId: record.contract.invoiceId,
+    targetInstallmentId: installmentId, paidAt: input.paidAt ? new Date(String(input.paidAt)) : new Date(),
+    paymentMethod: String(input.paymentMethod || "card_transfer") as any, notes: String(input.notes || "") || undefined,
+    referenceCode: String(input.referenceNumber || "") || undefined, paymentType: "installment_1",
+    idempotencyKey: String(input.idempotencyKey || crypto.randomUUID()), actorId: actor.employeeId, authorName: actor.employeeName,
+  });
+}
+
+export async function adjustAtelierAccountBalance(actor: EmployeeContext, accountId: string, input: Record<string, unknown>) {
+  assertUuid(accountId);
+  const newBalance = Number(decimal(input.newBalance, "موجودی جدید", 2));
+  if (newBalance < 0) throw new ApiError(422, "موجودی جدید نمی‌تواند منفی باشد.");
+  const reason = String(input.reason || "").trim();
+  if (reason.length < 5) throw new ApiError(400, "دلیل اصلاح موجودی را کامل وارد کنید.");
+  const adjustedAt = input.adjustedAt ? new Date(String(input.adjustedAt)) : new Date();
+  if (Number.isNaN(adjustedAt.getTime())) throw new ApiError(400, "تاریخ اصلاح نامعتبر است.");
+  const idempotencyKey = String(input.idempotencyKey || crypto.randomUUID());
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`account-adjustment:${idempotencyKey}`}, 0))`);
+    const [prior] = await tx.select().from(accountBalanceAdjustments).where(eq(accountBalanceAdjustments.idempotencyKey, idempotencyKey)).limit(1);
+    if (prior) return prior;
+    const [account] = await tx.select().from(accounts).where(and(eq(accounts.id, accountId), eq(accounts.status, "active"))).for("update").limit(1);
+    if (!account) throw new ApiError(404, "حساب فعال یافت نشد.");
+    const oldBalance = n(account.balance), delta = newBalance - oldBalance;
+    if (delta === 0) throw new ApiError(422, "موجودی جدید با موجودی فعلی برابر است.");
+    const [adjustment] = await tx.insert(accountBalanceAdjustments).values({ accountId, oldBalance: oldBalance.toFixed(2), newBalance: newBalance.toFixed(2), delta: delta.toFixed(2), reason, adjustedAt, createdById: actor.employeeId, idempotencyKey }).returning();
+    await tx.update(accounts).set({ balance: newBalance.toFixed(2) }).where(eq(accounts.id, accountId));
+    await logAuditEvent("ATELIER_ACCOUNT_BALANCE_ADJUSTED", "account", accountId, { adjustmentId: adjustment.id, oldBalance, newBalance, delta, reason, adjustedAt }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
+    return adjustment;
   });
 }
 
