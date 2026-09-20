@@ -9,8 +9,12 @@ import {
   Search,
   UserRound,
   KeyRound,
+  WalletCards,
 } from "lucide-react";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
+import { toJalaliDate } from "@/lib/dateUtils";
+import { atelierToast } from "@/lib/atelierFeedback";
 import { AtelierModal } from "./AtelierModal";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 
@@ -64,7 +68,8 @@ export function PersonnelView() {
     [error, setError] = useState(""),
     [query, setQuery] = useState(""),
     [editing, setEditing] = useState<any | "new" | null>(null),
-    [accessPerson, setAccessPerson] = useState<any>(null);
+    [accessPerson, setAccessPerson] = useState<any>(null),
+    [financePerson, setFinancePerson] = useState<any>(null);
   const load = () => {
     setLoading(true);
     Promise.all([
@@ -120,7 +125,7 @@ export function PersonnelView() {
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((person) => (
-            <article key={person.id} className="atelier-panel p-4">
+            <article key={person.id} className="atelier-panel flex h-full flex-col p-4">
               <div className="flex items-start gap-3">
                 <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-red-950 bg-red-950/20">
                   <UserRound className="h-5 w-5 text-red-400" />
@@ -157,7 +162,7 @@ export function PersonnelView() {
               <p className="mt-2 text-xs text-zinc-500">
                 حقوق ثابت: <b className="text-zinc-300">{Number(person.fixedSalary || 0).toLocaleString("fa-IR")} تومان</b>
               </p>
-              <div className="mt-4 flex gap-2">
+              <div className="mt-auto flex flex-wrap gap-2 pt-4">
                 <button
                   onClick={() => setEditing(person)}
                   className="atelier-button-secondary flex-1"
@@ -165,6 +170,7 @@ export function PersonnelView() {
                   <Edit3 className="h-4 w-4" />
                   ویرایش
                 </button>
+                <button onClick={() => setFinancePerson(person)} className="atelier-button-secondary flex-1"><WalletCards className="h-4 w-4" />پرونده مالی</button>
                 <button
                   onClick={() => setAccessPerson(person)}
                   className="atelier-button flex-1"
@@ -190,8 +196,16 @@ export function PersonnelView() {
       {accessPerson && (
         <PersonnelAccessForm person={accessPerson} onClose={() => setAccessPerson(null)} />
       )}
+      {financePerson && <PersonnelFinanceFile person={financePerson} onClose={() => setFinancePerson(null)} />}
     </div>
   );
+}
+
+function PersonnelFinanceFile({ person, onClose }: { person: any; onClose: () => void }) {
+  const [from, setFrom] = useState<Date | null>(null), [to, setTo] = useState<Date | null>(null), [data, setData] = useState<any>(null), [error, setError] = useState("");
+  useEffect(() => { const query = new URLSearchParams(); if (from) query.set("from", from.toISOString()); if (to) { const end = new Date(to); end.setHours(23, 59, 59, 999); query.set("to", end.toISOString()); } fetch(`/api/atelier/personnel/${person.id}/finance?${query}`).then((response) => response.json()).then((body) => body.success ? (setData(body.file), setError("")) : setError(body.error || "دریافت پرونده مالی ممکن نشد.")).catch(() => setError("ارتباط با سرور برقرار نشد.")); }, [person.id, from, to]);
+  const money = (value: unknown) => `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
+  return <AtelierModal title={`پرونده مالی — ${person.fullName}`} onClose={onClose} wide><div className="space-y-5"><div className="grid gap-3 sm:grid-cols-2"><JalaliDatePicker label="از تاریخ" value={from} onChange={setFrom} /><JalaliDatePicker label="تا تاریخ" value={to} onChange={setTo} /></div>{error ? <ErrorState text={error} /> : !data ? <LoadingState /> : <><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{[["کل کارکرد", data.totals.earned], ["کل پرداخت شده", data.totals.paid], ["مانده پرداخت", data.totals.remaining], ["تعداد قرارداد", data.totals.contracts], ["تعداد مراجعات روزانه", data.totals.dailyVisits]].map(([label, value], index) => <div key={String(label)} className="rounded-2xl border border-zinc-800 bg-black/30 p-4"><span className="text-xs text-zinc-500">{label}</span><b className={`mt-2 block text-lg ${index === 2 ? "text-red-400" : "text-zinc-100"}`}>{index < 3 ? money(value) : Number(value).toLocaleString("fa-IR")}</b></div>)}</div><section><h3 className="font-black">تاریخچه کارکرد</h3><div className="mt-3 space-y-2">{data.history.map((row: any) => <div key={row.salaryRecordId} className="grid gap-2 rounded-xl border border-zinc-800 p-3 text-xs sm:grid-cols-6"><span>{toJalaliDate(row.date)}</span><span>{row.sourceType === "daily_visit" ? "مراجعه روزانه" : "قرارداد"}</span><span>{row.sourceTitle}</span><span>{row.workTitle}</span><span>{money(row.wage)}</span><span className="text-red-400">مانده: {money(row.remaining)}</span></div>)}</div></section><section><h3 className="font-black">تاریخچه پرداخت</h3><div className="mt-3 space-y-2">{data.paymentHistory.map((row: any) => <div key={row.id} className="rounded-xl border border-zinc-800 p-3 text-xs">{toJalaliDate(row.date)} — {money(row.amount)} — {row.accountName} — {row.relatedWork} — {row.notes || "بدون توضیح"}</div>)}{!data.paymentHistory.length && <p className="text-xs text-zinc-600">پرداختی ثبت نشده است.</p>}</div></section></>}</div></AtelierModal>;
 }
 
 export function EquipmentView() {
@@ -280,7 +294,7 @@ export function EquipmentView() {
                   onClick={async () => {
                     const data = await fetch(`/api/studio/equipment/${item.id}`).then((response) => response.json());
                     if (data.success) setUsageItem(data.equipment);
-                    else window.alert(data.error || "دریافت برنامه استفاده ممکن نشد.");
+                    else atelierToast(data.error || "دریافت برنامه استفاده ممکن نشد.", "error");
                   }}
                   className="atelier-button-secondary"
                 >
@@ -452,9 +466,7 @@ function PersonnelForm({
               throw new Error(data.error || "ذخیره انجام نشد.");
             onSaved();
           } catch (reason) {
-            window.alert(
-              reason instanceof Error ? reason.message : "ذخیره انجام نشد.",
-            );
+            atelierToast(reason instanceof Error ? reason.message : "ذخیره انجام نشد.", "error");
           } finally {
             setSaving(false);
           }
@@ -546,7 +558,7 @@ function PersonnelAccessForm({ person, onClose }: { person: any; onClose: () => 
           permissions: data.access?.permissions || [],
         });
       })
-      .catch((reason) => window.alert(reason instanceof Error ? reason.message : "دریافت دسترسی ممکن نشد."))
+      .catch((reason) => atelierToast(reason instanceof Error ? reason.message : "دریافت دسترسی ممکن نشد.", "error"))
       .finally(() => setLoading(false));
   }, [person.id]);
   return (
@@ -565,10 +577,10 @@ function PersonnelAccessForm({ person, onClose }: { person: any; onClose: () => 
               body: JSON.stringify({ ...form, password: form.password || undefined }),
             }).then((response) => response.json());
             if (!data.success) throw new Error(data.error || "ذخیره دسترسی انجام نشد.");
-            window.alert("حساب و دسترسی‌ها ذخیره شد.");
+            atelierToast("حساب و دسترسی‌ها ذخیره شد.", "success");
             onClose();
           } catch (reason) {
-            window.alert(reason instanceof Error ? reason.message : "ذخیره دسترسی انجام نشد.");
+            atelierToast(reason instanceof Error ? reason.message : "ذخیره دسترسی انجام نشد.", "error");
           } finally {
             setSaving(false);
           }
@@ -644,9 +656,7 @@ function EquipmentForm({
               throw new Error(data.error || "ذخیره انجام نشد.");
             onSaved();
           } catch (reason) {
-            window.alert(
-              reason instanceof Error ? reason.message : "ذخیره انجام نشد.",
-            );
+            atelierToast(reason instanceof Error ? reason.message : "ذخیره انجام نشد.", "error");
           } finally {
             setSaving(false);
           }

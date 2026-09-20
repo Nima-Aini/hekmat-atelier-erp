@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { canSeeAtelierSection } from "@/lib/atelierNavigation";
+import { AtelierFeedbackHost } from "@/components/atelier/AtelierFeedbackHost";
 
 interface AppLayoutProps {
   activeTab: string;
@@ -313,6 +314,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       <main className="app-main relative min-w-0 overflow-x-clip p-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-6 lg:ml-[17rem] lg:p-7">
         {children}
       </main>
+      <AtelierFeedbackHost />
     </div>
   );
 };

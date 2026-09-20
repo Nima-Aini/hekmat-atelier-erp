@@ -4,7 +4,7 @@ import { db } from "@/db";
 import {
   accounts, atelierExpenseSources, customers, expensePaymentAllocations, expenses, invoices, payments,
   personnelSalaryRecords, rentalEquipment, studioContracts, studioDailyVisits, studioInstallmentAllocations,
-  studioInstallments, studioPersonnel, studioProjects, studioProjectTypes, studioReservations,
+  studioInstallments, studioPersonnel, studioProjects, studioProjectTypes, studioReservations, studioDailyVisitPersonnel,
 } from "@/db/schema";
 import { ApiError, assertUuid, decimal } from "@/lib/apiError";
 import { canAccessPermission, type EmployeeContext } from "@/services/access";
@@ -43,6 +43,7 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   const visibleContractIds = new Set(contracts.map((row) => row.contract.id));
   const installmentRows = rawInstallmentRows.filter((row) => visibleContractIds.has(row.contractId));
   const allocations = await db.select().from(expensePaymentAllocations);
+  const dailySalarySources = rawSalaries.length ? await db.select({ salaryRecordId: studioDailyVisitPersonnel.salaryRecordId, visitTitle: studioDailyVisits.title }).from(studioDailyVisitPersonnel).innerJoin(studioDailyVisits, eq(studioDailyVisits.id, studioDailyVisitPersonnel.dailyVisitId)).where(inArray(studioDailyVisitPersonnel.salaryRecordId, rawSalaries.map((row) => row.salary.id))) : [];
   const expenseSources = await db.select().from(atelierExpenseSources);
   const installmentAllocations = await db.select().from(studioInstallmentAllocations);
   const paidByExpense = new Map<string, number>();
@@ -61,7 +62,6 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   const sourceByInvoice = new Map<string, { type: string; id: string; title: string }>();
   for (const { contract, projectTitle } of contracts) if (contract.invoiceId) sourceByInvoice.set(contract.invoiceId, { type: "contract", id: contract.id, title: `${contract.contractNumber} — ${projectTitle}` });
   for (const row of visits) if (row.invoiceId) sourceByInvoice.set(row.invoiceId, { type: "daily_visit", id: row.id, title: row.title });
-  for (const row of reservations) if (row.invoiceId) sourceByInvoice.set(row.invoiceId, { type: "reservation", id: row.id, title: row.title });
   const receipts = paymentRows.filter(({ payment }) => payment.paymentType === "customer_receipt").map(({ payment, accountName }) => ({ ...payment, amount: n(payment.amount), accountName, source: payment.invoiceId ? sourceByInvoice.get(payment.invoiceId) || null : null }));
   const outgoings = paymentRows.filter(({ payment }) => payment.paymentType !== "customer_receipt").map(({ payment, accountName }) => ({ ...payment, amount: n(payment.amount), accountName }));
   const expenseList = expenseRows.map(({ expense, accountName }) => { const source = expenseSources.find((row) => row.expenseId === expense.id); return { ...expense, amount: n(expense.amount), paidAmount: n(expense.paidAmount), remainingAmount: Math.max(0, n(expense.amount) - n(expense.paidAmount)), accountName, sourceType: source?.sourceType || null, sourceId: source?.sourceId || null }; });
@@ -71,11 +71,10 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   const receivableSources = [
     ...contracts.filter((row) => row.invoice && n(row.invoice.balanceDue) > 0).map((row) => ({ sourceType: "contract", sourceId: row.contract.id, title: `${row.contract.contractNumber} — ${row.customerName || row.projectTitle}`, remainingAmount: n(row.invoice!.balanceDue), dueDate: row.invoice!.dueDate })),
     ...visits.filter((row) => row.invoiceId && n(row.price) > n(row.paidAmount)).map((row) => ({ sourceType: "daily_visit", sourceId: row.id, title: `مراجعه: ${row.title} — ${row.customerName}`, remainingAmount: n(row.price) - n(row.paidAmount), dueDate: row.visitDate })),
-    ...reservations.filter((row) => row.invoiceId && n(row.price) > n(row.paidAmount)).map((row) => ({ sourceType: "reservation", sourceId: row.id, title: `رزرو: ${row.title} — ${row.customerName}`, remainingAmount: n(row.price) - n(row.paidAmount), dueDate: row.reservedAt })),
   ];
   const receivable = receivableSources.reduce((sum, row) => sum + row.remainingAmount, 0);
   const sourceExpense = (sourceType: string, sourceId: string) => { const link = expenseSources.find((row) => row.sourceType === sourceType && row.sourceId === sourceId); return link ? expenseList.find((row) => row.id === link.expenseId) : undefined; };
-  const salaryList = salaries.map(({ salary, ...rest }) => { const expense = sourceExpense("personnel_wage", salary.id); return { ...salary, ...rest, totalCalculated: n(salary.totalCalculated), paidAmount: expense?.paidAmount || 0, remainingAmount: expense?.remainingAmount ?? n(salary.totalCalculated) }; });
+  const salaryList = salaries.map(({ salary, ...rest }) => { const expense = sourceExpense("personnel_wage", salary.id); const daily = dailySalarySources.find((row) => row.salaryRecordId === salary.id); return { ...salary, ...rest, sourceType: daily ? "daily_visit" : "contract", sourceLabel: daily ? "مراجعه روزانه" : "قرارداد", sourceTitle: daily?.visitTitle || rest.projectTitle || "—", totalCalculated: n(salary.totalCalculated), paidAmount: expense?.paidAmount || 0, remainingAmount: expense?.remainingAmount ?? n(salary.totalCalculated) }; });
   const rentalList = rentals.map(({ rental, ...rest }) => { const expense = sourceExpense("rental", rental.id); return { ...rental, ...rest, rentalCost: n(rental.rentalCost), paidAmount: expense?.paidAmount || 0, remainingAmount: expense?.remainingAmount ?? n(rental.rentalCost) }; });
   const installments = installmentRows.map((row) => ({ ...row, amount: n(row.amount), paidAmount: installmentAllocations.filter((a) => a.installmentId === row.id).reduce((s, a) => s + n(a.amount), 0) }));
   const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
@@ -104,7 +103,7 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
     summary: { liquidity: accountRows.reduce((sum, row) => sum + n(row.balance), 0), received: income, paid: outcome, receivable, payable, personnelDebt, rentalDebt, netCashflow: income - outcome, receivedThisMonth, paidThisMonth, expensesThisMonth, contractedThisMonth, estimatedProfitThisMonth },
     accounts: accountRows.map((row) => ({ ...row, balance: n(row.balance) })), receipts, payments: outgoings, expenses: expenseList,
     receivables: contracts.filter((row) => row.invoice && n(row.invoice.balanceDue) > 0).map((row) => ({ contractId: row.contract.id, contractNumber: row.contract.contractNumber, projectTitle: row.projectTitle, customerName: row.customerName, dueDate: row.invoice!.dueDate, amount: n(row.invoice!.balanceDue) })), receivableSources,
-    payables: expenseList.filter((row) => row.remainingAmount > 0), salaries: salaryList, rentals: rentalList, profitability: profitRows, installments,
+    payables: expenseList.filter((row) => row.remainingAmount > 0 && row.sourceType !== "personnel_wage"), salaries: salaryList, rentals: rentalList, profitability: profitRows, installments,
     cashflow: buildCashflow(receipts, outgoings, installments, expenseList), forecast, reports,
   };
 }

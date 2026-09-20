@@ -8,7 +8,7 @@ vi.mock("@/services/access", () => ({
 }));
 
 import { GET as neshanRoute } from "../src/app/api/maps/neshan/route";
-import { missingRequiredMigrations } from "../src/app/api/readiness/route";
+import { missingRequiredMigrations } from "../src/lib/readiness";
 import { requiredMigrationIds } from "../src/db/migrations";
 
 describe("production credential hardening", () => {

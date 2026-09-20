@@ -35,7 +35,7 @@ const WEEKDAYS = [
   "جمعه",
 ];
 
-export function FinalCalendar() {
+export function FinalCalendar({ onOpenPlanning }: { onOpenPlanning?: (id: string) => void }) {
   const today = gregorianToJalali(new Date());
   const [view, setView] = useState({ year: today.year, month: today.month });
   const [data, setData] = useState<any>(null),
@@ -180,8 +180,9 @@ export function FinalCalendar() {
           ) : (
             <div className="grid gap-3 md:grid-cols-2">
               {selected.contracts.map((contract: any) => (
-                <article
+                <button
                   key={contract.id}
+                  onClick={() => onOpenPlanning?.(contract.id)}
                   className="rounded-xl border border-zinc-800 bg-black/35 p-3"
                 >
                   <strong>{contract.customer.name}</strong>
@@ -192,7 +193,7 @@ export function FinalCalendar() {
                   <p className="mt-1 text-xs text-zinc-500">
                     {contract.executionLocation || "محل ثبت نشده"}
                   </p>
-                </article>
+                </button>
               ))}
             </div>
           )}

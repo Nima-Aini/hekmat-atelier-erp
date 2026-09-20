@@ -12,12 +12,13 @@ import {
 import type { EmployeeContext } from "../src/services/access";
 import {
   addRentalRequirement, approveContract, assignEquipmentToItem, assignPersonnelToItem,
-  completeReservation, createPendingContract, getPlanning, listDailyVisits, listReservations,
+  completeReservation, convertReservationToDailyVisit, createPendingContract, getPlanning, listDailyVisits, listReservations,
   markRentalAsRented, saveDailyVisit, saveReservation, updateContract,
 } from "../src/services/studio/finalWorkflow";
-import { getFinalCalendar, getFinalNotifications, listContractCustomers } from "../src/services/studio/finalInsights";
+import { getFinalCalendar, getFinalNotifications, listContractCustomers, setNotificationArchived } from "../src/services/studio/finalInsights";
 import { createStudioEquipment } from "../src/services/studio/equipmentService";
 import { createStudioPersonnel } from "../src/services/studio/personnelService";
+import { recordAtelierReceipt } from "../src/services/studio/financeCenter";
 
 const actorId = "c7000000-0000-4000-8000-000000000001";
 const actor: EmployeeContext = { employeeId: actorId, employeeName: "مدیر تست جریان نهایی", permissions: new Set(["*"]) };
@@ -45,14 +46,19 @@ describe("Final Iranian atelier workflow", () => {
       contractDate: new Date(), programDate: date, programEndDate: new Date(+date + 5 * 3600000), executionLocation: "باغ تست",
       typeMetadata: { brideName: "سارا", groomName: "احمد", venue: "باغ تست" },
       items: [{ title: "عکاسی", quantity: 1, unitPrice: 60_000_000 }, { title: "فیلمبرداری", quantity: 1, unitPrice: 30_000_000 }, { title: "پهپاد", quantity: 1, unitPrice: 10_000_000 }],
+      discountAmount: 10_000_000,
       paidAmount: 30_000_000, paymentAccountId: accountId,
     });
-    expect(contract).toMatchObject({ status: "draft", paidAmount: 30_000_000, remainingAmount: 70_000_000 });
+    expect(contract).toMatchObject({ status: "draft", itemsTotal: 100_000_000, totalAmount: "90000000.00", paidAmount: 30_000_000, remainingAmount: 60_000_000 });
     expect(contract.typeMetadata).toMatchObject({ brideName: "سارا", groomName: "احمد" });
     expect(contract.items).toHaveLength(3);
 
     const replay = await createPendingContract(actor, { idempotencyKey: contract.idempotencyKey, projectTypeId: typeId, customerName: "تکراری", mobile, programDate: date, items: [{ title: "تکراری", unitPrice: 1 }] });
     expect(replay.id).toBe(contract.id);
+    await expect(createPendingContract(actor, {
+      idempotencyKey: randomUUID(), projectTypeId: typeId, customerName: "تخفیف نامعتبر", mobile: `0917${Date.now().toString().slice(-7)}`,
+      programDate: date, items: [{ title: "آیتم", unitPrice: 1_000_000 }], discountAmount: 1_000_001,
+    })).rejects.toThrow("بیشتر از جمع آیتم‌ها");
     expect(await db.select().from(customers).where(eq(customers.mobile, mobile))).toHaveLength(1);
     expect(await db.select().from(studioCustomers).where(eq(studioCustomers.id, contract.customer.studioCustomerId))).toHaveLength(1);
   });
@@ -66,7 +72,8 @@ describe("Final Iranian atelier workflow", () => {
     expect(approved.status).toBe("signed");
     expect(replay.invoiceId).toBe(approved.invoiceId);
     expect(approved.paidAmount).toBe(30_000_000);
-    expect(approved.remainingAmount).toBe(70_000_000);
+    expect(approved.remainingAmount).toBe(60_000_000);
+    expect(approved.discountAmount).toBe("10000000.00");
     expect(await db.select().from(invoices).where(eq(invoices.id, approved.invoiceId!))).toHaveLength(1);
     expect(await db.select().from(studioCalendarEvents).where(eq(studioCalendarEvents.contractId, approved.id))).toHaveLength(1);
     await expect(updateContract(actor, contract.id, { items: [{ title: "تغییر غیرمجاز", unitPrice: 1 }] })).rejects.toThrow("تأییدشده");
@@ -86,7 +93,10 @@ describe("Final Iranian atelier workflow", () => {
     const [wageExpense] = await db.select().from(expenses).where(eq(expenses.id, wageSource.expenseId));
     expect(wageExpense).toMatchObject({ paymentStatus: "unpaid", paidAmount: "0.00" });
     expect(Number(wageExpense.amount)).toBe(5_000_000);
-    await expect(assignPersonnelToItem(actor, video.id, { personnelId: person.id, startsAt, endsAt, wageAmount: 7_000_000 })).rejects.toThrow("برنامه دیگری");
+    await expect(assignPersonnelToItem(actor, video.id, { personnelId: person.id, startsAt, endsAt, wageAmount: 7_000_000 })).resolves.toBeTruthy();
+    const other = await createPendingContract(actor, { idempotencyKey: randomUUID(), projectTypeId: typeId, customerName: "تداخل قرارداد دیگر", mobile: `0918${Date.now().toString().slice(-7)}`, programDate: startsAt, programEndDate: endsAt, items: [{ title: "کار همزمان", quantity: 1, unitPrice: 1_000_000 }] });
+    const approvedOther = await approveContract(actor, other.id);
+    await expect(assignPersonnelToItem(actor, approvedOther.items[0].id, { personnelId: person.id, startsAt, endsAt, wageAmount: 1_000_000 })).rejects.toThrow("برنامه دیگری");
     await assignEquipmentToItem(actor, photo.id, { equipmentId: equipment.id, startsAt, endsAt });
     await expect(assignEquipmentToItem(actor, video.id, { equipmentId: equipment.id, startsAt, endsAt })).rejects.toThrow("تداخل زمانی");
     expect(await db.select().from(equipmentReservations).where(eq(equipmentReservations.contractItemId, photo.id))).toHaveLength(1);
@@ -99,10 +109,17 @@ describe("Final Iranian atelier workflow", () => {
     const [rentalSource] = await db.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "rental"), eq(atelierExpenseSources.sourceId, rental.id)));
     expect(Number((await db.select().from(expenses).where(eq(expenses.id, rentalSource.expenseId)))[0].amount)).toBe(4_000_000);
     const before = await getFinalNotifications(null);
-    expect(before.some((item) => item.id === `rental:${rental.id}` && item.priority === "critical" && String(item.message).includes("پهپاد حرفه‌ای"))).toBe(true);
+    const reminder = before.find((item) => item.conditionKey === `rental:${rental.id}`) as any;
+    expect(reminder?.priority).toBe("critical");
+    expect(String(reminder?.message)).toContain("پهپاد حرفه‌ای");
+    await setNotificationArchived(actor, reminder!.id, true);
+    expect((await getFinalNotifications(null)).some((item) => item.id === reminder!.id)).toBe(false);
+    expect((await getFinalNotifications(null, true)).some((item) => item.id === reminder!.id)).toBe(true);
+    await setNotificationArchived(actor, reminder!.id, false);
+    expect((await getFinalNotifications(null)).some((item) => item.id === reminder!.id)).toBe(true);
     await markRentalAsRented(actor, rental.id, 3_500_000);
     const after = await getFinalNotifications(null);
-    expect(after.some((item) => item.id === `rental:${rental.id}`)).toBe(false);
+    expect(after.some((item) => item.conditionKey === `rental:${rental.id}`)).toBe(false);
     const [stored] = await db.select().from(rentalEquipment).where(eq(rentalEquipment.id, rental.id));
     expect(stored).toMatchObject({ status: "rented", markedRentedById: actorId });
     expect(Number((await db.select().from(expenses).where(eq(expenses.id, rentalSource.expenseId)))[0].amount)).toBe(3_500_000);
@@ -114,13 +131,32 @@ describe("Final Iranian atelier workflow", () => {
     const visit = await saveDailyVisit(actor, { title: "عکس پرسنلی", date: new Date(), price: 2_000_000, paidAmount: 500_000, customerName: "مراجعه تست", mobile: visitMobile, accountId });
     expect(visit.remainingAmount).toBe(1_500_000);
     expect((await listDailyVisits()).some((row) => row.id === visit.id)).toBe(true);
-    const reservation = await saveReservation(actor, { title: "رزرو پرتره", date: tomorrow(), price: 5_000_000, paidAmount: 1_000_000, customerName: "رزرو تست", mobile: reservationMobile, accountId });
-    expect(reservation.remainingAmount).toBe(4_000_000);
+    const balanceBefore = Number((await db.select().from(accounts).where(eq(accounts.id, accountId)))[0].balance);
+    const secondKey = randomUUID(), secondDate = new Date();
+    const second = await recordAtelierReceipt(actor, { sourceType: "daily_visit", sourceId: visit.id, accountId, amount: 750_000, paidAt: secondDate, idempotencyKey: secondKey });
+    const replay = await recordAtelierReceipt(actor, { sourceType: "daily_visit", sourceId: visit.id, accountId, amount: 750_000, paidAt: secondDate, idempotencyKey: secondKey });
+    expect(replay.id).toBe(second.id);
+    await recordAtelierReceipt(actor, { sourceType: "daily_visit", sourceId: visit.id, accountId, amount: 750_000, idempotencyKey: randomUUID() });
+    const paidVisit = (await listDailyVisits()).find((row) => row.id === visit.id)!;
+    expect(paidVisit).toMatchObject({ paidAmount: 2_000_000, remainingAmount: 0 });
+    expect(paidVisit.paymentHistory).toHaveLength(3);
+    expect(Number((await db.select().from(accounts).where(eq(accounts.id, accountId)))[0].balance) - balanceBefore).toBe(1_500_000);
+    await expect(recordAtelierReceipt(actor, { sourceType: "daily_visit", sourceId: visit.id, accountId, amount: 1, idempotencyKey: randomUUID() })).rejects.toThrow();
+    const reservation = await saveReservation(actor, { title: "رزرو پرتره", date: tomorrow(), customerName: "رزرو تست", mobile: reservationMobile });
+    expect(reservation.remainingAmount).toBe(0);
+    expect(reservation.invoiceId).toBeNull();
     await completeReservation(actor, reservation.id);
-    expect((await listReservations()).find((row) => row.id === reservation.id)?.status).toBe("completed");
-    expect(await db.select().from(studioReservations).where(eq(studioReservations.id, reservation.id))).toHaveLength(1);
+    expect((await listReservations()).find((row) => row.id === reservation.id)).toBeUndefined();
+    expect(await db.select().from(studioReservations).where(eq(studioReservations.id, reservation.id))).toHaveLength(0);
+    const convertible = await saveReservation(actor, { title: "رزرو قابل انتقال", date: tomorrow(), customerName: "انتقال تست", mobile: `0991${Date.now().toString().slice(-7)}` });
+    await expect(convertReservationToDailyVisit(actor, convertible.id, { price: 100_000, paidAmount: 100_001, accountId })).rejects.toThrow();
+    expect(await db.select().from(studioReservations).where(eq(studioReservations.id, convertible.id))).toHaveLength(1);
+    const converted = await convertReservationToDailyVisit(actor, convertible.id, { price: 100_000, paidAmount: 0 });
+    expect(converted.title).toBe("رزرو قابل انتقال");
+    expect(await db.select().from(studioReservations).where(eq(studioReservations.id, convertible.id))).toHaveLength(0);
+    expect((await convertReservationToDailyVisit(actor, convertible.id, { price: 100_000, paidAmount: 0 })).id).toBe(converted.id);
     const simpleCustomers = await db.select().from(customers).where(sql`${customers.mobile} IN (${visitMobile},${reservationMobile})`);
-    expect(simpleCustomers).toHaveLength(2);
+    expect(simpleCustomers).toHaveLength(1);
     expect(await db.select().from(studioCustomers).where(inArray(studioCustomers.customerId, simpleCustomers.map((row) => row.id)))).toHaveLength(0);
   });
 

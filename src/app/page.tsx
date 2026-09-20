@@ -56,9 +56,9 @@ export default function HomePage() {
       case "reservations":
         return <SimpleRecordsView kind="reservations" />;
       case "planning":
-        return <PlanningView />;
+        return <PlanningView onEditContract={(id) => { setActiveTab("contracts"); window.setTimeout(() => window.dispatchEvent(new CustomEvent("akma:navigate-item", { detail: { id } })), 50); }} />;
       case "calendar":
-        return <FinalCalendar />;
+        return <FinalCalendar onOpenPlanning={(id) => { sessionStorage.setItem("akma:planning-target", id); setActiveTab("planning"); window.setTimeout(() => window.dispatchEvent(new CustomEvent("akma:navigate-item", { detail: { id } })), 50); }} />;
       case "customers":
         return <ContractCustomersView />;
       case "personnel":
