@@ -23,7 +23,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css"
         />
       </head>
-      <body className={`${vazirmatn.className} bg-[#050506] text-zinc-100 antialiased`}>
+      <body className={`${vazirmatn.className} text-zinc-100 antialiased`}>
         {children}
       </body>
     </html>

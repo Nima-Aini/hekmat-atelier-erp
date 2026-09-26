@@ -11,6 +11,8 @@ const rule = (selector: string) => {
 
 describe("Dashboard and Financial neutral-black theme", () => {
   it("defines one shared neutral palette", () => {
+    const layout = readFileSync(new URL("../src/app/layout.tsx", import.meta.url), "utf8");
+    expect(layout).not.toContain("bg-[#050506]");
     for (const [token, color] of Object.entries({
       "--app-bg": "#050505",
       "--surface-1": "#0c0d0f",
