@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/services/access";
+import { canAccessPermission, getScopedProjectIds, requirePermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import {
   listStudioProjects,
@@ -8,7 +8,8 @@ import {
 
 export async function GET(req: NextRequest) {
   try {
-    await requirePermission("studio.view");
+    const actor = await requirePermission("studio.view");
+    const allowedCoreProjectIds = await getScopedProjectIds();
     const { searchParams } = new URL(req.url);
 
     const search = searchParams.get("search") || undefined;
@@ -25,7 +26,11 @@ export async function GET(req: NextRequest) {
       customerId,
       page,
       pageSize,
+      allowedCoreProjectIds,
     });
+    (result as any).projects = await Promise.all(result.projects.map(async (project) => (await canAccessPermission(actor, "studio.contract.view", (project as any).projectId))
+      ? project
+      : { ...project, totalContractValue: null }));
 
     return NextResponse.json({ success: true, ...result });
   } catch (error) {
@@ -35,10 +40,11 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requirePermission("studio.projects.manage");
+    const context = await requirePermission("studio.projects.manage");
     const body = await req.json();
+    if (body.coreProjectId) await requirePermission("studio.projects.manage", body.coreProjectId);
 
-    const created = await createStudioProject(body);
+    const created = await createStudioProject({ ...body, actorId: context.employeeId, authorName: context.employeeName });
     return NextResponse.json({ success: true, project: created }, { status: 201 });
   } catch (error) {
     return apiError(error, "ایجاد پروژه جدید در آتلیه");

@@ -18,7 +18,7 @@ export async function GET(req: Request) {
           neshanApiKey: settings.neshanApiKey ? "••••••••" : "",
         }
       : {
-          businessName: "سازمان و کسب‌وکار حکمت آکما",
+          businessName: "حکمت آتلیه",
           economicCode: "",
           nationalId: "",
           registrationNumber: "",

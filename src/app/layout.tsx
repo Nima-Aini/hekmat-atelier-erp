@@ -10,8 +10,8 @@ const vazirmatn = Vazirmatn({
 });
 
 export const metadata: Metadata = {
-  title: "Hekmat Akma Management System",
-  description: "سیستم یکپارچه مدیریت عملیات، حسابداری، انبار و CRM حکمت آکما",
+  title: "حکمت آتلیه | Hekmat Atelier",
+  description: "سیستم یکپارچه قرارداد، برنامه‌ریزی، مشتریان و تجهیزات آتلیه",
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -23,7 +23,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css"
         />
       </head>
-      <body className={`${vazirmatn.className} bg-slate-950 text-slate-100 antialiased`}>
+      <body className={`${vazirmatn.className} text-zinc-100 antialiased`}>
         {children}
       </body>
     </html>

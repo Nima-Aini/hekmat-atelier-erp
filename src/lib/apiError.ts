@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
+import { randomUUID } from "node:crypto";
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) { super(message); }
+  constructor(public status: number, message: string, public code?: string) { super(message); }
 }
 
 type PostgreSqlError = {
@@ -11,6 +12,11 @@ type PostgreSqlError = {
   detail?: unknown;
   message?: unknown;
 };
+
+function safeDiagnostic(error: unknown) {
+  const value = error instanceof Error ? error : new Error(String(error));
+  return { name: value.name, message: value.message.replace(/postgres(?:ql)?:\/\/[^\s@]+@/gi, "postgresql://[REDACTED]@") };
+}
 
 function postgresError(error: unknown): PostgreSqlError | null {
   let current: unknown = error;
@@ -27,26 +33,28 @@ function postgresError(error: unknown): PostgreSqlError | null {
 }
 
 export function apiError(error: unknown, operation = "انجام عملیات") {
-  if (error instanceof ApiError) return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+  if (error instanceof ApiError) return NextResponse.json({ success: false, error: error.message, ...(error.code ? { code: error.code } : {}) }, { status: error.status });
   const pg = postgresError(error);
   const code = typeof pg?.code === "string" ? pg.code : undefined;
   // PostgreSQL metadata is useful on the server, but SQL text and parameters
   // must never be reflected to the browser.
+  const correlationId = randomUUID();
   if (pg) {
     console.error("PostgreSQL operation failed:", {
+      correlationId,
       operation,
       code,
       constraint: pg.constraint,
       table: pg.table,
       detail: pg.detail,
-      message: pg.message,
+      message: typeof pg.message === "string" ? safeDiagnostic(new Error(pg.message)).message : undefined,
     });
   } else {
-    console.error("API operation failed:", { operation, error });
+    console.error("API operation failed:", { correlationId, operation, error: safeDiagnostic(error) });
   }
   const status = code === "23505" || code === "23503" ? 409 : error instanceof SyntaxError || code === "22P02" || code === "22003" ? 400 : 500;
-  const message = code === "23505" ? "اطلاعات تکراری است؛ کد یا شماره دیگری انتخاب کنید." : code === "23503" ? "این رکورد دارای اطلاعات وابسته است و عملیات فعلی قابل انجام نیست." : status === 400 ? "اطلاعات ارسالی معتبر نیست." : `خطا در ${operation}؛ لطفاً دوباره تلاش کنید.`;
-  return NextResponse.json({ success: false, error: message }, { status });
+  const message = code === "23505" ? "اطلاعات تکراری است؛ کد یا شماره دیگری انتخاب کنید." : code === "23503" ? "این رکورد دارای اطلاعات وابسته است و عملیات فعلی قابل انجام نیست." : status === 400 ? "اطلاعات ارسالی معتبر نیست." : "خطای غیرمنتظره در سرور رخ داد.";
+  return NextResponse.json({ success: false, error: message, reference: correlationId }, { status });
 }
 
 export function assertUuid(value: unknown): asserts value is string {

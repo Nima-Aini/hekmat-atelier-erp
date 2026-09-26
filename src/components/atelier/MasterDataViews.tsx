@@ -1,0 +1,801 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import {
+  CalendarDays,
+  Camera,
+  Edit3,
+  Plus,
+  Search,
+  UserRound,
+  KeyRound,
+  WalletCards,
+} from "lucide-react";
+import { MoneyInput } from "@/components/ui/MoneyInput";
+import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
+import { toJalaliDate } from "@/lib/dateUtils";
+import { atelierToast } from "@/lib/atelierFeedback";
+import { AtelierModal } from "./AtelierModal";
+import { EmptyState, ErrorState, LoadingState } from "./StatusView";
+
+const ROLES: Record<string, string> = {
+  photographer: "عکاسی",
+  videographer: "فیلمبرداری",
+  assistant: "دستیار",
+  drone_operator: "پهپاد",
+  lighting_tech: "نورپردازی",
+  retoucher: "رتوش",
+  editor: "تدوین",
+  director: "مدیریت اجرا",
+  sound_engineer: "صدا",
+  other: "سایر",
+};
+const TYPES: Record<string, string> = {
+  employee: "ثابت",
+  temporary_worker: "موقت",
+  project_based: "پروژه‌ای",
+};
+const CATEGORIES: Record<string, string> = {
+  camera: "دوربین",
+  lens: "لنز",
+  light: "نور",
+  lighting: "فلاش",
+  tripod_support: "سه پایه",
+  gimbal_stabilizer: "گیمبال",
+  sound_mic: "میکروفون",
+  audio: "رکوردر",
+  drone: "پهپاد",
+  battery_power: "حافظه / باتری",
+  studio: "تجهیزات تدوین",
+  accessory: "لوازم جانبی",
+  general: "سایر",
+};
+const STATUS: Record<string, string> = {
+  healthy: "آماده",
+  needs_service: "تعمیر",
+  damaged: "خراب",
+  retired: "خارج از سرویس",
+  in_studio: "آماده",
+  reserved: "رزرو شده",
+  on_set: "در حال استفاده",
+  maintenance: "تعمیر",
+};
+
+export function PersonnelView() {
+  const [rows, setRows] = useState<any[]>([]),
+    [assignmentCounts, setAssignmentCounts] = useState<Record<string, number>>({}),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(""),
+    [query, setQuery] = useState(""),
+    [editing, setEditing] = useState<any | "new" | null>(null),
+    [accessPerson, setAccessPerson] = useState<any>(null),
+    [financePerson, setFinancePerson] = useState<any>(null);
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      fetch("/api/studio/personnel?pageSize=100").then((r) => r.json()),
+      fetch("/api/atelier/planning").then((r) => r.json()),
+    ])
+      .then(([data, planningData]) => {
+        if (!data.success)
+          throw new Error(data.error || "دریافت پرسنل ممکن نشد.");
+        setRows(data.personnel || []);
+        const counts: Record<string, number> = {};
+        for (const contract of planningData.planning?.contracts || [])
+          for (const item of contract.items || [])
+            for (const assignment of item.personnelAssignments || [])
+              counts[assignment.personnelId] =
+                (counts[assignment.personnelId] || 0) + 1;
+        setAssignmentCounts(counts);
+        setError("");
+      })
+      .catch((reason) => setError(reason.message))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+  const filtered = useMemo(
+    () =>
+      rows.filter((row) =>
+        `${row.fullName} ${row.mobile} ${ROLES[row.primaryRole] || row.primaryRole}`.includes(
+          query,
+        ),
+      ),
+    [rows, query],
+  );
+  return (
+    <div className="space-y-5">
+      <Header
+        kicker="افراد قابل انتخاب در برنامه ریزی"
+        title="پرسنل"
+        description="پرسنل ثابت، موقت و پروژه‌ای با تخصص، حقوق ثابت و دسترسی کنترل‌شده"
+        action="پرسنل جدید"
+        onAdd={() => setEditing("new")}
+      />
+      <SearchBox
+        value={query}
+        set={setQuery}
+        placeholder="جستجوی نام، تماس یا تخصص"
+      />
+      {loading ? (
+        <LoadingState />
+      ) : error ? (
+        <ErrorState text={error} retry={load} />
+      ) : !filtered.length ? (
+        <EmptyState text="پرسنلی ثبت نشده است." />
+      ) : (
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {filtered.map((person) => (
+            <article key={person.id} className="atelier-panel flex h-full flex-col p-4">
+              <div className="flex items-start gap-3">
+                <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-red-950 bg-red-950/20">
+                  <UserRound className="h-5 w-5 text-red-400" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <h2 className="truncate font-black">{person.fullName}</h2>
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {TYPES[person.personnelType] || "پروژه‌ای"} •{" "}
+                    {ROLES[person.primaryRole] || person.primaryRole}
+                  </p>
+                  <p className="mt-1 text-xs text-zinc-600" dir="ltr">
+                    {person.mobile}
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-2 py-1 text-[10px] ${person.status === "active" ? "bg-emerald-950 text-emerald-400" : "bg-zinc-900 text-zinc-500"}`}
+                >
+                  {person.status === "active" ? "فعال" : "غیرفعال"}
+                </span>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-1">
+                {(person.skills || []).map((skill: any) => (
+                  <span
+                    key={skill.id}
+                    className="rounded-lg border border-zinc-800 px-2 py-1 text-[10px] text-zinc-400"
+                  >
+                    {skill.skillTitle}
+                  </span>
+                ))}
+              </div>
+              <p className="mt-3 text-xs text-zinc-500">
+                برنامه‌های فعال و پیش رو: {Number(assignmentCounts[person.id] || 0).toLocaleString("fa-IR")}
+              </p>
+              <p className="mt-2 text-xs text-zinc-500">
+                حقوق ثابت: <b className="text-zinc-300">{Number(person.fixedSalary || 0).toLocaleString("fa-IR")} تومان</b>
+              </p>
+              <div className="mt-auto flex flex-wrap gap-2 pt-4">
+                <button
+                  onClick={() => setEditing(person)}
+                  className="atelier-button-secondary flex-1"
+                >
+                  <Edit3 className="h-4 w-4" />
+                  ویرایش
+                </button>
+                <button onClick={() => setFinancePerson(person)} className="atelier-button-secondary flex-1"><WalletCards className="h-4 w-4" />پرونده مالی</button>
+                <button
+                  onClick={() => setAccessPerson(person)}
+                  className="atelier-button flex-1"
+                >
+                  <KeyRound className="h-4 w-4" />
+                  حساب و دسترسی
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      {editing && (
+        <PersonnelForm
+          initial={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}{" "}
+      {accessPerson && (
+        <PersonnelAccessForm person={accessPerson} onClose={() => setAccessPerson(null)} />
+      )}
+      {financePerson && <PersonnelFinanceFile person={financePerson} onClose={() => setFinancePerson(null)} />}
+    </div>
+  );
+}
+
+function PersonnelFinanceFile({ person, onClose }: { person: any; onClose: () => void }) {
+  const [from, setFrom] = useState<Date | null>(null), [to, setTo] = useState<Date | null>(null), [data, setData] = useState<any>(null), [error, setError] = useState("");
+  useEffect(() => { const query = new URLSearchParams(); if (from) query.set("from", from.toISOString()); if (to) { const end = new Date(to); end.setHours(23, 59, 59, 999); query.set("to", end.toISOString()); } fetch(`/api/atelier/personnel/${person.id}/finance?${query}`).then((response) => response.json()).then((body) => body.success ? (setData(body.file), setError("")) : setError(body.error || "دریافت پرونده مالی ممکن نشد.")).catch(() => setError("ارتباط با سرور برقرار نشد.")); }, [person.id, from, to]);
+  const money = (value: unknown) => `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
+  return <AtelierModal title={`پرونده مالی — ${person.fullName}`} onClose={onClose} wide><div className="space-y-5"><div className="grid gap-3 sm:grid-cols-2"><JalaliDatePicker label="از تاریخ" value={from} onChange={setFrom} /><JalaliDatePicker label="تا تاریخ" value={to} onChange={setTo} /></div>{error ? <ErrorState text={error} /> : !data ? <LoadingState /> : <><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{[["کل کارکرد", data.totals.earned], ["کل پرداخت شده", data.totals.paid], ["مانده پرداخت", data.totals.remaining], ["تعداد قرارداد", data.totals.contracts], ["تعداد مراجعات روزانه", data.totals.dailyVisits]].map(([label, value], index) => <div key={String(label)} className="rounded-2xl border border-zinc-800 bg-black/30 p-4"><span className="text-xs text-zinc-500">{label}</span><b className={`mt-2 block text-lg ${index === 2 ? "text-red-400" : "text-zinc-100"}`}>{index < 3 ? money(value) : Number(value).toLocaleString("fa-IR")}</b></div>)}</div><section><h3 className="font-black">تاریخچه کارکرد</h3><div className="mt-3 space-y-2">{data.history.map((row: any) => <div key={row.salaryRecordId} className="grid gap-2 rounded-xl border border-zinc-800 p-3 text-xs sm:grid-cols-6"><span>{toJalaliDate(row.date)}</span><span>{row.sourceType === "daily_visit" ? "مراجعه روزانه" : "قرارداد"}</span><span>{row.sourceTitle}</span><span>{row.workTitle}</span><span>{money(row.wage)}</span><span className="text-red-400">مانده: {money(row.remaining)}</span></div>)}</div></section><section><h3 className="font-black">تاریخچه پرداخت</h3><div className="mt-3 space-y-2">{data.paymentHistory.map((row: any) => <div key={row.id} className="rounded-xl border border-zinc-800 p-3 text-xs">{toJalaliDate(row.date)} — {money(row.amount)} — {row.accountName} — {row.relatedWork} — {row.notes || "بدون توضیح"}</div>)}{!data.paymentHistory.length && <p className="text-xs text-zinc-600">پرداختی ثبت نشده است.</p>}</div></section></>}</div></AtelierModal>;
+}
+
+export function EquipmentView() {
+  const [rows, setRows] = useState<any[]>([]),
+    [loading, setLoading] = useState(true),
+    [error, setError] = useState(""),
+    [query, setQuery] = useState(""),
+    [editing, setEditing] = useState<any | "new" | null>(null),
+    [usageItem, setUsageItem] = useState<any | null>(null),
+    [configuredCategories, setConfiguredCategories] = useState<string[]>([]);
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      fetch("/api/studio/equipment?pageSize=100").then((r) => r.json()),
+      fetch("/api/atelier/settings").then((r) => r.json()),
+    ])
+      .then(([data, settings]) => {
+        if (!data.success) throw new Error(data.error || "دریافت تجهیزات ممکن نشد.");
+        setRows(data.equipment || []);
+        setConfiguredCategories(settings.config?.equipment?.categories || []);
+        setError("");
+      })
+      .catch((reason) => setError(reason.message))
+      .finally(() => setLoading(false));
+  };
+  useEffect(load, []);
+  const filtered = useMemo(
+    () =>
+      rows.filter((row) =>
+        `${row.title} ${row.code} ${row.serialNumber || ""}`.includes(query),
+      ),
+    [rows, query],
+  );
+  return (
+    <div className="space-y-5">
+      <Header
+        kicker="دارایی‌های قابل تخصیص در برنامه ریزی"
+        title="تجهیزات"
+        description="فهرست تجهیزات آتلیه، وضعیت و آمادگی استفاده"
+        action="تجهیزات جدید"
+        onAdd={() => setEditing("new")}
+      />
+      <SearchBox
+        value={query}
+        set={setQuery}
+        placeholder="جستجوی نام، کد یا شماره سریال"
+      />
+      {loading ? (
+        <LoadingState />
+      ) : error ? (
+        <ErrorState text={error} retry={load} />
+      ) : !filtered.length ? (
+        <EmptyState text="تجهیزاتی ثبت نشده است." />
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {filtered.map((item) => (
+            <article key={item.id} className="atelier-panel p-4">
+              <div className="flex items-start justify-between">
+                <span className="flex h-11 w-11 items-center justify-center rounded-xl border border-red-950 bg-red-950/20">
+                  <Camera className="h-5 w-5 text-red-400" />
+                </span>
+                <span
+                  className={`rounded-full px-2 py-1 text-[10px] ${item.currentHealthStatus === "healthy" && item.locationType === "in_studio" ? "bg-emerald-950 text-emerald-400" : item.currentHealthStatus === "damaged" ? "bg-red-950 text-red-400" : "bg-orange-950 text-orange-400"}`}
+                >
+                  {STATUS[item.currentHealthStatus] ||
+                    STATUS[item.locationType] ||
+                    "نامشخص"}
+                </span>
+              </div>
+              <h2 className="mt-4 font-black">{item.title}</h2>
+              <p className="mt-1 text-xs text-zinc-500">
+                {CATEGORIES[item.category] || item.category} • {item.code}
+              </p>
+              <p className="mt-1 truncate text-[10px] text-zinc-600">
+                سریال: {item.serialNumber || "—"}
+              </p>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => setEditing(item)}
+                  className="atelier-button-secondary"
+                >
+                  <Edit3 className="h-4 w-4" />
+                  ویرایش
+                </button>
+                <button
+                  onClick={async () => {
+                    const data = await fetch(`/api/studio/equipment/${item.id}`).then((response) => response.json());
+                    if (data.success) setUsageItem(data.equipment);
+                    else atelierToast(data.error || "دریافت برنامه استفاده ممکن نشد.", "error");
+                  }}
+                  className="atelier-button-secondary"
+                >
+                  <CalendarDays className="h-4 w-4" />
+                  برنامه استفاده
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      {editing && (
+        <EquipmentForm
+          initial={editing === "new" ? null : editing}
+          categories={configuredCategories}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            load();
+          }}
+        />
+      )}
+      {usageItem && (
+        <EquipmentUsage equipment={usageItem} onClose={() => setUsageItem(null)} />
+      )}
+    </div>
+  );
+}
+
+function EquipmentUsage({ equipment, onClose }: { equipment: any; onClose: () => void }) {
+  return (
+    <AtelierModal title={`برنامه استفاده ${equipment.title}`} onClose={onClose}>
+      <div className="space-y-3">
+        {!equipment.reservations?.length ? (
+          <EmptyState text="هنوز استفاده‌ای برای این تجهیزات ثبت نشده است." />
+        ) : (
+          equipment.reservations.map((reservation: any) => (
+            <article key={reservation.id} className="rounded-xl border border-zinc-800 bg-black/30 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold">{reservation.projectTitle || "برنامه آتلیه"}</h3>
+                  <p className="mt-1 text-xs text-zinc-500">{reservation.personnelName || "بدون پرسنل مستقیم"}</p>
+                </div>
+                <span className="rounded-full bg-red-950/40 px-2 py-1 text-[10px] text-red-300">
+                  {reservation.status === "reserved" ? "رزرو شده" : reservation.status === "checked_out" ? "در حال استفاده" : "بازگردانده شده"}
+                </span>
+              </div>
+              <p className="mt-3 text-xs text-zinc-400">
+                {new Intl.DateTimeFormat("fa-IR-u-ca-persian", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Tehran" }).format(new Date(reservation.reservedFrom))}
+                {" تا "}
+                {new Intl.DateTimeFormat("fa-IR-u-ca-persian", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Tehran" }).format(new Date(reservation.reservedTo))}
+              </p>
+            </article>
+          ))
+        )}
+      </div>
+    </AtelierModal>
+  );
+}
+
+function Header({
+  kicker,
+  title,
+  description,
+  action,
+  onAdd,
+}: {
+  kicker: string;
+  title: string;
+  description: string;
+  action: string;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="flex items-end justify-between gap-3">
+      <div>
+        <p className="atelier-kicker">{kicker}</p>
+        <h1 className="mt-1 text-2xl font-black">{title}</h1>
+        <p className="mt-2 text-xs text-zinc-500">{description}</p>
+      </div>
+      <button onClick={onAdd} className="atelier-button">
+        <Plus className="h-4 w-4" />
+        {action}
+      </button>
+    </div>
+  );
+}
+function SearchBox({
+  value,
+  set,
+  placeholder,
+}: {
+  value: string;
+  set: (value: string) => void;
+  placeholder: string;
+}) {
+  return (
+    <label className="atelier-panel relative block p-3">
+      <Search className="absolute right-6 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" />
+      <input
+        value={value}
+        onChange={(event) => set(event.target.value)}
+        placeholder={placeholder}
+        className="atelier-input w-full py-2.5 pr-9"
+      />
+    </label>
+  );
+}
+
+function PersonnelForm({
+  initial,
+  onClose,
+  onSaved,
+}: {
+  initial: any;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState({
+      fullName: initial?.fullName || "",
+      mobile: initial?.mobile || "",
+      personnelType: initial?.personnelType || "employee",
+      primaryRole: initial?.primaryRole || "photographer",
+      status: initial?.status || "active",
+      fixedSalary: Number(initial?.fixedSalary || 0),
+      paymentCycle: initial?.paymentCycle || "monthly",
+      notes: initial?.notes || "",
+    }),
+    [skills, setSkills] = useState<string>(
+      initial?.skills?.map((skill: any) => skill.skillTitle).join("، ") || "",
+    ),
+    [saving, setSaving] = useState(false);
+  const change = (key: string, value: string | number) =>
+    setForm((current) => ({ ...current, [key]: value }));
+  return (
+    <AtelierModal
+      title={initial ? "ویرایش پرسنل" : "پرسنل جدید"}
+      onClose={onClose}
+    >
+      <form
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setSaving(true);
+          try {
+            const body = {
+              ...form,
+              skills: initial
+                ? undefined
+                : skills
+                    .split(/[،,]/)
+                    .map((value) => value.trim())
+                    .filter(Boolean)
+                    .map((skillTitle) => ({
+                      skillTitle,
+                      skillCategory: "general",
+                    })),
+            };
+            const data = await fetch(
+              initial
+                ? `/api/studio/personnel/${initial.id}`
+                : "/api/studio/personnel",
+              {
+                method: initial ? "PUT" : "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(body),
+              },
+            ).then((r) => r.json());
+            if (!data.success)
+              throw new Error(data.error || "ذخیره انجام نشد.");
+            onSaved();
+          } catch (reason) {
+            atelierToast(reason instanceof Error ? reason.message : "ذخیره انجام نشد.", "error");
+          } finally {
+            setSaving(false);
+          }
+        }}
+        className="space-y-4"
+      >
+        <Text
+          label="نام و نام خانوادگی"
+          value={form.fullName}
+          set={(v) => change("fullName", v)}
+          required
+        />
+        <Text
+          label="شماره تماس"
+          value={form.mobile}
+          set={(v) => change("mobile", v)}
+          required
+          dir="ltr"
+        />
+        <Select
+          label="نوع همکاری"
+          value={form.personnelType}
+          set={(v) => change("personnelType", v)}
+          options={{ employee: "ثابت", temporary_worker: "موقت", project_based: "پروژه‌ای" }}
+        />
+        <label>
+          <span className="atelier-label">حقوق ثابت</span>
+          <MoneyInput
+            value={form.fixedSalary}
+            onChange={(value) => change("fixedSalary", value)}
+            unit="تومان"
+            className="!rounded-xl !border-zinc-800 !bg-black"
+          />
+          <span className="mt-1 block text-[10px] text-zinc-600">این مبلغ فقط تنظیم پرسنل است و تا زمان ثبت پرداخت، سند مالی خودکار ایجاد نمی‌کند.</span>
+        </label>
+        <Select
+          label="دوره حقوق ثابت"
+          value={form.paymentCycle}
+          set={(v) => change("paymentCycle", v)}
+          options={{ monthly: "ماهانه", none: "بدون دوره" }}
+        />
+        <Select
+          label="تخصص اصلی"
+          value={form.primaryRole}
+          set={(v) => change("primaryRole", v)}
+          options={ROLES}
+        />
+        <Select
+          label="وضعیت"
+          value={form.status}
+          set={(v) => change("status", v)}
+          options={{ active: "فعال", on_leave: "مرخصی", inactive: "غیرفعال" }}
+        />
+        {!initial && (
+          <Text
+            label="مهارت‌ها (با ویرگول جدا کنید)"
+            value={skills}
+            set={setSkills}
+          />
+        )}
+        <Text
+          label="توضیحات"
+          value={form.notes}
+          set={(v) => change("notes", v)}
+        />
+        <Actions saving={saving} onClose={onClose} />
+      </form>
+    </AtelierModal>
+  );
+}
+
+function PersonnelAccessForm({ person, onClose }: { person: any; onClose: () => void }) {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [hasAccount, setHasAccount] = useState(false);
+  const [available, setAvailable] = useState<Array<{ permission: string; label: string }>>([]);
+  const [form, setForm] = useState({ username: "", password: "", status: "active", permissions: [] as string[] });
+  useEffect(() => {
+    fetch(`/api/atelier/personnel/${person.id}/access`)
+      .then((response) => response.json())
+      .then((data) => {
+        if (!data.success) throw new Error(data.error || "دریافت دسترسی ممکن نشد.");
+        setAvailable(data.availablePermissions || []);
+        setHasAccount(Boolean(data.access?.username));
+        setForm({
+          username: data.access?.username || "",
+          password: "",
+          status: data.access?.status || "active",
+          permissions: data.access?.permissions || [],
+        });
+      })
+      .catch((reason) => atelierToast(reason instanceof Error ? reason.message : "دریافت دسترسی ممکن نشد.", "error"))
+      .finally(() => setLoading(false));
+  }, [person.id]);
+  return (
+    <AtelierModal
+      title={`حساب و دسترسی ${person.fullName}`}
+      onClose={onClose}
+    >
+      {loading ? <LoadingState /> : (
+        <form onSubmit={async (event) => {
+          event.preventDefault();
+          setSaving(true);
+          try {
+            const data = await fetch(`/api/atelier/personnel/${person.id}/access`, {
+              method: "PUT",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ ...form, password: form.password || undefined }),
+            }).then((response) => response.json());
+            if (!data.success) throw new Error(data.error || "ذخیره دسترسی انجام نشد.");
+            atelierToast("حساب و دسترسی‌ها ذخیره شد.", "success");
+            onClose();
+          } catch (reason) {
+            atelierToast(reason instanceof Error ? reason.message : "ذخیره دسترسی انجام نشد.", "error");
+          } finally {
+            setSaving(false);
+          }
+        }} className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Text label="نام کاربری" value={form.username} set={(username) => setForm((current) => ({ ...current, username }))} required dir="ltr" />
+            <Text label={hasAccount ? "رمز عبور جدید (اختیاری)" : "رمز عبور اولیه"} value={form.password} set={(password) => setForm((current) => ({ ...current, password }))} required={!hasAccount} dir="ltr" />
+            <Select label="وضعیت حساب" value={form.status} set={(status) => setForm((current) => ({ ...current, status }))} options={{ active: "فعال", inactive: "غیرفعال" }} />
+          </div>
+          <fieldset>
+            <legend className="atelier-label">بخش‌های قابل دسترسی</legend>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {available.map((item) => (
+                <label key={item.permission} className="flex cursor-pointer items-center gap-2 rounded-xl border border-zinc-800 bg-black/30 p-3 text-sm">
+                  <input type="checkbox" checked={form.permissions.includes(item.permission)} onChange={(event) => setForm((current) => ({ ...current, permissions: event.target.checked ? [...current.permissions, item.permission] : current.permissions.filter((permission) => permission !== item.permission) }))} />
+                  <span>{item.label}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <p className="text-xs leading-6 text-zinc-500">رمز فعلی هرگز نمایش داده نمی‌شود. غیرفعال‌کردن حساب، نشست‌های بعدی کاربر را مسدود می‌کند.</p>
+          <Actions saving={saving} onClose={onClose} />
+        </form>
+      )}
+    </AtelierModal>
+  );
+}
+
+function EquipmentForm({
+  initial,
+  categories,
+  onClose,
+  onSaved,
+}: {
+  initial: any;
+  categories: string[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [form, setForm] = useState({
+      title: initial?.title || "",
+      category: initial?.category || categories[0] || "camera",
+      code: initial?.code || "",
+      serialNumber: initial?.serialNumber || "",
+      currentHealthStatus: initial?.currentHealthStatus || "healthy",
+      locationType: initial?.locationType || "in_studio",
+      notes: initial?.notes || "",
+    }),
+    [saving, setSaving] = useState(false);
+  const change = (key: string, value: string) =>
+    setForm((current) => ({ ...current, [key]: value }));
+  return (
+    <AtelierModal
+      title={initial ? "ویرایش تجهیزات" : "تجهیزات جدید"}
+      onClose={onClose}
+    >
+      <form
+        onSubmit={async (event) => {
+          event.preventDefault();
+          setSaving(true);
+          try {
+            const data = await fetch(
+              initial
+                ? `/api/studio/equipment/${initial.id}`
+                : "/api/studio/equipment",
+              {
+                method: initial ? "PUT" : "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(form),
+              },
+            ).then((r) => r.json());
+            if (!data.success)
+              throw new Error(data.error || "ذخیره انجام نشد.");
+            onSaved();
+          } catch (reason) {
+            atelierToast(reason instanceof Error ? reason.message : "ذخیره انجام نشد.", "error");
+          } finally {
+            setSaving(false);
+          }
+        }}
+        className="space-y-4"
+      >
+        <Text
+          label="نام تجهیزات"
+          value={form.title}
+          set={(v) => change("title", v)}
+          required
+        />
+        <Select
+          label="دسته‌بندی"
+          value={form.category}
+          set={(v) => change("category", v)}
+          options={categories.length ? Object.fromEntries(categories.map((category) => [category, category])) : CATEGORIES}
+        />
+        {!initial && (
+          <Text
+            label="کد (اختیاری)"
+            value={form.code}
+            set={(v) => change("code", v)}
+          />
+        )}
+        <Text
+          label="شماره سریال"
+          value={form.serialNumber}
+          set={(v) => change("serialNumber", v)}
+        />
+        <Select
+          label="وضعیت فنی"
+          value={form.currentHealthStatus}
+          set={(v) => change("currentHealthStatus", v)}
+          options={{
+            healthy: "آماده",
+            needs_service: "تعمیر",
+            damaged: "خراب",
+            retired: "خارج از سرویس",
+          }}
+        />
+        <Select
+          label="وضعیت استفاده"
+          value={form.locationType}
+          set={(v) => change("locationType", v)}
+          options={{
+            in_studio: "آماده",
+            reserved: "رزرو شده",
+            on_set: "در حال استفاده",
+            maintenance: "تعمیر",
+          }}
+        />
+        <Text
+          label="توضیحات"
+          value={form.notes}
+          set={(v) => change("notes", v)}
+        />
+        <Actions saving={saving} onClose={onClose} />
+      </form>
+    </AtelierModal>
+  );
+}
+
+function Text({
+  label,
+  value,
+  set,
+  required,
+  dir,
+}: {
+  label: string;
+  value: string;
+  set: (value: string) => void;
+  required?: boolean;
+  dir?: "ltr" | "rtl";
+}) {
+  return (
+    <label>
+      <span className="atelier-label">
+        {label}
+        {required && " *"}
+      </span>
+      <input
+        required={required}
+        value={value}
+        onChange={(event) => set(event.target.value)}
+        dir={dir}
+        className="atelier-input w-full py-2.5"
+      />
+    </label>
+  );
+}
+function Select({
+  label,
+  value,
+  set,
+  options,
+}: {
+  label: string;
+  value: string;
+  set: (value: string) => void;
+  options: Record<string, string>;
+}) {
+  return (
+    <label>
+      <span className="atelier-label">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => set(event.target.value)}
+        className="atelier-input w-full py-2.5"
+      >
+        {Object.entries(options).map(([key, label]) => (
+          <option key={key} value={key}>
+            {label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+function Actions({
+  saving,
+  onClose,
+}: {
+  saving: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <div className="flex justify-end gap-2 border-t border-zinc-900 pt-4">
+      <button
+        type="button"
+        onClick={onClose}
+        className="atelier-button-secondary"
+      >
+        انصراف
+      </button>
+      <button disabled={saving} className="atelier-button">
+        {saving ? "در حال ذخیره…" : "ذخیره"}
+      </button>
+    </div>
+  );
+}

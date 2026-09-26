@@ -7,6 +7,45 @@
 
 import * as jalaali from "jalaali-js";
 
+export const BUSINESS_TIME_ZONE = "Asia/Tehran";
+
+type DateTimeParts = { year: number; month: number; day: number; hour: number; minute: number; second: number };
+
+export function getBusinessDateTimeParts(dateInput: Date | string | number): DateTimeParts {
+  const date = new Date(dateInput);
+  if (Number.isNaN(date.getTime())) return { year: 0, month: 0, day: 0, hour: 0, minute: 0, second: 0 };
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: BUSINESS_TIME_ZONE,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+  }).formatToParts(date);
+  const value = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value || 0);
+  return { year: value("year"), month: value("month"), day: value("day"), hour: value("hour"), minute: value("minute"), second: value("second") };
+}
+
+export function toBusinessGregorianDateString(dateInput: Date | string | number): string {
+  const parts = getBusinessDateTimeParts(dateInput);
+  if (!parts.year) return "";
+  return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
+}
+
+export function getBusinessWeekday(dateInput: Date | string | number): number {
+  const parts = getBusinessDateTimeParts(dateInput);
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day)).getUTCDay();
+}
+
+/** Convert a Tehran wall-clock time to its unambiguous UTC instant. */
+export function tehranDateTimeToUtc(parts: Partial<DateTimeParts> & Pick<DateTimeParts, "year" | "month" | "day">): Date {
+  const desired = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour || 0, parts.minute || 0, parts.second || 0);
+  let instant = desired;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const actual = getBusinessDateTimeParts(instant);
+    const represented = Date.UTC(actual.year, actual.month - 1, actual.day, actual.hour, actual.minute, actual.second);
+    instant += desired - represented;
+  }
+  return new Date(instant);
+}
+
 // ─── Persian/Arabic digit conversion ───────────────────────────────────────
 
 const FA_DIGITS = ["۰", "۱", "۲", "۳", "۴", "۵", "۶", "۷", "۸", "۹"];
@@ -58,7 +97,8 @@ export function gregorianToJalali(date: Date | string | number): JalaliDate {
   const d = new Date(date);
   if (isNaN(d.getTime())) return { year: 0, month: 0, day: 0 };
 
-  const { jy, jm, jd } = jalaali.toJalaali(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  const business = getBusinessDateTimeParts(d);
+  const { jy, jm, jd } = jalaali.toJalaali(business.year, business.month, business.day);
   return { year: jy, month: jm, day: jd };
 }
 
@@ -71,7 +111,7 @@ export function jalaliToGregorian(jalali: JalaliDate): Date {
     return new Date(Number.NaN);
   }
   const { gy, gm, gd } = jalaali.toGregorian(jy, jm, jd);
-  return new Date(Date.UTC(gy, gm - 1, gd, 0, 0, 0));
+  return tehranDateTimeToUtc({ year: gy, month: gm, day: gd });
 }
 
 /**
@@ -123,8 +163,9 @@ export function toJalaliDate(
       const monthName = months[jDate.month - 1] || "";
       let res = `${jDate.day} ${monthName} ${jDate.year}`;
       if (showTime) {
-        const hh = String(d.getHours()).padStart(2, "0");
-        const mm = String(d.getMinutes()).padStart(2, "0");
+        const business = getBusinessDateTimeParts(d);
+        const hh = String(business.hour).padStart(2, "0");
+        const mm = String(business.minute).padStart(2, "0");
         res += ` ساعت ${hh}:${mm}`;
       }
       return persianDigits ? toPersianDigits(res) : res;
@@ -149,8 +190,9 @@ export function toJalaliDate(
     let res = `${yStr}/${mStr}/${dStr}`;
 
     if (showTime) {
-      const hh = String(d.getHours()).padStart(2, "0");
-      const mm = String(d.getMinutes()).padStart(2, "0");
+      const business = getBusinessDateTimeParts(d);
+      const hh = String(business.hour).padStart(2, "0");
+      const mm = String(business.minute).padStart(2, "0");
       res += ` - ${hh}:${mm}`;
     }
 
@@ -167,20 +209,21 @@ export function toJalaliDate(
 // ─── Date Range Helpers (for report filtering) ─────────────────────────────
 
 /**
- * Get start of day in Tehran timezone (UTC+3:30)
+ * Get start of day in the explicit Tehran business timezone.
  */
 export function getStartOfDayJalali(date?: Date | string | number): Date {
   const d = date ? new Date(date) : new Date();
-  const tehran = new Date(d.getTime() + 3.5 * 60 * 60 * 1000);
-  return new Date(Date.UTC(tehran.getUTCFullYear(), tehran.getUTCMonth(), tehran.getUTCDate()) - 3.5 * 60 * 60 * 1000);
+  const business = getBusinessDateTimeParts(d);
+  return tehranDateTimeToUtc({ year: business.year, month: business.month, day: business.day });
 }
 
 /**
  * Get end of day in Tehran timezone (UTC+3:30)
  */
 export function getEndOfDayJalali(date?: Date | string | number): Date {
-  const start = getStartOfDayJalali(date);
-  return new Date(start.getTime() + 86_400_000 - 1);
+  const business = getBusinessDateTimeParts(date ? new Date(date) : new Date());
+  const next = new Date(Date.UTC(business.year, business.month - 1, business.day + 1));
+  return new Date(tehranDateTimeToUtc({ year: next.getUTCFullYear(), month: next.getUTCMonth() + 1, day: next.getUTCDate() }).getTime() - 1);
 }
 
 export function parseReportDateParam(value: string | null, endOfDay = false): Date | null {
@@ -191,7 +234,7 @@ export function parseReportDateParam(value: string | null, endOfDay = false): Da
   if (jalali) date = jalali;
   else if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
     const [year, month, day] = normalized.split("-").map(Number);
-    date = new Date(Date.UTC(year, month - 1, day));
+    date = tehranDateTimeToUtc({ year, month, day });
   } else {
     date = new Date(normalized);
   }
@@ -211,9 +254,7 @@ export function getStartOfJalaliMonth(jalali: JalaliDate): Date {
  */
 export function getEndOfJalaliMonth(jalali: JalaliDate): Date {
   const maxDay = jalaali.jalaaliMonthLength(jalali.year, jalali.month);
-  const d = jalaliToGregorian({ year: jalali.year, month: jalali.month, day: maxDay });
-  d.setUTCHours(23, 59, 59, 999);
-  return d;
+  return getEndOfDayJalali(jalaliToGregorian({ year: jalali.year, month: jalali.month, day: maxDay }));
 }
 
 /**
@@ -243,9 +284,11 @@ export function getJalaliPresetRange(preset: string): { start: Date; end: Date }
       };
     }
     case "this_week": {
-      const dayOfWeek = (today.getDay() + 1) % 7; // Iranian week starts Saturday
-      const startOfWeek = new Date(today);
-      startOfWeek.setDate(today.getDate() - dayOfWeek);
+      const weekday = new Intl.DateTimeFormat("en-US", { timeZone: BUSINESS_TIME_ZONE, weekday: "short" }).format(today);
+      const dayOfWeek = ({ Sat: 0, Sun: 1, Mon: 2, Tue: 3, Wed: 4, Thu: 5, Fri: 6 } as Record<string, number>)[weekday] ?? 0;
+      const business = getBusinessDateTimeParts(today);
+      const startDay = new Date(Date.UTC(business.year, business.month - 1, business.day - dayOfWeek));
+      const startOfWeek = tehranDateTimeToUtc({ year: startDay.getUTCFullYear(), month: startDay.getUTCMonth() + 1, day: startDay.getUTCDate() });
       return {
         start: getStartOfDayJalali(startOfWeek),
         end: getEndOfDayJalali(today),
