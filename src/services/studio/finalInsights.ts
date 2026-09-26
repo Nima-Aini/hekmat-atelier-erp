@@ -24,9 +24,11 @@ export async function getFinalDashboard(
   allowedCoreProjectIds: string[] | null,
   includeFinance: boolean,
 ) {
-  const [contracts, visits] = await Promise.all([
+  const [contracts, visits, reservations, center] = await Promise.all([
     listContracts(undefined, allowedCoreProjectIds),
     listDailyVisits(),
+    listReservations(),
+    includeFinance ? getAtelierFinanceCenter(allowedCoreProjectIds) : Promise.resolve(null),
   ]);
   const pending = contracts
     .filter((contract) => contract.status === "draft")
@@ -86,7 +88,31 @@ export async function getFinalDashboard(
           paidAmount: null,
           remainingAmount: null,
         };
+  const upcoming = approved.filter((row) => row.programDate && +new Date(row.programDate) >= now && +new Date(row.programDate) <= horizon);
+  const upcomingReservations = reservations.filter((row) => row.status === "pending" && +new Date(row.reservedAt) >= now && +new Date(row.reservedAt) <= horizon);
+  const statusLabels: Record<string, string> = { draft: "در انتظار تأیید", signed: "تأیید شده", completed: "تکمیل شده", cancelled: "لغو شده" };
+  const statuses = [...new Set(contracts.map((row) => row.status))].map((status) => ({ name: statusLabels[status] || status, value: contracts.filter((row) => row.status === status).length }));
+  const activities = [
+    ...contracts.map((row) => ({ id: `contract:${row.id}`, title: "قرارداد ثبت شد", detail: `${row.customer.name} · ${row.projectType.title}`, date: row.createdAt, tab: "contracts", tone: "blue" })),
+    ...visits.map((row) => ({ id: `visit:${row.id}`, title: "مراجعه روزانه ثبت شد", detail: `${row.customerName} · ${row.title}`, date: row.createdAt, tab: "daily_visits", tone: "purple" })),
+    ...reservations.map((row) => ({ id: `reservation:${row.id}`, title: "رزرو ثبت شد", detail: `${row.customerName} · ${row.title}`, date: row.createdAt, tab: "reservations", tone: "amber" })),
+    ...(center?.receipts || []).map((row) => ({ id: `receipt:${row.id}`, title: "دریافت ثبت شد", detail: `${row.source?.title || "دریافت مشتری"} · ${row.accountName}`, date: row.paymentDate, tab: "finance", tone: "green" })),
+  ].sort((a, b) => +new Date(b.date) - +new Date(a.date)).slice(0, 5);
   return {
+    overview: {
+      generatedAt: new Date(),
+      activeProjects: approved.length,
+      pendingContracts: pending.length,
+      upcomingReservations: upcomingReservations.length,
+      upcomingPrograms: upcoming.length,
+      customerCount: new Set(contracts.map((row) => row.customer.studioCustomerId)).size,
+      contractCount: contracts.length,
+      statuses,
+      activities,
+      upcoming: upcoming.slice(0, 5).map(redact),
+      recentContracts: [...contracts].sort((a,b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 5).map(redact),
+      finance: center ? { summary: center.summary, analytics: center.analytics } : null,
+    },
     pendingContracts: pending.slice(0, 6).map(redact),
     approvedContracts: approved.slice(0, 6).map(redact),
     recentDailyVisits: visits

@@ -48,7 +48,7 @@ export default function HomePage() {
   const renderActiveView = () => {
     switch (effectiveActiveTab) {
       case "dashboard":
-        return <FinalDashboard onNavigate={setActiveTab} />;
+        return <FinalDashboard onNavigate={setActiveTab} userName={me?.employee?.name} permissions={permissionValues} />;
       case "contracts":
         return <ContractsView onNavigateFinance={(contractId) => { setSelectedFinanceContractId(contractId); setActiveTab("finance"); }} />;
       case "daily_visits":

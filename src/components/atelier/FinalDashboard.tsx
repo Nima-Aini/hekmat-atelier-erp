@@ -1,404 +1,387 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  AlertCircle,
+  ArrowLeft,
+  CalendarDays,
   CalendarClock,
-  Camera,
+  Clock3,
   FileSignature,
-  RefreshCw,
+  UsersRound,
   WalletCards,
+  RefreshCw,
+  Zap,
+  AlertCircle,
+  Camera,
 } from "lucide-react";
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
 import { toJalaliDate } from "@/lib/dateUtils";
-
-const money = (value: unknown) =>
-  value === null || value === undefined
-    ? "—"
-    : `${Number(value).toLocaleString("fa-IR")} تومان`;
-const date = (value: unknown) => (value ? toJalaliDate(value as string) : "—");
-const COLORS = [
-  "#ef233c",
-  "#9f1239",
-  "#f97316",
-  "#fb7185",
-  "#7f1d1d",
-  "#f59e0b",
-];
-
-function Empty({ children }: { children: string }) {
-  return (
-    <div className="flex min-h-32 items-center justify-center rounded-xl border border-dashed border-zinc-800 text-xs text-zinc-600">
-      {children}
-    </div>
-  );
-}
+import { canSeeAtelierSection } from "@/lib/atelierNavigation";
+import { CashChart, DistributionChart } from "./OverviewCharts";
+import {
+  MetricCard,
+  OverviewCard,
+  OverviewEmpty,
+  OverviewSkeleton,
+  OverviewTable,
+  overviewMoney,
+  tones,
+  type Tone,
+} from "./OverviewUi";
+import { NeonStatus } from "./FinanceControls";
 
 export function FinalDashboard({
   onNavigate,
+  userName = "مدیر سیستم",
+  permissions = [],
 }: {
   onNavigate: (tab: string) => void;
+  userName?: string;
+  permissions?: string[];
 }) {
-  const [data, setData] = useState<any>(null);
-  const [error, setError] = useState("");
-  const load = () => {
+  const [data, setData] = useState<any>(null),
+    [error, setError] = useState(""),
+    [loading, setLoading] = useState(true);
+  const load = useCallback(async () => {
+    setLoading(true);
     setError("");
-    fetch("/api/atelier/dashboard")
-      .then((response) => response.json())
-      .then((value) =>
-        value.success
-          ? setData(value.dashboard)
-          : setError(value.error || "دریافت اطلاعات ممکن نشد."),
-      )
-      .catch(() => setError("ارتباط با سرور برقرار نشد."));
+    try {
+      const response = await fetch("/api/atelier/dashboard", {
+        cache: "no-store",
+      });
+      const body = await response.json();
+      if (!response.ok || !body.success)
+        throw new Error(body.error || "دریافت اطلاعات ممکن نشد.");
+      setData(body.dashboard);
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "ارتباط با سرور برقرار نشد.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  const overview = data?.overview;
+  const finance = overview?.finance;
+  const navigate = (tab: string) => {
+    if (canSeeAtelierSection(tab, permissions)) onNavigate(tab);
   };
-  useEffect(load, []);
-  if (error)
-    return (
-      <div className="atelier-panel p-8 text-center">
-        <AlertCircle className="mx-auto mb-3 h-8 w-8 text-red-400" />
-        <p>{error}</p>
-        <button onClick={load} className="atelier-button mt-5">
-          <RefreshCw className="h-4 w-4" />
-          تلاش دوباره
-        </button>
-      </div>
-    );
-  if (!data)
-    return (
-      <div className="grid gap-4 md:grid-cols-3">
-        {[1, 2, 3, 4, 5, 6].map((item) => (
-          <div
-            key={item}
-            className="h-40 animate-pulse rounded-2xl border border-zinc-900 bg-zinc-950"
-          />
-        ))}
-      </div>
-    );
-
+  const quickActions = [
+    {
+      tab: "contracts",
+      title: "مدیریت قراردادها",
+      subtitle: "ثبت و پیگیری قرارداد",
+      icon: FileSignature,
+      tone: "purple",
+    },
+    {
+      tab: "reservations",
+      title: "رزروهای آتلیه",
+      subtitle: "ثبت و مدیریت رزرو",
+      icon: CalendarDays,
+      tone: "amber",
+    },
+    {
+      tab: "customers",
+      title: "مشتریان",
+      subtitle: "پرونده و سوابق مشتری",
+      icon: UsersRound,
+      tone: "blue",
+    },
+    {
+      tab: "finance",
+      title: "ثبت دریافت و هزینه",
+      subtitle: "مرکز مالی آتلیه",
+      icon: WalletCards,
+      tone: "green",
+    },
+  ].filter((row) => canSeeAtelierSection(row.tab, permissions));
   return (
-    <div className="space-y-5">
-      <section className="atelier-panel-red relative overflow-hidden p-5 sm:p-7">
-        <div className="pointer-events-none absolute -left-12 -top-20 h-60 w-60 rounded-full border-[28px] border-red-950/30 shadow-[0_0_90px_rgba(239,35,60,.15),inset_0_0_55px_rgba(239,35,60,.12)]" />
-        <div className="pointer-events-none absolute left-12 top-12 h-px w-1/3 rotate-[-12deg] bg-gradient-to-r from-transparent via-red-500/60 to-transparent shadow-[0_0_12px_#ef233c]" />
-        <div className="relative grid items-end gap-6 lg:grid-cols-[1fr_auto]">
-          <div>
-            <p className="atelier-kicker">STUDIO CONTROL</p>
-            <h1 className="mt-2 text-2xl font-black text-white sm:text-3xl">
-              داشبورد حکمت آتلیه
-            </h1>
-            <p className="mt-3 max-w-xl text-sm leading-7 text-zinc-400">
-              نمای واقعی قراردادها، برنامه‌های پیش‌رو و وضعیت دریافتی آتلیه؛
-              بدون داده نمایشی.
-            </p>
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-3">
-            <button
-              onClick={() => onNavigate("contracts")}
-              className="rounded-2xl border border-red-950 bg-black/50 p-3"
-            >
-              <FileSignature className="mx-auto h-5 w-5 text-red-400" />
-              <strong className="mt-2 block text-lg">
-                {data.pendingContracts.length.toLocaleString("fa-IR")}
-              </strong>
-              <span className="text-[10px] text-zinc-500">در انتظار</span>
-            </button>
-            <button
-              onClick={() => onNavigate("planning")}
-              className="rounded-2xl border border-zinc-800 bg-black/50 p-3"
-            >
-              <CalendarClock className="mx-auto h-5 w-5 text-orange-400" />
-              <strong className="mt-2 block text-lg">
-                {data.approvedContracts.length.toLocaleString("fa-IR")}
-              </strong>
-              <span className="text-[10px] text-zinc-500">برنامه نزدیک</span>
-            </button>
-            <div className="col-span-2 rounded-2xl border border-zinc-800 bg-black/50 p-3 sm:col-span-1">
-              <WalletCards className="mx-auto h-5 w-5 text-emerald-400" />
-              <strong className="mt-2 block text-sm">
-                {money(data.finance?.remaining)}
-              </strong>
-              <span className="text-[10px] text-zinc-500">کل مانده</span>
-            </div>
-          </div>
+    <div className="overview-page space-y-5">
+      <header className="flex flex-wrap items-center justify-between gap-4 py-1">
+        <div>
+          <h1 className="text-xl font-extrabold sm:text-2xl">
+            سلام، {userName}
+          </h1>
+          <p className="mt-2 text-sm text-slate-400">
+            خلاصه‌ای از وضعیت امروز آتلیه
+          </p>
         </div>
-      </section>
-
-      <div className="grid gap-5 xl:grid-cols-2">
-        <section className="atelier-panel p-4 sm:p-5">
-          <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 rounded-xl border border-slate-700/60 bg-slate-900/30 px-4 py-2.5">
+            <CalendarDays className="h-5 w-5 text-slate-400" />
             <div>
-              <p className="atelier-kicker">نیازمند اقدام</p>
-              <h2 className="mt-1 font-black">قرارداد های در انتظار</h2>
+              <p className="text-xs text-slate-400">امروز</p>
+              <time className="mt-1 block text-xs font-bold">
+                {toJalaliDate(new Date(), { format: "words" })}
+              </time>
             </div>
-            <button
-              onClick={() => onNavigate("contracts")}
-              className="text-xs text-red-400"
-            >
-              مشاهده همه
-            </button>
-          </div>
-          {!data.pendingContracts.length ? (
-            <Empty>قرارداد در انتظاری وجود ندارد.</Empty>
-          ) : (
-            <div className="space-y-2">
-              {data.pendingContracts.map((contract: any) => (
-                <button
-                  key={contract.id}
-                  onClick={() => {
-                    onNavigate("contracts");
-                    setTimeout(
-                      () =>
-                        window.dispatchEvent(
-                          new CustomEvent("akma:navigate-item", {
-                            detail: {
-                              type: "studio_contract",
-                              id: contract.id,
-                            },
-                          }),
-                        ),
-                      50,
-                    );
-                  }}
-                  className="grid w-full grid-cols-[1fr_auto] gap-3 rounded-xl border border-zinc-900 bg-black/30 p-3 text-right transition hover:border-red-950 hover:bg-red-950/10"
-                >
-                  <span>
-                    <strong className="block text-sm">
-                      {contract.customer.name}
-                    </strong>
-                    <span className="mt-1 block text-xs text-zinc-500">
-                      {contract.projectType.title} • ثبت{" "}
-                      {date(contract.createdAt)}
-                    </span>
-                  </span>
-                  <span className="text-left">
-                    <strong className="block text-xs text-zinc-200">
-                      {money(contract.totalAmount)}
-                    </strong>
-                    <span className="mt-1 block text-[10px] text-orange-400">
-                      در انتظار
-                    </span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-        <section className="atelier-panel p-4 sm:p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <div>
-              <p className="atelier-kicker">بر اساس تاریخ برنامه</p>
-              <h2 className="mt-1 font-black">قرارداد های تایید شده اخیر</h2>
-            </div>
-            <button
-              onClick={() => onNavigate("planning")}
-              className="text-xs text-red-400"
-            >
-              برنامه ریزی
-            </button>
-          </div>
-          {!data.approvedContracts.length ? (
-            <Empty>قرارداد تاییدشده‌ای ثبت نشده است.</Empty>
-          ) : (
-            <div className="space-y-2">
-              {data.approvedContracts.map((contract: any) => (
-                <button
-                  key={contract.id}
-                  onClick={() => onNavigate("planning")}
-                  className="grid w-full grid-cols-[1fr_auto] gap-3 rounded-xl border border-zinc-900 bg-black/30 p-3 text-right transition hover:border-red-950"
-                >
-                  <span>
-                    <strong className="block text-sm">
-                      {contract.customer.name}
-                    </strong>
-                    <span className="mt-1 block text-xs text-zinc-500">
-                      {contract.projectType.title} •{" "}
-                      {money(contract.totalAmount)}
-                    </span>
-                  </span>
-                  <span className="rounded-lg border border-red-950 bg-red-950/20 px-2 py-1 text-xs text-red-300">
-                    {date(contract.programDate)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </section>
-      </div>
-
-      <section className="atelier-panel p-4 sm:p-5">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <p className="atelier-kicker">کارهای سبک آتلیه</p>
-            <h2 className="mt-1 font-black">۳ مراجعه اخیر روزانه</h2>
           </div>
           <button
-            onClick={() => onNavigate("daily_visits")}
-            className="text-xs text-red-400"
+            aria-label="به‌روزرسانی داشبورد"
+            onClick={() => void load()}
+            disabled={loading}
+            className="atelier-icon-button"
           >
-            ثبت و مدیریت
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           </button>
         </div>
-        {!data.recentDailyVisits.length ? (
-          <Empty>هنوز مراجعه روزانه‌ای ثبت نشده است.</Empty>
-        ) : (
-          <div className="grid gap-3 md:grid-cols-3">
-            {data.recentDailyVisits.map((visit: any) => (
-              <button
-                key={visit.id}
-                onClick={() => onNavigate("daily_visits")}
-                className="rounded-2xl border border-zinc-900 bg-gradient-to-br from-zinc-950 to-black p-4 text-right"
-              >
-                <Camera className="h-5 w-5 text-red-400" />
-                <strong className="mt-3 block text-sm">{visit.title}</strong>
-                <span className="mt-1 block text-xs text-zinc-500">
-                  {visit.customerName} • {date(visit.visitDate)}
-                </span>
-                <div className="mt-4 grid grid-cols-2 gap-2 text-[10px]">
-                  <span>
-                    پرداخت{" "}
-                    <b className="block text-emerald-400">
-                      {money(visit.paidAmount)}
-                    </b>
-                  </span>
-                  <span>
-                    مانده{" "}
-                    <b className="block text-red-400">
-                      {money(visit.remainingAmount)}
-                    </b>
-                  </span>
-                </div>
-              </button>
-            ))}
+      </header>
+      {error && (
+        <div
+          role="alert"
+          className="overview-card flex flex-wrap items-center gap-3 text-sm text-red-300"
+        >
+          <AlertCircle className="h-5 w-5" />
+          <span className="flex-1">{error}</span>
+          <button
+            className="atelier-button-secondary"
+            onClick={() => void load()}
+          >
+            تلاش دوباره
+          </button>
+        </div>
+      )}
+      {!data ? (
+        loading && <OverviewSkeleton />
+      ) : (
+        <>
+          <div
+            className={`grid gap-4 sm:grid-cols-2 ${finance ? "overview-dashboard-metrics xl:grid-cols-5" : "xl:grid-cols-4"}`}
+          >
+            <MetricCard
+              title="پروژه‌های فعال"
+              value={overview.activeProjects.toLocaleString("fa-IR")}
+              context="قراردادهای تأییدشده در برنامه‌ریزی"
+              icon={Camera}
+              tone="blue"
+              onClick={() => navigate("planning")}
+            />
+            <MetricCard
+              title="رزروهای پیش رو"
+              value={overview.upcomingReservations.toLocaleString("fa-IR")}
+              context="رزروهای در انتظار در ۳۰ روز آینده"
+              icon={CalendarClock}
+              tone="amber"
+              onClick={() => navigate("reservations")}
+            />
+            {finance && (
+              <MetricCard
+                title="دریافت ماه جاری"
+                value={overviewMoney(finance.analytics.currentMonth.incoming)}
+                context={finance.analytics.currentMonth.label}
+                icon={WalletCards}
+                tone="green"
+                onClick={() => navigate("finance")}
+              />
+            )}
+            <MetricCard
+              title="قراردادهای در انتظار"
+              value={overview.pendingContracts.toLocaleString("fa-IR")}
+              context="نیازمند بررسی و تأیید"
+              icon={FileSignature}
+              tone="red"
+              onClick={() => navigate("contracts")}
+            />
+            <MetricCard
+              title="مشتریان قراردادها"
+              value={overview.customerCount.toLocaleString("fa-IR")}
+              context={`${overview.contractCount.toLocaleString("fa-IR")} قرارداد ثبت‌شده`}
+              icon={UsersRound}
+              tone="purple"
+              onClick={() => navigate("customers")}
+            />
           </div>
-        )}
-      </section>
-
-      <div className="grid gap-5 lg:grid-cols-2 xl:grid-cols-4">
-        <ChartCard title="قراردادها بر اساس نوع پروژه">
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie
-                data={data.charts.projectTypes}
-                dataKey="value"
-                nameKey="name"
-                innerRadius={48}
-                outerRadius={78}
-                paddingAngle={3}
+          <div className="overview-analytics-grid grid items-stretch gap-5 lg:grid-cols-[1.7fr_1fr]">
+            {finance ? (
+              <CashChart
+                dashboard
+                months={finance.analytics.months}
+                days={finance.analytics.days}
+              />
+            ) : (
+              <OverviewCard
+                title="برنامه‌های ۳۰ روز آینده"
+                icon={CalendarClock}
               >
-                {data.charts.projectTypes.map((_: any, index: number) => (
-                  <Cell key={index} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip
-                contentStyle={{
-                  background: "#09090b",
-                  border: "1px solid #3f161d",
-                  borderRadius: 12,
-                }}
+                <OverviewTable
+                  headers={["مشتری", "نوع برنامه", "تاریخ"]}
+                  rows={overview.upcoming.map((row: any) => [
+                    row.customer.name,
+                    row.projectType.title,
+                    toJalaliDate(row.programDate),
+                  ])}
+                />
+              </OverviewCard>
+            )}
+            <DistributionChart
+              title="وضعیت قراردادها"
+              rows={overview.statuses}
+              total={overview.contractCount}
+              centerLabel="کل قراردادها"
+            />
+          </div>
+          {quickActions.length > 0 && (
+            <OverviewCard title="دسترسی سریع" icon={Zap}>
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {quickActions.map(
+                  ({ tab, title, subtitle, icon: Icon, tone }) => (
+                    <button
+                      key={tab}
+                      onClick={() => navigate(tab)}
+                      className="group flex items-center gap-3 rounded-xl border border-slate-700/50 bg-slate-950/25 p-3 text-right transition hover:border-slate-500"
+                    >
+                      <span
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border"
+                        style={{
+                          color: tones[tone as Tone],
+                          borderColor: `${tones[tone as Tone]}55`,
+                          background: `${tones[tone as Tone]}13`,
+                        }}
+                      >
+                        <Icon className="h-5 w-5" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <b className="block text-xs">{title}</b>
+                        <span className="mt-1 block text-[11px] text-slate-400">
+                          {subtitle}
+                        </span>
+                      </span>
+                      <ArrowLeft className="h-4 w-4 text-slate-500 group-hover:text-white" />
+                    </button>
+                  ),
+                )}
+              </div>
+            </OverviewCard>
+          )}
+          <div className="overview-analytics-grid grid gap-5 xl:grid-cols-[1.5fr_1fr_1fr]">
+            <OverviewCard
+              title="آخرین قراردادها"
+              icon={FileSignature}
+              action={
+                <button
+                  onClick={() => navigate("contracts")}
+                  className="overview-range"
+                >
+                  مشاهده همه
+                </button>
+              }
+            >
+              <OverviewTable
+                headers={["شماره / مشتری", "نوع پروژه", "وضعیت", "تاریخ"]}
+                rows={overview.recentContracts.map((row: any) => [
+                  <span key="customer">
+                    <b className="block">{row.customer.name}</b>
+                    <small className="text-slate-500">
+                      {row.contractNumber}
+                    </small>
+                  </span>,
+                  row.projectType.title,
+                  <NeonStatus
+                    key="status"
+                    tone={
+                      row.status === "signed"
+                        ? "success"
+                        : row.status === "draft"
+                          ? "warning"
+                          : "info"
+                    }
+                  >
+                    {row.status === "signed"
+                      ? "تأیید شده"
+                      : row.status === "draft"
+                        ? "در انتظار"
+                        : row.status === "cancelled"
+                          ? "لغو شده"
+                          : "تکمیل شده"}
+                  </NeonStatus>,
+                  toJalaliDate(row.createdAt),
+                ])}
               />
-            </PieChart>
-          </ResponsiveContainer>
-        </ChartCard>
-        <ChartCard title="روند قراردادها">
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={data.charts.contractTrend}>
-              <defs>
-                <linearGradient id="redArea" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stopColor="#ef233c" stopOpacity={0.5} />
-                  <stop offset="1" stopColor="#ef233c" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid stroke="#1f1f22" vertical={false} />
-              <XAxis dataKey="name" stroke="#71717a" tick={{ fontSize: 10 }} />
-              <YAxis stroke="#71717a" tick={{ fontSize: 10 }} />
-              <Tooltip
-                contentStyle={{
-                  background: "#09090b",
-                  border: "1px solid #3f161d",
-                  borderRadius: 12,
-                }}
-              />
-              <Area
-                type="monotone"
-                dataKey="value"
-                stroke="#ef233c"
-                fill="url(#redArea)"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </ChartCard>
-        <ChartCard title="دریافتی و مانده">
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={data.charts.finance}>
-              <CartesianGrid stroke="#1f1f22" vertical={false} />
-              <XAxis dataKey="name" stroke="#71717a" tick={{ fontSize: 10 }} />
-              <YAxis hide />
-              <Tooltip
-                formatter={(value) => money(value)}
-                contentStyle={{
-                  background: "#09090b",
-                  border: "1px solid #3f161d",
-                  borderRadius: 12,
-                }}
-              />
-              <Bar dataKey="value" radius={[8, 8, 0, 0]}>
-                {data.charts.finance.map((_: any, index: number) => (
-                  <Cell key={index} fill={index ? "#ef233c" : "#22c55e"} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartCard>
-        <ChartCard title="حجم برنامه روزهای آینده">
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={data.charts.workload}>
-              <XAxis dataKey="label" stroke="#71717a" tick={{ fontSize: 9 }} />
-              <YAxis
-                allowDecimals={false}
-                stroke="#71717a"
-                tick={{ fontSize: 10 }}
-              />
-              <Tooltip
-                contentStyle={{
-                  background: "#09090b",
-                  border: "1px solid #3f161d",
-                  borderRadius: 12,
-                }}
-              />
-              <Bar dataKey="value" fill="#f97316" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartCard>
-      </div>
+            </OverviewCard>
+            <OverviewCard title="فعالیت‌های اخیر" icon={Clock3}>
+              {overview.activities.length ? (
+                <div className="divide-y divide-slate-800">
+                  {overview.activities.map((row: any) => (
+                    <button
+                      key={row.id}
+                      onClick={() => navigate(row.tab)}
+                      className="flex w-full items-start gap-3 py-3 text-right first:pt-0 last:pb-0"
+                    >
+                      <span
+                        className="mt-1 h-2 w-2 shrink-0 rounded-full"
+                        style={{ background: tones[row.tone as Tone] }}
+                      />
+                      <span className="min-w-0">
+                        <b className="block text-xs">{row.title}</b>
+                        <span className="mt-1 block text-xs leading-5 text-slate-400">
+                          {row.detail}
+                        </span>
+                        <time className="mt-1 block text-[11px] text-slate-500">
+                          {toJalaliDate(row.date, { showTime: true })}
+                        </time>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <OverviewEmpty>هنوز فعالیتی ثبت نشده است.</OverviewEmpty>
+              )}
+            </OverviewCard>
+            <OverviewCard
+              title="برنامه‌های نزدیک"
+              icon={CalendarClock}
+              action={
+                <button
+                  onClick={() => navigate("planning")}
+                  className="text-xs text-slate-400"
+                >
+                  ۳۰ روز آینده
+                </button>
+              }
+            >
+              {overview.upcoming.length ? (
+                <div className="space-y-3">
+                  {overview.upcoming.map((row: any) => (
+                    <button
+                      key={row.id}
+                      onClick={() => navigate("planning")}
+                      className="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-800 p-3 text-right"
+                    >
+                      <span>
+                        <b className="block text-xs">{row.customer.name}</b>
+                        <span className="mt-1 block text-xs text-slate-400">
+                          {row.projectType.title}
+                        </span>
+                      </span>
+                      <span className="text-xs text-amber-300">
+                        {toJalaliDate(row.programDate, { format: "short" })}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <OverviewEmpty>
+                  در ۳۰ روز آینده برنامه‌ای ثبت نشده است.
+                </OverviewEmpty>
+              )}
+              {finance && (
+                <div className="mt-4 flex items-center justify-between gap-2 border-t border-slate-800 pt-4 text-xs">
+                  <span className="text-slate-400">مطالبات باز</span>
+                  <button
+                    onClick={() => navigate("finance")}
+                    className="font-bold text-amber-300"
+                  >
+                    {overviewMoney(finance.summary.receivable)}
+                  </button>
+                </div>
+              )}
+            </OverviewCard>
+          </div>
+        </>
+      )}
     </div>
-  );
-}
-
-function ChartCard({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="atelier-panel min-w-0 p-4">
-      <h3 className="mb-3 text-xs font-black text-zinc-300">{title}</h3>
-      {children}
-    </section>
   );
 }

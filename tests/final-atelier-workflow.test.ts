@@ -16,7 +16,7 @@ import {
   markRentalAsRented, saveDailyVisit, saveReservation, updateContract, updatePersonnelAssignment, deletePersonnelAssignment,
   updateEquipmentAssignment, deleteEquipmentAssignment,
 } from "../src/services/studio/finalWorkflow";
-import { getFinalCalendar, getFinalNotifications, listContractCustomers, setNotificationArchived } from "../src/services/studio/finalInsights";
+import { getFinalCalendar, getFinalDashboard, getFinalNotifications, listContractCustomers, setNotificationArchived } from "../src/services/studio/finalInsights";
 import { createStudioEquipment } from "../src/services/studio/equipmentService";
 import { createStudioPersonnel } from "../src/services/studio/personnelService";
 import { adjustAtelierAccountBalance, getAtelierFinanceCenter, payAtelierInstallment, recordAtelierReceipt, saveContractInstallments, updateContractFinance } from "../src/services/studio/financeCenter";
@@ -216,6 +216,17 @@ describe("Final Iranian atelier workflow", () => {
     expect(layout).toContain("-translate-x-full");
     expect(layout).toContain("lg:ml-[17rem]");
     for (const forbidden of ["سرنخ‌ها و CRM", "Workboard", "Project 360", "مواد اولیه", "BOM", "تولید", "انبار", "سفارشات"]) expect(layout).not.toContain(forbidden);
+  });
+
+  it("reports real dashboard aggregates and redacts finance when access is missing", async () => {
+    const visible = await getFinalDashboard(null, true);
+    const hidden = await getFinalDashboard(null, false);
+    expect(visible.overview.finance?.summary.liquidity).toBe((await getAtelierFinanceCenter()).summary.liquidity);
+    expect(visible.overview.finance?.analytics.months).toHaveLength(12);
+    expect(visible.overview.contractCount).toBeGreaterThan(0);
+    expect(hidden.overview.finance).toBeNull();
+    expect(hidden.overview.recentContracts.every((row) => row.totalAmount === null)).toBe(true);
+    expect(hidden.overview.activities.some((row) => row.id.startsWith("receipt:"))).toBe(false);
   });
 
   it("uses shared name-based financial controls and a portal calendar", () => {
