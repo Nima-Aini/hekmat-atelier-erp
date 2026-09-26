@@ -721,7 +721,7 @@ export function AtelierFinanceView({
             key={name}
             aria-current={tab === name ? "page" : undefined}
             onClick={() => setTab(name)}
-            className={`flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-3 text-xs transition ${tab === name ? "border-red-700/70 bg-red-950/40 text-white" : "border-transparent text-slate-400 hover:bg-slate-800/40 hover:text-white"}`}
+            className={`flex shrink-0 items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-3 text-xs transition ${tab === name ? "border-red-700/70 bg-red-950/40 text-white" : "overview-neutral-hover border-transparent text-slate-400 hover:text-white"}`}
           >
             <FileText className="h-3.5 w-3.5" />
             {name}
@@ -1021,7 +1021,7 @@ function ReceiptModal({
         }}
         className="space-y-5"
       >
-        <section className="rounded-2xl border border-cyan-900/60 bg-cyan-950/10 p-4">
+        <section className="overview-secondary-surface rounded-2xl border p-4">
           <h3 className="font-black">این دریافت متعلق به چیست؟</h3>
           {!isInstallment && !target.sourceId && (
             <select
