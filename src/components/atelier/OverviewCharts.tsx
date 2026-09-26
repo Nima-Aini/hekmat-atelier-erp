@@ -30,8 +30,8 @@ export type FlowPoint = {
   outgoing: number;
 };
 const chartTooltip = {
-  background: "#111923",
-  border: "1px solid #2a3545",
+  background: "var(--surface-2)",
+  border: "1px solid var(--border-dark)",
   borderRadius: 12,
   color: "#e2e8f0",
   fontSize: 12,
@@ -74,11 +74,11 @@ export function CashChart({
   );
   const shared = (
     <>
-      <CartesianGrid stroke="#263040" strokeOpacity={0.55} vertical={false} />
+      <CartesianGrid stroke="var(--border-dark)" strokeOpacity={0.55} vertical={false} />
       <XAxis
         dataKey="label"
         tick={{ fill: "#94a3b8", fontSize: 11 }}
-        axisLine={{ stroke: "#334155" }}
+        axisLine={{ stroke: "var(--border-dark)" }}
         tickLine={false}
         minTickGap={28}
         tickMargin={12}
@@ -95,8 +95,8 @@ export function CashChart({
         labelStyle={{ color: "#f1f5f9", marginBottom: 8 }}
         formatter={(value, name) => [overviewMoney(value), name]}
         cursor={{
-          fill: "rgba(148,163,184,.05)",
-          stroke: "#64748b",
+          fill: "rgba(161,161,170,.05)",
+          stroke: "#71717a",
           strokeDasharray: "3 3",
         }}
       />

@@ -110,7 +110,7 @@ export function FinalDashboard({
           </p>
         </div>
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-3 rounded-xl border border-slate-700/60 bg-slate-900/30 px-4 py-2.5">
+          <div className="overview-secondary-surface flex items-center gap-3 rounded-xl border px-4 py-2.5">
             <CalendarDays className="h-5 w-5 text-slate-400" />
             <div>
               <p className="text-xs text-slate-400">امروز</p>
@@ -234,7 +234,7 @@ export function FinalDashboard({
                     <button
                       key={tab}
                       onClick={() => navigate(tab)}
-                      className="group flex items-center gap-3 rounded-xl border border-slate-700/50 bg-slate-950/25 p-3 text-right transition hover:border-slate-500"
+                      className="overview-secondary-surface group flex items-center gap-3 rounded-xl border p-3 text-right transition"
                     >
                       <span
                         className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border"

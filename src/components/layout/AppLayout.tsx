@@ -188,7 +188,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
   return (
     <div
-      className={`app-shell min-h-screen min-w-0 bg-[#050506] text-zinc-100 ${["dashboard", "finance"].includes(activeTab) ? "overview-shell" : ""}`}
+      className={`app-shell min-h-screen min-w-0 text-zinc-100 ${["dashboard", "finance"].includes(activeTab) ? "overview-shell" : ""}`}
       dir="rtl"
     >
       {!["dashboard", "finance"].includes(activeTab) && <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(185,15,35,.13),transparent_30%),radial-gradient(circle_at_70%_100%,rgba(98,7,20,.08),transparent_35%)]" />}
