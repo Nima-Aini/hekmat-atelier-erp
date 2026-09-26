@@ -11,6 +11,7 @@ import { canAccessPermission, type EmployeeContext } from "@/services/access";
 import { logAuditEvent } from "@/services/audit";
 import { postCanonicalExpense, postCanonicalExpensePayment, postCanonicalReceipt } from "@/services/financial";
 import { createStudioExpense, createStudioPayment } from "@/services/studio/projectService";
+import { buildOverviewAnalytics } from "./overviewAnalytics";
 
 const hash = (value: unknown) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const n = (value: unknown) => Number(value || 0);
@@ -89,7 +90,7 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
     return { ...row, amount: n(row.amount), paidAmount, remainingAmount, status, daysToDue, customerName: contract.customerName, customerMobile: contract.customerMobile, contractNumber: contract.contract.contractNumber, projectTitle: contract.projectTitle, projectType: contract.projectType, programDate: contract.contract.programDate };
   });
   const contractFinance = contracts.map(({ contract, invoice, customerName, customerMobile, projectTitle, projectType }) => ({
-    id: contract.id, contractNumber: contract.contractNumber, customerName, customerMobile, projectTitle, projectType,
+    id: contract.id, studioProjectId: contract.studioProjectId, coreProjectId: invoice?.projectId || null, contractNumber: contract.contractNumber, customerName, customerMobile, projectTitle, projectType,
     itemsSubtotal: contractItems.filter((row) => row.contractId === contract.id).reduce((sum, row) => sum + n(row.quantity) * n(row.unitPrice), 0),
     discountAmount: n(contract.discountAmount), finalAmount: n(invoice?.grandTotal || contract.totalAmount), paidAmount: n(invoice?.paidAmount), remainingAmount: n(invoice?.balanceDue),
     financialNotes: contract.financialNotes, programDate: contract.programDate,
@@ -124,6 +125,7 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
     receivables: contracts.filter((row) => row.invoice && n(row.invoice.balanceDue) > 0).map((row) => ({ contractId: row.contract.id, contractNumber: row.contract.contractNumber, projectTitle: row.projectTitle, customerName: row.customerName, dueDate: row.invoice!.dueDate, amount: n(row.invoice!.balanceDue) })), receivableSources,
     payables: expenseList.filter((row) => row.remainingAmount > 0 && row.sourceType !== "personnel_wage"), salaries: salaryList, rentals: rentalList, profitability: profitRows, installments, contractFinance,
     cashflow: buildCashflow(receipts, outgoings, installments, expenseList), forecast, reports,
+    analytics: buildOverviewAnalytics(receipts, outgoings),
   };
 }
 

@@ -188,10 +188,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
 
   return (
     <div
-      className="app-shell min-h-screen min-w-0 bg-[#050506] text-zinc-100"
+      className={`app-shell min-h-screen min-w-0 bg-[#050506] text-zinc-100 ${["dashboard", "finance"].includes(activeTab) ? "overview-shell" : ""}`}
       dir="rtl"
     >
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(185,15,35,.13),transparent_30%),radial-gradient(circle_at_70%_100%,rgba(98,7,20,.08),transparent_35%)]" />
+      {!["dashboard", "finance"].includes(activeTab) && <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(185,15,35,.13),transparent_30%),radial-gradient(circle_at_70%_100%,rgba(98,7,20,.08),transparent_35%)]" />}
       <header className="sticky top-0 z-40 flex min-h-16 items-center gap-3 border-b border-red-950/60 bg-[#070708]/92 px-3 pb-2 pt-[max(.5rem,env(safe-area-inset-top))] backdrop-blur-xl sm:px-6 lg:ml-[17rem]">
         <button
           onClick={() => setSidebarOpen(true)}
@@ -214,7 +214,9 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
         <div className="hidden min-w-0 flex-1 sm:block sm:max-w-md">
           {searchBox}
         </div>
-        <div className="mr-auto flex items-center gap-2">
+        <div className="mr-auto flex items-center gap-3">
+          {canViewNotifications && <button onClick={() => setActiveTab("notifications")} className="relative atelier-icon-button" aria-label="اعلانات"><Bell className="h-4 w-4" />{notificationCount > 0 && <span className="absolute -right-1 -top-1 rounded-full bg-red-500 px-1 text-[10px] text-white">{notificationCount.toLocaleString("fa-IR")}</span>}</button>}
+          <span className="hidden h-9 w-9 items-center justify-center rounded-full border border-slate-700 bg-slate-800/50 sm:flex"><UserRound className="h-5 w-5 text-slate-300" /></span>
           <div className="hidden text-left sm:block">
             <p className="max-w-36 truncate text-xs font-bold">
               {me?.employee?.name || "کاربر آتلیه"}
