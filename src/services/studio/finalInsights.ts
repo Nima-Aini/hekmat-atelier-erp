@@ -91,7 +91,7 @@ export async function getFinalDashboard(
   const upcoming = approved.filter((row) => row.programDate && +new Date(row.programDate) >= now && +new Date(row.programDate) <= horizon);
   const upcomingReservations = reservations.filter((row) => row.status === "pending" && +new Date(row.reservedAt) >= now && +new Date(row.reservedAt) <= horizon);
   const statusLabels: Record<string, string> = { draft: "در انتظار تأیید", signed: "تأیید شده", completed: "تکمیل شده", cancelled: "لغو شده" };
-  const statuses = [...new Set(contracts.map((row) => row.status))].map((status) => ({ name: statusLabels[status] || status, value: contracts.filter((row) => row.status === status).length }));
+  const statuses = [...new Set(contracts.map((row) => row.status))].map((status) => ({ id: status, name: statusLabels[status] || status, value: contracts.filter((row) => row.status === status).length }));
   const activities = [
     ...contracts.map((row) => ({ id: `contract:${row.id}`, title: "قرارداد ثبت شد", detail: `${row.customer.name} · ${row.projectType.title}`, date: row.createdAt, tab: "contracts", tone: "blue" })),
     ...visits.map((row) => ({ id: `visit:${row.id}`, title: "مراجعه روزانه ثبت شد", detail: `${row.customerName} · ${row.title}`, date: row.createdAt, tab: "daily_visits", tone: "purple" })),
