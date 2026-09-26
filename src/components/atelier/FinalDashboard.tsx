@@ -218,7 +218,10 @@ export function FinalDashboard({
             )}
             <DistributionChart
               title="وضعیت قراردادها"
-              rows={overview.statuses}
+              rows={overview.statuses.map((row: { id: string; name: string; value: number }) => ({
+                ...row,
+                color: ({ draft: tones.amber, signed: tones.green, completed: tones.blue, cancelled: tones.red } as Record<string, string>)[row.id] || tones.purple,
+              }))}
               total={overview.contractCount}
               centerLabel="کل قراردادها"
             />
