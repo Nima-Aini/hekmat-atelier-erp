@@ -1,3 +1,5 @@
+import { assertOverviewCss, overviewStylesheets } from "./overview-css-check.mjs";
+
 const baseUrl = process.env.SMOKE_BASE_URL;
 const expectedSha = process.env.EXPECTED_GIT_SHA;
 const expectedEnvironment = process.env.EXPECTED_APP_ENV;
@@ -22,4 +24,14 @@ const auth = await json("/api/auth/employee-me");
 if (auth.response.status !== 401) throw new Error("Authentication boundary smoke test failed.");
 const studio = await json("/api/studio/projects");
 if (studio.response.status !== 401) throw new Error("Studio authorization smoke test failed.");
-console.log("smoke.success", { gitSha: readiness.body.gitSha, schemaVersion: readiness.body.schemaVersion, environment: readiness.body.environment, databaseDriver: readiness.body.database.driver });
+const homepage = await fetch(new URL("/", baseUrl), { redirect: "error", cache: "no-store" });
+if (!homepage.ok) throw new Error("Homepage smoke test failed.");
+const stylesheetPaths = overviewStylesheets(await homepage.text());
+if (!stylesheetPaths.length) throw new Error("Homepage does not reference application CSS.");
+const stylesheets = await Promise.all(stylesheetPaths.map(async (path) => {
+  const response = await fetch(new URL(path, baseUrl), { redirect: "error", cache: "no-store" });
+  if (!response.ok) throw new Error(`Stylesheet unavailable: ${path}`);
+  return response.text();
+}));
+assertOverviewCss(stylesheets.join("\n"));
+console.log("smoke.success", { gitSha: readiness.body.gitSha, schemaVersion: readiness.body.schemaVersion, environment: readiness.body.environment, databaseDriver: readiness.body.database.driver, overviewCss: "verified" });
