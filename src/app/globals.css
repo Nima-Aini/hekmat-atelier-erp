@@ -117,6 +117,9 @@ button.overview-metric:hover { border-color: color-mix(in srgb, var(--metric-acc
 .overview-table tr:last-child td { border-bottom: 0; }
 .overview-table tbody tr:hover { background: var(--surface-3); }
 .overview-page .atelier-input { background: var(--surface-2); border-color: var(--border-dark); }
+.overview-page .atelier-money-input { background: var(--surface-2); border-color: var(--border-dark); }
+.overview-page .atelier-money-input:focus { border-color: #ef233c; }
+.overview-page .atelier-money-unit { background: var(--surface-3); border-color: var(--border-dark); }
 .overview-page .atelier-button-secondary { background: var(--surface-2); border-color: var(--border-dark); }
 .overview-page .atelier-card { border: 1px solid var(--border-dark); background: var(--surface-1); border-radius: 16px; }
 .overview-page .app-modal > div { background: var(--surface-1); border-color: var(--border-dark); box-shadow: 0 24px 80px rgba(0,0,0,.6); }

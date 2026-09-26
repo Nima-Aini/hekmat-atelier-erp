@@ -111,7 +111,7 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
   };
 
   const baseInputClasses =
-    "w-full rounded-2xl border border-slate-800 bg-slate-900 px-3 py-2.5 text-white font-mono text-left focus:border-cyan-500 focus:outline-none transition " +
+    "atelier-money-input w-full rounded-2xl border border-slate-800 bg-slate-900 px-3 py-2.5 text-white font-mono text-left focus:border-cyan-500 focus:outline-none transition " +
     className;
 
   return (
@@ -130,7 +130,7 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
         dir="ltr"
       />
       {unit && (
-        <span className="absolute left-2.5 text-[11px] text-slate-400 select-none pointer-events-none font-sans font-medium bg-slate-800/80 px-2 py-0.5 rounded-lg border border-slate-700/50">
+        <span className="atelier-money-unit absolute left-2.5 text-[11px] text-slate-400 select-none pointer-events-none font-sans font-medium bg-slate-800/80 px-2 py-0.5 rounded-lg border border-slate-700/50">
           {unit}
         </span>
       )}
