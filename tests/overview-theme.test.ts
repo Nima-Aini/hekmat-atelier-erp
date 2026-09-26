@@ -28,6 +28,8 @@ describe("Dashboard and Financial neutral-black theme", () => {
     for (const selector of [".overview-card", ".overview-metric", ".overview-shell > header", ".overview-page .app-modal > div"])
       expect(rule(selector)).toContain("background: var(--surface-1)");
     expect(rule(".overview-table th")).toContain("background: var(--surface-2)");
+    expect(rule(".overview-page .atelier-money-input")).toContain("background: var(--surface-2)");
+    expect(rule(".overview-page .atelier-money-unit")).toContain("background: var(--surface-3)");
     expect(rule(".overview-page .app-modal form > div:last-child:has(button)")).toContain("background: var(--surface-1)");
   });
 
