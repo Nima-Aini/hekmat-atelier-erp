@@ -49,6 +49,7 @@ This is a source review plus automated regression audit, not a claim that every 
 | P2 | finalWorkflow reporting | Interactive 300-row cap and draft/signed-only list silently truncated reporting history | Separate reporting mode includes all statuses, no cap; hydration batched instead of per-contract N+1 |
 | P2 | dateUtils | Invalid Jalali input fell back to Gregorian; impossible Gregorian days normalized; last-month end was midnight | Strict civil validation, leap checks, end-of-day boundary; explicit Tehran conversion |
 | P2 | Finance monthly summary | Host Gregorian month differed from visible Jalali month and chart | Shared Jalali month start; completed cash totals exclude future timestamps |
+| P2 | accounts route / account form | Strict account-type validation omitted the existing UI's `other` option, rejecting a valid create/edit choice | Preserve `other` alongside legacy types; disposable create/edit regression assertions |
 | P2 | Dashboard/global search | Older requests could overwrite newer results and stale data could survive a failed period load | Abort replaced requests and ignore aborted completions; retry/error/loading states maintained |
 | P2 | custom Dashboard input | An invalid edit could leave an older valid parent date | Picker validity callback blocks applying invalid text while preserving typing |
 | P3 | MoneyInput | Effect read stale display state / missing dependency warning | Functional state updater preserves user formatting without reset loops |

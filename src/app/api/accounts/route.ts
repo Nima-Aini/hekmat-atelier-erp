@@ -5,7 +5,7 @@ import { accounts, payments, expenses, accountBalanceAdjustments } from "@/db/sc
 import { eq, desc, sql, and, ne } from "drizzle-orm";
 import { requireAnyPermission } from "@/services/access";
 import { logAuditEvent } from "@/services/audit";
-const accountTypes = ["bank", "cash", "pos", "receivable", "payable", "revenue", "cogs", "expense", "equity"];
+const accountTypes = ["bank", "cash", "pos", "other", "receivable", "payable", "revenue", "cogs", "expense", "equity"];
 
 function validateAccountText(body: Record<string, unknown>) {
   for (const [field, max] of [["name", 120], ["code", 50], ["bankName", 100], ["accountNumber", 100]] as const) {
