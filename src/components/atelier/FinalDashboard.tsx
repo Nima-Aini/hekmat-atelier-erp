@@ -35,20 +35,15 @@ export function FinalDashboard({
   onNavigate,
   userName = "مدیر سیستم",
   permissions = [],
-  selectedProjectId = null,
-  onProjectChange,
 }: {
   onNavigate: (tab: string) => void;
   userName?: string;
   permissions?: string[];
-  selectedProjectId?: string | null;
-  onProjectChange?: (id: string | null) => void;
 }) {
   const [selection, setSelection] = useState<DashboardDateSelection>(() => dashboardPresetSelection("today"));
   const range = selection.range;
   const [displayedPeriod, setDisplayedPeriod] = useState("");
   const controller = useRef<AbortController | null>(null);
-  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   const [data, setData] = useState<any>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true);
@@ -59,7 +54,6 @@ export function FinalDashboard({
     setError("");
     try {
       const params = new URLSearchParams({ startDate: toBusinessGregorianDateString(range.start), endDate: toBusinessGregorianDateString(range.end) });
-      if (selectedProjectId) params.set("projectId", selectedProjectId);
       const response = await fetch(`/api/atelier/dashboard?${params}`, {
         cache: "no-store",
         signal: current.signal,
@@ -68,11 +62,8 @@ export function FinalDashboard({
       if (!response.ok || !body.success)
         throw new Error(body.error || "دریافت اطلاعات ممکن نشد.");
       if (!current.signal.aborted) {
-        const availableProjects: Array<{ id: string; name: string }> = body.dashboard.overview.availableProjects;
         setData(body.dashboard);
-        setProjects(availableProjects);
-        const projectLabel = selectedProjectId ? availableProjects.find(project => project.id === selectedProjectId)?.name || "پروژه انتخاب‌شده" : "همه پروژه‌های مجاز";
-        setDisplayedPeriod(`${toJalaliDate(range.start)} تا ${toJalaliDate(range.end)} · ${projectLabel}`);
+        setDisplayedPeriod(`${toJalaliDate(range.start)} تا ${toJalaliDate(range.end)} · نمای کلی آتلیه`);
       }
     } catch (reason) {
       if (current.signal.aborted) return;
@@ -82,7 +73,7 @@ export function FinalDashboard({
     } finally {
       if (!current.signal.aborted) setLoading(false);
     }
-  }, [range, selectedProjectId]);
+  }, [range]);
   useEffect(() => {
     void load();
     return () => controller.current?.abort();
@@ -135,10 +126,6 @@ export function FinalDashboard({
           </p>
         </div>
         <div className="flex min-w-0 max-w-full items-center gap-2">
-          {onProjectChange && <select aria-label="پروژه داشبورد" className="atelier-input min-w-0 max-w-full py-2 text-xs" value={selectedProjectId || ""} onChange={(event) => onProjectChange(event.target.value || null)}>
-            <option value="">همه پروژه‌های مجاز</option>
-            {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
-          </select>}
           <button
             aria-label="به‌روزرسانی داشبورد"
             title="به‌روزرسانی"

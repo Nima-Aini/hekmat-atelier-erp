@@ -156,6 +156,7 @@ export async function getFinalDashboard(
 export async function listContractCustomers(
   allowedCoreProjectIds: string[] | null,
   includeFinance = true,
+  financeProjectIds: string[] | null = null,
 ) {
   const contracts = await listContracts(undefined, allowedCoreProjectIds);
   const grouped = new Map<
@@ -170,6 +171,7 @@ export async function listContractCustomers(
       nextProgram: Date | null;
       total: number;
       remaining: number;
+      hasFinance: boolean;
     }
   >();
   const now = Date.now();
@@ -184,10 +186,14 @@ export async function listContractCustomers(
       nextProgram: null,
       total: 0,
       remaining: 0,
+      hasFinance: false,
     };
     current.contractCount += 1;
-    current.total += numeric(contract.totalAmount);
-    current.remaining += numeric(contract.remainingAmount);
+    if (includeFinance && (financeProjectIds === null || (contract.project.projectId && financeProjectIds.includes(contract.project.projectId)))) {
+      current.total += numeric(contract.totalAmount);
+      current.remaining += numeric(contract.remainingAmount);
+      current.hasFinance = true;
+    }
     const contractDate = new Date(contract.contractDate);
     if (!current.lastContract || contractDate > current.lastContract)
       current.lastContract = contractDate;
@@ -201,7 +207,7 @@ export async function listContractCustomers(
     }
     grouped.set(current.id, current);
   }
-  return [...grouped.values()].map((customer) => includeFinance ? customer : { ...customer, total: null, remaining: null });
+  return [...grouped.values()].map(({ hasFinance, ...customer }) => hasFinance ? customer : { ...customer, total: null, remaining: null });
 }
 
 export async function getFinalCalendar(allowedCoreProjectIds: string[] | null, financeIds?: string[] | null) {

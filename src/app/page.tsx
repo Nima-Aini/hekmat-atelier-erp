@@ -36,6 +36,30 @@ export default function HomePage() {
       .catch(() => router.replace("/employee-login"));
   }, [router]);
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [customerProfileId, setCustomerProfileId] = useState<string | null>(null);
+  useEffect(() => {
+    const readLocation = () => {
+      const hash = window.location.hash;
+      setCustomerProfileId(hash.startsWith("#customers/") ? hash.slice("#customers/".length) : null);
+      if (hash === "#customers" || hash.startsWith("#customers/")) setActiveTab("customers");
+    };
+    readLocation();
+    window.addEventListener("popstate", readLocation);
+    window.addEventListener("hashchange", readLocation);
+    return () => { window.removeEventListener("popstate", readLocation); window.removeEventListener("hashchange", readLocation); };
+  }, []);
+  const navigateTab = (tab: string) => {
+    if (window.location.hash.startsWith("#customers")) window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    setCustomerProfileId(null);
+    setActiveTab(tab);
+  };
+  const viewCustomer = (id: string | null) => {
+    const url = id ? `#customers/${encodeURIComponent(id)}` : "#customers";
+    if (id) window.history.pushState(null, "", url);
+    else window.history.replaceState(null, "", url);
+    setCustomerProfileId(id);
+    setActiveTab("customers");
+  };
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
@@ -48,7 +72,7 @@ export default function HomePage() {
   const renderActiveView = () => {
     switch (effectiveActiveTab) {
       case "dashboard":
-        return <FinalDashboard onNavigate={setActiveTab} userName={me?.employee?.name} permissions={permissionValues} selectedProjectId={selectedProjectId} onProjectChange={setSelectedProjectId} />;
+        return <FinalDashboard onNavigate={navigateTab} userName={me?.employee?.name} permissions={permissionValues} />;
       case "contracts":
         return <ContractsView onNavigateFinance={(contractId) => { setSelectedFinanceContractId(contractId); setActiveTab("finance"); }} />;
       case "daily_visits":
@@ -60,7 +84,12 @@ export default function HomePage() {
       case "calendar":
         return <FinalCalendar onOpenPlanning={(id) => { sessionStorage.setItem("akma:planning-target", id); setActiveTab("planning"); window.setTimeout(() => window.dispatchEvent(new CustomEvent("akma:navigate-item", { detail: { id } })), 50); }} />;
       case "customers":
-        return <ContractCustomersView />;
+        return <ContractCustomersView customerId={customerProfileId} onViewCustomer={viewCustomer} onNavigate={(section, id) => {
+          if (section === "finance") setSelectedFinanceContractId(id);
+          if (section === "planning" && id) sessionStorage.setItem("akma:planning-target", id);
+          navigateTab(section);
+          if (id && section !== "finance") window.setTimeout(() => window.dispatchEvent(new CustomEvent("akma:navigate-item", { detail: { id } })), 50);
+        }} />;
       case "personnel":
         return <PersonnelView />;
       case "equipment":
@@ -89,7 +118,7 @@ export default function HomePage() {
   return (
     <AppLayout
       activeTab={effectiveActiveTab}
-      setActiveTab={setActiveTab}
+      setActiveTab={navigateTab}
       selectedProjectId={selectedProjectId}
       setSelectedProjectId={setSelectedProjectId}
       me={me}

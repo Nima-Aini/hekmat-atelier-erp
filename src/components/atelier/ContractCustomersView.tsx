@@ -1,24 +1,30 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Edit3, Search, UsersRound } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Edit3, Eye, Search, UsersRound } from "lucide-react";
 import { toJalaliDate } from "@/lib/dateUtils";
 import { AtelierModal } from "./AtelierModal";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 import { atelierToast } from "@/lib/atelierFeedback";
+import { CustomerProfileView } from "./CustomerProfileView";
 
 const money = (value: unknown) =>
   value === null || value === undefined ? "—" : `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
 type Sort = "newest" | "oldest" | "contracts" | "total" | "remaining" | "next";
 
-export function ContractCustomersView() {
+export function ContractCustomersView({ customerId = null, onViewCustomer, onNavigate }: {
+  customerId?: string | null;
+  onViewCustomer: (id: string | null) => void;
+  onNavigate: (section: string, id: string | null) => void;
+}) {
+  const [revision, setRevision] = useState(0);
   const [customers, setCustomers] = useState<any[]>([]),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [query, setQuery] = useState(""),
     [sort, setSort] = useState<Sort>("newest"),
     [editing, setEditing] = useState<any>(null);
-  const load = () => {
+  const load = useCallback(() => {
     setLoading(true);
     fetch("/api/atelier/customers")
       .then((r) => r.json())
@@ -30,8 +36,8 @@ export function ContractCustomersView() {
       })
       .catch((reason) => setError(reason.message))
       .finally(() => setLoading(false));
-  };
-  useEffect(load, []);
+  }, []);
+  useEffect(() => { if (!customerId) load(); }, [customerId, load]);
   const rows = useMemo(
     () =>
       customers
@@ -56,6 +62,10 @@ export function ContractCustomersView() {
         ),
     [customers, query, sort],
   );
+  if (customerId) return <>
+    <CustomerProfileView id={customerId} revision={revision} onBack={() => onViewCustomer(null)} onNavigate={onNavigate} onEdit={setEditing} />
+    {editing && <CustomerEdit customer={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); setRevision(value => value + 1); }} />}
+  </>;
   return (
     <div className="space-y-5">
       <div>
@@ -133,6 +143,7 @@ export function ContractCustomersView() {
                 }
               />
               <div className="flex items-center gap-3 sm:justify-end">
+                <button type="button" className="atelier-button-secondary inline-flex items-center gap-1.5 text-xs" aria-label={`مشاهده مشتری ${customer.name}`} onClick={() => onViewCustomer(customer.id)}><Eye className="h-4 w-4" />مشاهده</button>
                 <span className="text-[10px] text-zinc-500">
                   جمع {money(customer.total)}
                   <b className="mt-1 block text-red-400">
@@ -140,6 +151,7 @@ export function ContractCustomersView() {
                   </b>
                 </span>
                 <button
+                  aria-label={`ویرایش مشتری ${customer.name}`}
                   onClick={() => setEditing(customer)}
                   className="atelier-icon-button"
                 >

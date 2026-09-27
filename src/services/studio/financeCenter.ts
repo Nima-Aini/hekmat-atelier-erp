@@ -13,6 +13,8 @@ import { postCanonicalExpense, postCanonicalExpensePayment, postCanonicalReceipt
 import { createStudioExpense, createStudioPayment } from "@/services/studio/projectService";
 import { buildOverviewAnalytics } from "./overviewAnalytics";
 import { getJalaliPresetRange, getStartOfDayJalali } from "@/lib/dateUtils";
+import { atelierInstallmentState } from "@/lib/atelierInstallment";
+import { readPostedInstallmentAllocations } from "./installmentReadModel";
 
 const hash = (value: unknown) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const n = (value: unknown) => Number(value || 0);
@@ -48,7 +50,7 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   const allocations = await db.select().from(expensePaymentAllocations);
   const dailySalarySources = rawSalaries.length ? await db.select({ salaryRecordId: studioDailyVisitPersonnel.salaryRecordId, visitTitle: studioDailyVisits.title }).from(studioDailyVisitPersonnel).innerJoin(studioDailyVisits, eq(studioDailyVisits.id, studioDailyVisitPersonnel.dailyVisitId)).where(inArray(studioDailyVisitPersonnel.salaryRecordId, rawSalaries.map((row) => row.salary.id))) : [];
   const expenseSources = await db.select().from(atelierExpenseSources);
-  const installmentAllocations = await db.select().from(studioInstallmentAllocations);
+  const installmentAllocations = (await readPostedInstallmentAllocations(db, installmentRows.map(row => row.id))).map(row => row.allocation);
   const contractItems = visibleContractIds.size ? await db.select().from(studioContractItems).where(inArray(studioContractItems.contractId, [...visibleContractIds])) : [];
   const correctionRows = visibleContractIds.size ? await db.select().from(auditLogs).where(and(eq(auditLogs.entityType, "studio_contract"), inArray(auditLogs.entityId, [...visibleContractIds]))).orderBy(desc(auditLogs.createdAt)) : [];
   const adjustmentRows = accountRows.length ? await db.select().from(accountBalanceAdjustments).where(inArray(accountBalanceAdjustments.accountId, accountRows.map((row) => row.id))).orderBy(desc(accountBalanceAdjustments.adjustedAt)) : [];
@@ -86,9 +88,7 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   const installments = installmentRows.map((row) => {
     const contract = contracts.find((entry) => entry.contract.id === row.contractId)!;
     const paidAmount = installmentAllocations.filter((a) => a.installmentId === row.id).reduce((s, a) => s + n(a.amount), 0);
-    const remainingAmount = Math.max(0, n(row.amount) - paidAmount);
-    const daysToDue = Math.ceil((new Date(row.dueDate).getTime() - now.getTime()) / 86_400_000);
-    const status = remainingAmount === 0 ? "paid" : paidAmount > 0 ? "partial" : daysToDue < 0 ? "overdue" : daysToDue <= 7 ? "due_soon" : "pending";
+    const { remainingAmount, daysToDue, status } = atelierInstallmentState(n(row.amount), paidAmount, row.dueDate, now);
     return { ...row, amount: n(row.amount), paidAmount, remainingAmount, status, daysToDue, customerName: contract.customerName, customerMobile: contract.customerMobile, contractNumber: contract.contract.contractNumber, projectTitle: contract.projectTitle, projectType: contract.projectType, programDate: contract.contract.programDate };
   });
   const contractFinance = contracts.map(({ contract, invoice, customerName, customerMobile, projectTitle, projectType }) => ({
