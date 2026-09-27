@@ -14,7 +14,8 @@ import {
   AlertCircle,
   Camera,
 } from "lucide-react";
-import { getJalaliPresetRange, toBusinessGregorianDateString, toJalaliDate } from "@/lib/dateUtils";
+import { toBusinessGregorianDateString, toJalaliDate } from "@/lib/dateUtils";
+import { dashboardPresetSelection, type DashboardDateSelection } from "@/lib/dashboardDateSelection";
 import { DashboardRangeFilter } from "./DashboardRangeFilter";
 import { canSeeAtelierSection } from "@/lib/atelierNavigation";
 import { CashChart, DistributionChart } from "./OverviewCharts";
@@ -43,7 +44,9 @@ export function FinalDashboard({
   selectedProjectId?: string | null;
   onProjectChange?: (id: string | null) => void;
 }) {
-  const [range, setRange] = useState(() => getJalaliPresetRange("this_month")!);
+  const [selection, setSelection] = useState<DashboardDateSelection>(() => dashboardPresetSelection("today"));
+  const range = selection.range;
+  const [displayedPeriod, setDisplayedPeriod] = useState("");
   const controller = useRef<AbortController | null>(null);
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   const [data, setData] = useState<any>(null),
@@ -54,7 +57,6 @@ export function FinalDashboard({
     const current = new AbortController(); controller.current = current;
     setLoading(true);
     setError("");
-    setData(null);
     try {
       const params = new URLSearchParams({ startDate: toBusinessGregorianDateString(range.start), endDate: toBusinessGregorianDateString(range.end) });
       if (selectedProjectId) params.set("projectId", selectedProjectId);
@@ -65,7 +67,13 @@ export function FinalDashboard({
       const body = await response.json();
       if (!response.ok || !body.success)
         throw new Error(body.error || "دریافت اطلاعات ممکن نشد.");
-      if (!current.signal.aborted) { setData(body.dashboard); setProjects(body.dashboard.overview.availableProjects); }
+      if (!current.signal.aborted) {
+        const availableProjects: Array<{ id: string; name: string }> = body.dashboard.overview.availableProjects;
+        setData(body.dashboard);
+        setProjects(availableProjects);
+        const projectLabel = selectedProjectId ? availableProjects.find(project => project.id === selectedProjectId)?.name || "پروژه انتخاب‌شده" : "همه پروژه‌های مجاز";
+        setDisplayedPeriod(`${toJalaliDate(range.start)} تا ${toJalaliDate(range.end)} · ${projectLabel}`);
+      }
     } catch (reason) {
       if (current.signal.aborted) return;
       setError(
@@ -116,7 +124,8 @@ export function FinalDashboard({
   ].filter((row) => canSeeAtelierSection(row.tab, permissions));
   return (
     <div className="overview-page space-y-5">
-      <header className="flex flex-wrap items-center justify-between gap-4 py-1">
+      <header className="space-y-3 py-1">
+        <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-extrabold sm:text-2xl">
             سلام، {userName}
@@ -125,23 +134,14 @@ export function FinalDashboard({
             خلاصهٔ بازه انتخابی؛ وضعیت جاری و برنامه‌های پیش رو مستقل از بازه هستند.
           </p>
         </div>
-        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3">
-          <DashboardRangeFilter range={range} onChange={setRange} />
+        <div className="flex min-w-0 max-w-full items-center gap-2">
           {onProjectChange && <select aria-label="پروژه داشبورد" className="atelier-input min-w-0 max-w-full py-2 text-xs" value={selectedProjectId || ""} onChange={(event) => onProjectChange(event.target.value || null)}>
             <option value="">همه پروژه‌های مجاز</option>
             {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
           </select>}
-          <div className="overview-secondary-surface flex items-center gap-3 rounded-xl border px-4 py-2.5">
-            <CalendarDays className="h-5 w-5 text-slate-400" />
-            <div>
-              <p className="text-xs text-slate-400">امروز</p>
-              <time className="mt-1 block text-xs font-bold">
-                {toJalaliDate(new Date(), { format: "words" })}
-              </time>
-            </div>
-          </div>
           <button
             aria-label="به‌روزرسانی داشبورد"
+            title="به‌روزرسانی"
             onClick={() => void load()}
             disabled={loading}
             className="atelier-icon-button"
@@ -149,7 +149,13 @@ export function FinalDashboard({
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
           </button>
         </div>
+        </div>
+        <DashboardRangeFilter selection={selection} onChange={setSelection} />
       </header>
+      {data && (loading || error) && <p role="status" aria-live="polite" className="flex items-center gap-2 text-[11px] text-zinc-400">
+        {loading && <RefreshCw className="h-3 w-3 animate-spin" />}
+        {loading ? "در حال به‌روزرسانی؛ " : "به‌روزرسانی انجام نشد؛ "}اطلاعات نمایش‌داده‌شده مربوط به {displayedPeriod} است.
+      </p>}
       {error && (
         <div
           role="alert"
