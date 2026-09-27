@@ -106,6 +106,10 @@ describe("Production audit regression on disposable database", () => {
     expect(response.status).toBe(200); const account = (await response.json()).account;
     const edited = await editAccount(jsonRequest("/api/accounts", "PUT", { id: account.id, name: "صندوق ویرایش", balance: 200, isDefault: false }));
     expect(edited.status).toBe(200); expect((await edited.json()).account).toMatchObject({ name: "صندوق ویرایش", balance: 200 });
+    const otherResponse = await createAccount(jsonRequest("/api/accounts", "POST", { name: "حساب سایر آزمایشی", type: "other", balance: 0 }));
+    expect(otherResponse.status).toBe(200); const other = (await otherResponse.json()).account;
+    expect(other.type).toBe("other");
+    expect((await editAccount(jsonRequest("/api/accounts", "PUT", { id: other.id, type: "other", name: "حساب سایر ویرایش" }))).status).toBe(200);
     const [posted] = await db.select().from(expenses).where(eq(expenses.projectId, a.project.projectId!));
     const params = { params: Promise.resolve({ id: posted.id }) };
     expect((await editExpense(jsonRequest("/api/expenses", "PUT", { amount: 20 }), params)).status).toBe(409);
