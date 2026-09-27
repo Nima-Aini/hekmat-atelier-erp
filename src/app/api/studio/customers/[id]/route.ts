@@ -25,7 +25,7 @@ export async function GET(
     for (const project of customer.projects || []) {
       if (!(await canAccessPermission(actor, "studio.view", project.projectId))) continue;
       if (project.projectId && await canAccessPermission(actor, "studio.finance.view", project.projectId)) financialCoreIds.push(project.projectId);
-      projects.push((await canAccessPermission(actor, "studio.contract.view", project.projectId)) ? project : { ...project, totalContractValue: null });
+      projects.push((await canAccessPermission(actor, "studio.finance.view", project.projectId)) ? project : { ...project, totalContractValue: null });
     }
     customer.projects = projects;
     const studioIds = projects.map((project: any) => project.id);
