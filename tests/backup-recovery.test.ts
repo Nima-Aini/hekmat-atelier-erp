@@ -1,5 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import crypto, { randomUUID } from "node:crypto";
@@ -19,6 +19,22 @@ import { GET as health } from "../src/app/api/health/route";
 
 const temporaryDirectories: string[] = [];
 async function temporaryDirectory() { const directory = await mkdtemp(path.join(tmpdir(), "atelier-backup-test-")); temporaryDirectories.push(directory); return directory; }
+
+// Windows cannot spawn Unix shebang fixtures. An explicitly supplied no-op
+// executable keeps these metadata/checksum tests identical; the separate
+// PostgreSQL recovery drill always uses the real pg_restore binary.
+async function fakeRestoreBinary(root: string) {
+  if (process.env.TEST_PG_RESTORE_BIN) {
+    const fixture = path.join(root, "pg_restore.exe");
+    await copyFile(process.env.TEST_PG_RESTORE_BIN, fixture);
+    // The existing Git-for-Windows no-op fixture uses the installed MSYS runtime.
+    await copyFile(path.join(path.dirname(process.env.TEST_PG_RESTORE_BIN), "msys-2.0.dll"), path.join(root, "msys-2.0.dll"));
+    return fixture;
+  }
+  const fixture = path.join(root, "pg_restore");
+  await writeFile(fixture, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  return fixture;
+}
 
 describe("native backup and restore safety", () => {
   beforeAll(migrateDatabase);
@@ -40,7 +56,7 @@ describe("native backup and restore safety", () => {
     const checksum = crypto.createHash("sha256").update(archive).digest("hex");
     await storage.writeMetadata(id, { backupId: id, checksum, format: "postgres_custom", formatVersion: 1 });
     await db.insert(backups).values({ id, filename: `${id}.dump`, sizeBytes: archive.length, sizeBytesBigint: archive.length, checksum, status: "completed", storageDriver: "local", storageKey: id, format: "postgres_custom", formatVersion: 1, schemaVersion: "011_atelier_finance_planning_polish" });
-    const fakeRestore = path.join(root, "pg_restore"); await writeFile(fakeRestore, "#!/bin/sh\nexit 0\n", { mode: 0o700 }); vi.stubEnv("PG_RESTORE_BIN", fakeRestore);
+    vi.stubEnv("PG_RESTORE_BIN", await fakeRestoreBinary(root));
     await expect(verifySystemBackup(id, undefined, storage)).resolves.toMatchObject({ valid: true, checksum });
     const report = await validateRestore(id, undefined, storage); expect(report).toMatchObject({ backupValid: true, checksumValid: true, readable: true, metadataValid: true });
     await writeFile(await storage.resolve(id), "corrupted");
@@ -51,7 +67,7 @@ describe("native backup and restore safety", () => {
     const root = await temporaryDirectory(); const storage = new LocalBackupStorage(root); const id = randomUUID(); const archive = Buffer.from("PGDMP-old-schema"); const checksum = crypto.createHash("sha256").update(archive).digest("hex");
     const temporary = await storage.createTemporary(id); await temporary.handle.writeFile(archive); await temporary.handle.close(); await storage.commit(id, temporary.path); await storage.writeMetadata(id, { backupId: id, checksum, format: "postgres_custom", formatVersion: 1 });
     await db.insert(backups).values({ id, filename: `${id}.dump`, sizeBytes: archive.length, checksum, status: "verified", storageDriver: "local", storageKey: id, format: "postgres_custom", formatVersion: 1, schemaVersion: "999_unsupported" });
-    const fakeRestore = path.join(root, "pg_restore"); await writeFile(fakeRestore, "#!/bin/sh\nexit 0\n", { mode: 0o700 }); vi.stubEnv("PG_RESTORE_BIN", fakeRestore);
+    vi.stubEnv("PG_RESTORE_BIN", await fakeRestoreBinary(root));
     expect(await validateRestore(id, undefined, storage)).toMatchObject({ backupValid: false, checksumValid: true, restoreRisk: "medium" });
     await expect(restoreBackupToIsolatedDatabase(id, "wrong", { userId: "test" }, storage)).rejects.toMatchObject({ status: 400, code: "RESTORE_CONFIRMATION_REQUIRED" });
   });

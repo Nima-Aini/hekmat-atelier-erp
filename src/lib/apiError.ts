@@ -46,7 +46,6 @@ export function apiError(error: unknown, operation = "انجام عملیات") 
       code,
       constraint: pg.constraint,
       table: pg.table,
-      detail: pg.detail,
       message: typeof pg.message === "string" ? safeDiagnostic(new Error(pg.message)).message : undefined,
     });
   } else {

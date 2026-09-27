@@ -17,7 +17,7 @@ const valid = {
 };
 
 function validate(overrides: Record<string, string>) {
-  return spawnSync("bash", [script], { env: { ...process.env, ...valid, ...overrides }, encoding: "utf8" });
+  return spawnSync(process.env.TEST_BASH_BIN || "bash", [script.replace(/\\/g, "/")], { env: { ...process.env, ...valid, ...overrides }, encoding: "utf8" });
 }
 
 describe("deployment target safety", () => {

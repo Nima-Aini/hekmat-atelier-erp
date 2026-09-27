@@ -58,12 +58,15 @@ export async function getEmployeeContext(): Promise<EmployeeContext | null> {
   }
 }
 
-export async function getScopedProjectIds() {
+export async function getScopedProjectIds(permissions?: string[]) {
   const context = await getEmployeeContext();
   if (!context) throw new ApiError(401, "ابتدا وارد حساب کاربری شوید.");
   if (context.permissions.has("*")) return null;
-  const rows = await db.select({ projectId: employeeProjectAssignments.projectId }).from(employeeProjectAssignments).where(and(eq(employeeProjectAssignments.employeeId, context.employeeId), eq(employeeProjectAssignments.status, "active")));
-  return rows.map((r) => r.projectId);
+  const rows = await db.select({ projectId: employeeProjectAssignments.projectId, permissionSet: employeeProjectAssignments.permissionSet }).from(employeeProjectAssignments).where(and(eq(employeeProjectAssignments.employeeId, context.employeeId), eq(employeeProjectAssignments.status, "active")));
+  return rows.filter((row) => !permissions || permissions.some((permission) => {
+    const scoped = (row.permissionSet || {}) as Record<string, unknown>;
+    return scoped[permission] !== false && (scoped[permission] === true || context.permissions.has(permission));
+  })).map((r) => r.projectId);
 }
 
 export async function requirePermission(permission: string, projectId?: string | null) {

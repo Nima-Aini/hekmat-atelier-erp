@@ -119,10 +119,11 @@ export function jalaliToGregorian(jalali: JalaliDate): Date {
  */
 export function parseJalaliString(str: string): Date | null {
   if (!str) return null;
+  if (!/^\d{4}[\/-]\d{1,2}[\/-]\d{1,2}$/.test(toLatinDigits(str.trim()))) return null;
   const parts = str.split(/[\/\-]/).map((s) => parseInt(toLatinDigits(s.trim()), 10));
   if (parts.length !== 3 || parts.some(isNaN)) return null;
   const [year, month, day] = parts;
-  if (year < 1000 || !jalaali.isValidJalaaliDate(year, month, day)) return null;
+  if (year < 1000 || year > 3177 || !jalaali.isValidJalaaliDate(year, month, day)) return null;
   return jalaliToGregorian({ year, month, day });
 }
 
@@ -230,10 +231,13 @@ export function parseReportDateParam(value: string | null, endOfDay = false): Da
   if (!value) return null;
   const normalized = toLatinDigits(value.trim());
   const jalali = /^1[34]\d{2}[/-]\d{1,2}[/-]\d{1,2}$/.test(normalized) ? parseJalaliString(normalized) : null;
+  if (/^1[34]\d{2}[/-]/.test(normalized) && !jalali) return null;
   let date: Date;
   if (jalali) date = jalali;
-  else if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
-    const [year, month, day] = normalized.split("-").map(Number);
+  else if (/^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/.test(normalized)) {
+    const [year, month, day] = normalized.split(/[/-]/).map(Number);
+    const civil = new Date(Date.UTC(year, month - 1, day));
+    if (civil.getUTCFullYear() !== year || civil.getUTCMonth() + 1 !== month || civil.getUTCDate() !== day) return null;
     date = tehranDateTimeToUtc({ year, month, day });
   } else {
     date = new Date(normalized);
@@ -327,7 +331,7 @@ export function getJalaliPresetRange(preset: string): { start: Date; end: Date }
       const lastMonthDays = getJalaliMonthLength(lastMonthYear, lastMonth);
       return {
         start: jalaliToGregorian({ year: lastMonthYear, month: lastMonth, day: 1 }),
-        end: jalaliToGregorian({ year: lastMonthYear, month: lastMonth, day: lastMonthDays }),
+        end: getEndOfDayJalali(jalaliToGregorian({ year: lastMonthYear, month: lastMonth, day: lastMonthDays })),
       };
     }
     default:
@@ -390,7 +394,7 @@ export function isValidJalaliDate(str: string): boolean {
   if (year < 1000 || year > 1600) return false;
   if (month < 1 || month > 12) return false;
   if (day < 1 || day > 31) return false;
-  return true;
+  return jalaali.isValidJalaaliDate(year, month, day);
 }
 
 export function isValidGregorianDate(date: Date | string | number): boolean {

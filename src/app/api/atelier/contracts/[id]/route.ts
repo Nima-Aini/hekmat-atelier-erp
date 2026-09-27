@@ -6,6 +6,7 @@ import {
 } from "@/services/studio/finalWorkflow";
 import { requireStudioResourceAccess } from "@/services/studio/access";
 import { canAccessPermission } from "@/services/access";
+import { redactContractFinance } from "@/services/studio/financialPrivacy";
 
 export async function GET(
   _: NextRequest,
@@ -16,7 +17,7 @@ export async function GET(
     const { actor, owner } = await requireStudioResourceAccess("contract", id, "studio.contract.view");
     const contract = await getContractById(id);
     const finance = await canAccessPermission(actor, "studio.finance.view", owner.coreProjectId);
-    return NextResponse.json({ success: true, contract: finance ? contract : { ...contract, totalAmount: null, depositAmount: null, paidAmount: null, remainingAmount: null, items: contract.items.map((item) => ({ ...item, unitPrice: null })) } });
+    return NextResponse.json({ success: true, contract: finance ? contract : redactContractFinance(contract) });
   } catch (error) {
     return apiError(error, "دریافت قرارداد");
   }

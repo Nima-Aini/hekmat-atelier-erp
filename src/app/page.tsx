@@ -48,7 +48,7 @@ export default function HomePage() {
   const renderActiveView = () => {
     switch (effectiveActiveTab) {
       case "dashboard":
-        return <FinalDashboard onNavigate={setActiveTab} userName={me?.employee?.name} permissions={permissionValues} />;
+        return <FinalDashboard onNavigate={setActiveTab} userName={me?.employee?.name} permissions={permissionValues} selectedProjectId={selectedProjectId} onProjectChange={setSelectedProjectId} />;
       case "contracts":
         return <ContractsView onNavigateFinance={(contractId) => { setSelectedFinanceContractId(contractId); setActiveTab("finance"); }} />;
       case "daily_visits":
@@ -80,7 +80,7 @@ export default function HomePage() {
 
   if (!authReady)
     return (
-      <main className="min-h-screen bg-slate-950 text-white flex items-center justify-center">
+      <main className="min-h-screen bg-[var(--app-bg)] text-white flex items-center justify-center">
         در حال بررسی دسترسی…
       </main>
     );

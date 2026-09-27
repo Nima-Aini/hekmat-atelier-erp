@@ -12,6 +12,7 @@ import { logAuditEvent } from "@/services/audit";
 import { postCanonicalExpense, postCanonicalExpensePayment, postCanonicalReceipt } from "@/services/financial";
 import { createStudioExpense, createStudioPayment } from "@/services/studio/projectService";
 import { buildOverviewAnalytics } from "./overviewAnalytics";
+import { getJalaliPresetRange, getStartOfDayJalali } from "@/lib/dateUtils";
 
 const hash = (value: unknown) => crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const n = (value: unknown) => Number(value || 0);
@@ -19,12 +20,12 @@ async function assertFinanceScope(actor: EmployeeContext, projectId: string | nu
   if (projectId && !(await canAccessPermission(actor, "studio.finance.manage", projectId))) throw new ApiError(403, "دسترسی مالی به این پروژه مجاز نیست.", "PROJECT_SCOPE_FORBIDDEN");
 }
 
-export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | null = null) {
+export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | null = null, includeUnassigned = true) {
   const [accountRows, rawPaymentRows, rawExpenseRows, rawContracts, visits, reservations, rawSalaries, rawRentals, rawInstallmentRows] = await Promise.all([
     db.select().from(accounts).where(eq(accounts.status, "active")).orderBy(desc(accounts.isDefault), asc(accounts.name)),
     db.select({ payment: payments, accountName: accounts.name }).from(payments).innerJoin(accounts, eq(accounts.id, payments.accountId)).where(eq(payments.status, "completed")).orderBy(desc(payments.paymentDate)),
     db.select({ expense: expenses, accountName: accounts.name }).from(expenses).leftJoin(accounts, eq(accounts.id, expenses.accountId)).where(eq(expenses.status, "posted")).orderBy(desc(expenses.expenseDate)),
-    db.select({ contract: studioContracts, projectTitle: studioProjects.title, projectType: studioProjectTypes.title, invoice: invoices, customerName: customers.name, customerMobile: customers.mobile })
+    db.select({ contract: studioContracts, coreProjectId: studioProjects.projectId, projectTitle: studioProjects.title, projectType: studioProjectTypes.title, invoice: invoices, customerName: customers.name, customerMobile: customers.mobile })
       .from(studioContracts).innerJoin(studioProjects, eq(studioProjects.id, studioContracts.studioProjectId))
       .leftJoin(studioProjectTypes, eq(studioProjectTypes.id, studioContracts.projectTypeId))
       .leftJoin(invoices, eq(invoices.id, studioContracts.invoiceId)).leftJoin(customers, eq(customers.id, invoices.customerId)),
@@ -36,11 +37,12 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
     db.select().from(studioInstallments).orderBy(asc(studioInstallments.dueDate)),
   ]);
   const allowed = allowedCoreProjectIds === null ? null : new Set(allowedCoreProjectIds);
-  const contracts = allowed === null ? rawContracts : rawContracts.filter((row) => !row.invoice?.projectId || allowed.has(row.invoice.projectId));
-  const expenseRows = allowed === null ? rawExpenseRows : rawExpenseRows.filter((row) => !row.expense.projectId || allowed.has(row.expense.projectId));
-  const salaries = allowed === null ? rawSalaries : rawSalaries.filter((row) => !row.coreProjectId || allowed.has(row.coreProjectId));
-  const rentals = allowed === null ? rawRentals : rawRentals.filter((row) => !row.coreProjectId || allowed.has(row.coreProjectId));
-  const paymentRows = allowed === null ? rawPaymentRows : rawPaymentRows.filter((row) => !row.payment.projectId || allowed.has(row.payment.projectId));
+  const visible = (projectId: string | null | undefined) => allowed === null || (projectId ? allowed.has(projectId) : includeUnassigned);
+  const contracts = rawContracts.filter((row) => visible(row.coreProjectId));
+  const expenseRows = rawExpenseRows.filter((row) => visible(row.expense.projectId));
+  const salaries = rawSalaries.filter((row) => visible(row.coreProjectId));
+  const rentals = rawRentals.filter((row) => visible(row.coreProjectId));
+  const paymentRows = rawPaymentRows.filter((row) => visible(row.payment.projectId));
   const visibleContractIds = new Set(contracts.map((row) => row.contract.id));
   const installmentRows = rawInstallmentRows.filter((row) => visibleContractIds.has(row.contractId));
   const allocations = await db.select().from(expensePaymentAllocations);
@@ -97,16 +99,16 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
     receipts: receipts.filter((row) => row.invoiceId === contract.invoiceId),
     corrections: correctionRows.filter((row) => row.entityId === contract.id && ["ATELIER_CONTRACT_FINANCE_UPDATED", "ATELIER_INSTALLMENTS_UPDATED"].includes(row.action)),
   }));
-  const startOfMonth = new Date(); startOfMonth.setDate(1); startOfMonth.setHours(0, 0, 0, 0);
-  const receivedThisMonth = receipts.filter((row) => new Date(row.paymentDate) >= startOfMonth).reduce((sum, row) => sum + row.amount, 0);
-  const paidThisMonth = outgoings.filter((row) => new Date(row.paymentDate) >= startOfMonth).reduce((sum, row) => sum + row.amount, 0);
+  const startOfMonth = getJalaliPresetRange("this_month")!.start;
+  const receivedThisMonth = receipts.filter((row) => new Date(row.paymentDate) >= startOfMonth && new Date(row.paymentDate) <= now).reduce((sum, row) => sum + row.amount, 0);
+  const paidThisMonth = outgoings.filter((row) => new Date(row.paymentDate) >= startOfMonth && new Date(row.paymentDate) <= now).reduce((sum, row) => sum + row.amount, 0);
   const expensesThisMonth = expenseList.filter((row) => new Date(row.expenseDate) >= startOfMonth).reduce((sum, row) => sum + row.amount, 0);
   const contractedThisMonth = contracts.filter((row) => row.contract.status === "signed" && new Date(row.contract.createdAt) >= startOfMonth).reduce((sum, row) => sum + n(row.invoice?.grandTotal || row.contract.totalAmount), 0);
   const estimatedProfitThisMonth = profitRows.filter((row) => {
     const contract = contracts.find((entry) => entry.contract.id === row.contractId)?.contract;
     return contract && new Date(contract.createdAt) >= startOfMonth;
   }).reduce((sum, row) => sum + row.profit, 0);
-  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const today = getStartOfDayJalali();
   const forecast = [7, 30, 60, 90].map((days) => {
     const end = new Date(today); end.setDate(end.getDate() + days);
     const incoming = receivableSources.filter((row) => row.dueDate && new Date(row.dueDate) >= today && new Date(row.dueDate) <= end).reduce((sum, row) => sum + row.remainingAmount, 0);
