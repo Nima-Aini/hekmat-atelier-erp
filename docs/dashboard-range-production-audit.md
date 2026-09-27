@@ -48,6 +48,8 @@ This is a source review plus automated regression audit, not a claim that every 
 | P2 | Dashboard/page/API | Selected project wasn't forwarded; range was absent | Real range/project request and scoped service; current-state metrics explicitly separated |
 | P2 | finalWorkflow reporting | Interactive 300-row cap and draft/signed-only list silently truncated reporting history | Separate reporting mode includes all statuses, no cap; hydration batched instead of per-contract N+1 |
 | P2 | dateUtils | Invalid Jalali input fell back to Gregorian; impossible Gregorian days normalized; last-month end was midnight | Strict civil validation, leap checks, end-of-day boundary; explicit Tehran conversion |
+| P2 | JalaliDatePicker | UTC weekday and ISO date slicing showed the previous civil day at Tehran midnight | Existing business-timezone weekday/date helpers used for calendar alignment and Gregorian hint; rendered regression test |
+| P3 | JalaliDatePicker | Keyboard focus changes left both date popovers open because only outside mouse clicks closed them | Close a picker on outside focus too; preserve interactions inside its calendar and remove both listeners on unmount |
 | P2 | Finance monthly summary | Host Gregorian month differed from visible Jalali month and chart | Shared Jalali month start; completed cash totals exclude future timestamps |
 | P2 | accounts route / account form | Strict account-type validation omitted the existing UI's `other` option, rejecting a valid create/edit choice | Preserve `other` alongside legacy types; disposable create/edit regression assertions |
 | P2 | Dashboard/global search | Older requests could overwrite newer results and stale data could survive a failed period load | Abort replaced requests and ignore aborted completions; retry/error/loading states maintained |
@@ -84,7 +86,7 @@ Authenticated desktop/tablet/mobile browser results are recorded in the release 
 
 Baseline: TypeScript and build passed; lint 0 errors / 20 existing warnings. Windows baseline suite: 152 passed, three Unix fixture failures, one PostgreSQL-only recovery drill skipped.
 
-Final local code gate: TypeScript passed; production build passed and `overview.css.build=verified`; lint 0 errors / 19 existing warnings; secret scan `secret.current=clean`; full suite **184 passed, 0 failed, 1 skipped (185 total), 23 passed test files + 1 skipped**. Local driver is disposable PGlite; the skipped native PostgreSQL recovery drill is mandatory in Linux CI, not waived.
+Final local code gate: TypeScript passed; production build passed and `overview.css.build=verified`; lint 0 errors / 19 existing warnings; secret scan `secret.current=clean`; full suite **185 passed, 0 failed, 1 skipped (186 total), 23 passed test files + 1 skipped**. Local driver is disposable PGlite; the skipped native PostgreSQL recovery drill is mandatory in Linux CI, not waived.
 
 Windows full-test setup uses the bundled Node runtime, existing Git Bash (`TEST_BASH_BIN`) and existing Git-for-Windows no-op executable (`TEST_PG_RESTORE_BIN`) plus its runtime in PATH. The no-op replaces only the two existing fake-archive metadata/checksum fixtures; it does not substitute for the real PostgreSQL recovery drill. No test assertion or error was disabled.
 

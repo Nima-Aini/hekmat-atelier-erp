@@ -4,6 +4,8 @@ import { createPortal } from "react-dom";
 import { Calendar, ChevronLeft, ChevronRight, X } from "lucide-react";
 import {
   getJalaliMonthLength,
+  getBusinessWeekday,
+  toBusinessGregorianDateString,
   gregorianToJalali,
   getJalaliPresetRange,
   jalaliToGregorian,
@@ -61,11 +63,15 @@ export const JalaliDatePicker: React.FC<Props> = ({
   }, [valueKey]);
 
   useEffect(() => {
-    const closeOnOutsideClick = (event: MouseEvent) => {
+    const closeOnOutsideClick = (event: MouseEvent | FocusEvent) => {
       if (!rootRef.current?.contains(event.target as Node) && !popupRef.current?.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", closeOnOutsideClick);
-    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("focusin", closeOnOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("focusin", closeOnOutsideClick);
+    };
   }, []);
 
   useEffect(() => {
@@ -136,7 +142,7 @@ export const JalaliDatePicker: React.FC<Props> = ({
   const weekDays = ["ش", "ی", "د", "س", "چ", "پ", "ج"];
   const selected = parseJalaliString(text) ? text.split(/[/-]/).map(Number) : [];
   const firstGregorianDay = jalaliToGregorian({ ...view, day: 1 });
-  const leadingEmptyDays = (firstGregorianDay.getUTCDay() + 1) % 7;
+  const leadingEmptyDays = (getBusinessWeekday(firstGregorianDay) + 1) % 7;
   const daysInMonth = getJalaliMonthLength(view.year, view.month);
   const today = gregorianToJalali(new Date());
 
@@ -209,7 +215,7 @@ export const JalaliDatePicker: React.FC<Props> = ({
         <span className="text-[11px] text-rose-400">{error}</span>
       ) : text ? (
         <span className="text-[11px] text-slate-500">
-          معادل میلادی: {(() => { const p = parseJalaliString(text); return p ? p.toISOString().slice(0,10) : "—"; })()}
+          معادل میلادی: {(() => { const p = parseJalaliString(text); return p ? toBusinessGregorianDateString(p) : "—"; })()}
         </span>
       ) : null}
     </div>

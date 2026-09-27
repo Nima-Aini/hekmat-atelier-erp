@@ -1,10 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { JalaliDatePicker } from "../src/components/ui/JalaliDatePicker";
 import { dashboardPresets, dashboardRangeDays, inDashboardRange, parseDashboardRange, previousDashboardRange } from "../src/lib/dashboardRange";
-import { getJalaliPresetRange, parseJalaliString, parseReportDateParam, toBusinessGregorianDateString } from "../src/lib/dateUtils";
+import { getBusinessWeekday, getJalaliPresetRange, parseJalaliString, parseReportDateParam, toBusinessGregorianDateString } from "../src/lib/dateUtils";
 import { buildRangeAnalytics } from "../src/services/studio/overviewAnalytics";
 
 afterEach(() => vi.useRealTimers());
 describe("Dashboard Tehran civil ranges", () => {
+  it("renders the Gregorian civil day and calendar weekday in Tehran, not UTC", () => {
+    const date = parseJalaliString("1405/01/01")!;
+    expect(getBusinessWeekday(date)).toBe(6);
+    const markup = renderToStaticMarkup(createElement(JalaliDatePicker, { value: date, onChange: () => {} }));
+    expect(markup).toContain("2026-03-21");
+    expect(markup).not.toContain("2026-03-20");
+  });
   it("offers all six real presets and custom range", () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date("2026-09-26T10:00:00Z"));
     expect(dashboardPresets.map(([id]) => id)).toEqual(["today", "this_week", "this_month", "last_3_months", "last_6_months", "this_year", "custom"]);
