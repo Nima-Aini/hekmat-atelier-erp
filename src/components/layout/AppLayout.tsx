@@ -61,6 +61,8 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   const [isSearching, setIsSearching] = useState(false);
   const [notificationCount, setNotificationCount] = useState(0);
   const sidebarRef = useRef<HTMLElement>(null);
+  const searchController = useRef<AbortController | null>(null);
+  useEffect(() => () => searchController.current?.abort(), []);
   const permissions = new Set<string>(
     me?.navigationPermissions || me?.permissions || [],
   );
@@ -107,19 +109,25 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
   }, [sidebarOpen]);
 
   const handleSearch = async (value: string) => {
+    searchController.current?.abort();
     setSearchQuery(value);
     if (value.trim().length < 2) {
       setSearchResults([]);
+      setIsSearching(false);
       return;
     }
+    const current = new AbortController(); searchController.current = current;
     setIsSearching(true);
     try {
       const data = await fetch(
         `/api/search?q=${encodeURIComponent(value.trim())}`,
+        { signal: current.signal },
       ).then((response) => response.json());
-      setSearchResults(data.success ? data.results || [] : []);
+      if (!current.signal.aborted) setSearchResults(data.success ? data.results || [] : []);
+    } catch {
+      if (!current.signal.aborted) setSearchResults([]);
     } finally {
-      setIsSearching(false);
+      if (!current.signal.aborted) setIsSearching(false);
     }
   };
 

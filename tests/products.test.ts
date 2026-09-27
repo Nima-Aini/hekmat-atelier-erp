@@ -20,7 +20,7 @@ vi.mock("@/services/access", async () => {
     if (state.permission === "denied") throw new ApiError(403, "دسترسی مجاز نیست");
     return context();
   });
-  return { getEmployeeContext: vi.fn(async () => context()), requirePermission: authorize, requireAnyPermission: authorize };
+  return { getEmployeeContext: vi.fn(async () => context()), requirePermission: authorize, requireAnyPermission: authorize, getScopedProjectIds: vi.fn(async () => null) };
 });
 import * as schema from "../src/db/schema";
 import { migrateDatabase } from "../src/db/migrate";

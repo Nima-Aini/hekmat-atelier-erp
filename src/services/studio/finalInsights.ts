@@ -13,6 +13,9 @@ import {
   listReservations,
 } from "@/services/studio/finalWorkflow";
 import { getAtelierFinanceCenter } from "@/services/studio/financeCenter";
+import { buildRangeAnalytics } from "./overviewAnalytics";
+import { inDashboardRange, type DashboardRange } from "@/lib/dashboardRange";
+import { redactContractFinance } from "./financialPrivacy";
 
 type ContractRecord = Awaited<ReturnType<typeof listContracts>>[number];
 
@@ -23,18 +26,23 @@ const dayKey = (value: Date | string | null | undefined) =>
 export async function getFinalDashboard(
   allowedCoreProjectIds: string[] | null,
   includeFinance: boolean,
+  options: { range?: DashboardRange; projectId?: string; financeProjectIds?: string[] | null } = {},
 ) {
-  const [contracts, visits, reservations, center] = await Promise.all([
-    listContracts(undefined, allowedCoreProjectIds),
-    listDailyVisits(),
-    listReservations(),
-    includeFinance ? getAtelierFinanceCenter(allowedCoreProjectIds) : Promise.resolve(null),
+  const [allContracts, visits, reservations, center] = await Promise.all([
+    listContracts(undefined, allowedCoreProjectIds, true),
+    listDailyVisits({ createdFrom: options.range?.start, createdTo: options.range?.end, projectId: options.projectId, allowedCoreProjectIds }),
+    options.projectId ? Promise.resolve([]) : listReservations(true),
+    includeFinance ? getAtelierFinanceCenter(options.projectId ? [options.projectId] : options.financeProjectIds === undefined ? allowedCoreProjectIds : options.financeProjectIds, !options.projectId) : Promise.resolve(null),
   ]);
-  const pending = contracts
+  const currentContracts = options.projectId ? allContracts.filter((row) => row.project.projectId === options.projectId) : allContracts;
+  const contracts = options.range ? currentContracts.filter((row) => inDashboardRange(row.createdAt, options.range!)) : currentContracts;
+  const availableProjects = [...new Map(allContracts.filter((row) => row.project.projectId).map((row) => [row.project.projectId!, { id: row.project.projectId!, name: row.project.title }])).values()];
+  const rangeAnalytics = center && options.range ? buildRangeAnalytics(center.receipts, center.payments, options.range) : null;
+  const pending = currentContracts
     .filter((contract) => contract.status === "draft")
     .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
   const nowForSort = Date.now();
-  const approved = contracts.filter((contract) => contract.status === "signed").sort((a, b) => {
+  const approved = currentContracts.filter((contract) => contract.status === "signed").sort((a, b) => {
     const aTime = a.programDate ? +new Date(a.programDate) : Number.MAX_SAFE_INTEGER;
     const bTime = b.programDate ? +new Date(b.programDate) : Number.MAX_SAFE_INTEGER;
     const aFuture = aTime >= nowForSort;
@@ -70,7 +78,8 @@ export async function getFinalDashboard(
       workload.set(key, (workload.get(key) || 0) + 1);
     }
   }
-  const finance = contracts.reduce(
+  const canReadContractFinance = (contract: ContractRecord) => includeFinance && (options.financeProjectIds == null || !contract.project.projectId || options.financeProjectIds.includes(contract.project.projectId));
+  const finance = contracts.filter(canReadContractFinance).reduce(
     (result, contract) => ({
       total: result.total + numeric(contract.totalAmount),
       received: result.received + numeric(contract.paidAmount),
@@ -79,15 +88,9 @@ export async function getFinalDashboard(
     { total: 0, received: 0, remaining: 0 },
   );
   const redact = (contract: ContractRecord) =>
-    includeFinance
+    canReadContractFinance(contract)
       ? contract
-      : {
-          ...contract,
-          totalAmount: null,
-          depositAmount: null,
-          paidAmount: null,
-          remainingAmount: null,
-        };
+      : redactContractFinance(contract);
   const upcoming = approved.filter((row) => row.programDate && +new Date(row.programDate) >= now && +new Date(row.programDate) <= horizon);
   const upcomingReservations = reservations.filter((row) => row.status === "pending" && +new Date(row.reservedAt) >= now && +new Date(row.reservedAt) <= horizon);
   const statusLabels: Record<string, string> = { draft: "در انتظار تأیید", signed: "تأیید شده", completed: "تکمیل شده", cancelled: "لغو شده" };
@@ -97,10 +100,12 @@ export async function getFinalDashboard(
     ...visits.map((row) => ({ id: `visit:${row.id}`, title: "مراجعه روزانه ثبت شد", detail: `${row.customerName} · ${row.title}`, date: row.createdAt, tab: "daily_visits", tone: "purple" })),
     ...reservations.map((row) => ({ id: `reservation:${row.id}`, title: "رزرو ثبت شد", detail: `${row.customerName} · ${row.title}`, date: row.createdAt, tab: "reservations", tone: "amber" })),
     ...(center?.receipts || []).map((row) => ({ id: `receipt:${row.id}`, title: "دریافت ثبت شد", detail: `${row.source?.title || "دریافت مشتری"} · ${row.accountName}`, date: row.paymentDate, tab: "finance", tone: "green" })),
-  ].sort((a, b) => +new Date(b.date) - +new Date(a.date)).slice(0, 5);
+  ].filter((row) => !options.range || inDashboardRange(row.date, options.range)).sort((a, b) => +new Date(b.date) - +new Date(a.date)).slice(0, 5);
   return {
     overview: {
       generatedAt: new Date(),
+      range: options.range || null,
+      availableProjects,
       activeProjects: approved.length,
       pendingContracts: pending.length,
       upcomingReservations: upcomingReservations.length,
@@ -111,16 +116,16 @@ export async function getFinalDashboard(
       activities,
       upcoming: upcoming.slice(0, 5).map(redact),
       recentContracts: [...contracts].sort((a,b) => +new Date(b.createdAt) - +new Date(a.createdAt)).slice(0, 5).map(redact),
-      finance: center ? { summary: center.summary, analytics: center.analytics } : null,
+      finance: center ? { summary: center.summary, analytics: center.analytics, rangeAnalytics } : null,
     },
     pendingContracts: pending.slice(0, 6).map(redact),
     approvedContracts: approved.slice(0, 6).map(redact),
     recentDailyVisits: visits
       .slice(0, 3)
       .map((visit) =>
-        includeFinance
+        includeFinance && (options.financeProjectIds == null || !visit.coreProjectId || options.financeProjectIds.includes(visit.coreProjectId))
           ? visit
-          : { ...visit, price: null, paidAmount: null, remainingAmount: null },
+          : { ...visit, price: null, paidAmount: null, remainingAmount: null, personnelCost: null, preliminaryProfit: null, paymentHistory: [], personnelAssignments: visit.personnelAssignments.map((assignment) => ({ ...assignment, wageSnapshot: null })) },
       ),
     charts: {
       projectTypes: [...projectTypes].map(([name, value]) => ({ name, value })),
@@ -199,7 +204,7 @@ export async function listContractCustomers(
   return [...grouped.values()].map((customer) => includeFinance ? customer : { ...customer, total: null, remaining: null });
 }
 
-export async function getFinalCalendar(allowedCoreProjectIds: string[] | null) {
+export async function getFinalCalendar(allowedCoreProjectIds: string[] | null, financeIds?: string[] | null) {
   const [contracts, config] = await Promise.all([
     listContracts("approved", allowedCoreProjectIds),
     getAtelierConfig(),
@@ -214,7 +219,7 @@ export async function getFinalCalendar(allowedCoreProjectIds: string[] | null) {
     days: [...days].map(([date, items]) => ({
       date,
       count: items.length,
-      contracts: items,
+      contracts: items.map(contract => financeIds == null || (contract.project.projectId && financeIds.includes(contract.project.projectId)) ? contract : redactContractFinance(contract)),
     })),
     thresholds: {
       light: Number(calendar.light || 1),

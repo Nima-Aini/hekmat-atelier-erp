@@ -21,6 +21,7 @@ interface Props {
   required?: boolean;
   disabled?: boolean;
   className?: string;
+  onValidityChange?: (valid: boolean) => void;
 }
 
 export const JalaliDatePicker: React.FC<Props> = ({
@@ -31,6 +32,7 @@ export const JalaliDatePicker: React.FC<Props> = ({
   required,
   disabled,
   className = "",
+  onValidityChange,
 }) => {
   const toJalaliStr = (v: string | number | Date | null | undefined): string => {
     if (!v) return "";
@@ -86,16 +88,19 @@ export const JalaliDatePicker: React.FC<Props> = ({
     const latin = toLatinDigits(val);
     setText(latin);
     if (!latin.trim()) {
+      onValidityChange?.(false);
       setError("");
       onChange(null, "");
       return;
     }
     const parsed = parseJalaliString(latin);
     if (!parsed || isNaN(parsed.getTime())) {
+      onValidityChange?.(false);
       setError("فرمت تاریخ نامعتبر است. مثال: 1404/06/08");
       return;
     }
     setError("");
+    onValidityChange?.(true);
     onChange(parsed, latin);
   };
 

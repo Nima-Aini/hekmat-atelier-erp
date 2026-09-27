@@ -47,10 +47,14 @@ export function CashChart({
   months,
   days,
   dashboard = false,
+  periodPoints,
+  periodLabel,
 }: {
   months: FlowPoint[];
   days?: FlowPoint[];
   dashboard?: boolean;
+  periodPoints?: FlowPoint[];
+  periodLabel?: string;
 }) {
   const [range, setRange] = useState(dashboard ? "30d" : "6m");
   const gradient = useId().replace(/:/g, "");
@@ -66,9 +70,9 @@ export function CashChart({
         ["6m", "۶ ماه"],
         ["12m", "۱۲ ماه"],
       ];
-  const points = range.endsWith("d")
+  const points = periodPoints || (range.endsWith("d")
     ? (days || []).slice(-parseInt(range))
-    : months.slice(-parseInt(range));
+    : months.slice(-parseInt(range)));
   const hasValues = points.some(
     (row) => row.incoming !== 0 || row.outgoing !== 0,
   );
@@ -106,7 +110,7 @@ export function CashChart({
     <OverviewCard
       title={dashboard ? "روند دریافت و پرداخت" : "نمودار درآمد و هزینه"}
       icon={ChartNoAxesCombined}
-      action={
+      action={periodPoints ? <span className="text-xs text-zinc-400">{periodLabel}</span> :
         <div className="flex flex-wrap gap-1" aria-label="بازه نمودار">
           {ranges.map(([key, label]) => (
             <button

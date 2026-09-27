@@ -50,7 +50,7 @@ export async function logAuditEvent(
       },
     });
   } catch (err) {
-    console.error("Failed to write audit log:", err);
+    console.error("audit.write_failed", { name: err instanceof Error ? err.name : "UnknownError" });
     throw err;
   }
 }

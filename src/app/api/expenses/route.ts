@@ -1,11 +1,11 @@
-import { ApiError, apiError } from "@/lib/apiError";
+import { ApiError, apiError, assertUuid } from "@/lib/apiError";
 import { pageNumber } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { expenses, accounts, projects } from "@/db/schema";
-import { desc, eq, sql, and } from "drizzle-orm";
+import { desc, eq, sql, and, inArray, isNull, or } from "drizzle-orm";
 import { logAuditEvent } from "@/services/audit";
-import { requirePermission } from "@/services/access";
+import { getScopedProjectIds, requirePermission } from "@/services/access";
 import { postCanonicalExpense } from "@/services/financial";
 import crypto from "node:crypto";
 
@@ -15,14 +15,17 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = searchParams.get("projectId");
+    if (projectId) assertUuid(projectId);
     
     const context = await requirePermission("expenses.view", projectId || undefined);
 
     const page = pageNumber(searchParams.get("page"), 1);
-    const pageSize = Math.min(100, Math.max(1, parseInt(searchParams.get("pageSize") || "50", 10)));
+    const pageSize = pageNumber(searchParams.get("pageSize"), 50, 100);
     const offset = (page - 1) * pageSize;
 
     const conditions = [];
+    const allowed = await getScopedProjectIds(["expenses.view"]);
+    if (allowed !== null) conditions.push(or(isNull(expenses.projectId), allowed.length ? inArray(expenses.projectId, allowed) : sql`false`)!);
     if (projectId && projectId.trim() !== "") {
       conditions.push(eq(expenses.projectId, projectId));
     }
@@ -41,16 +44,11 @@ export async function GET(req: Request) {
       .limit(pageSize)
       .offset(offset);
 
-    let total = list.length;
-    try {
-      const countRes = await db
+    const countRes = await db
         .select({ count: sql<number>`COUNT(*)::int` })
         .from(expenses)
         .where(conditions.length ? and(...conditions) : undefined);
-      total = Number(countRes[0]?.count ?? list.length);
-    } catch {
-      total = list.length;
-    }
+    const total = Number(countRes[0]?.count ?? 0);
 
     const formatted = list.map(({ expense, accountName, projectName }) => ({
       ...expense,
@@ -59,9 +57,8 @@ export async function GET(req: Request) {
       amount: Number(expense.amount),
     }));
 
-    return NextResponse.json({ success: true, expenses: formatted, pagination: { page, pageSize, total } });
+    return NextResponse.json({ success: true, expenses: formatted, pagination: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) } });
   } catch (error: any) {
-    console.error("GET /api/expenses error:", error);
     return apiError(error);
   }
 }
@@ -90,7 +87,6 @@ export async function POST(req: Request) {
     }, { userId: context.employeeId, employeeId: context.employeeId, userName: context.employeeName }));
     return NextResponse.json({ success: true, expense: result.expense, message: "سند هزینه با موفقیت ثبت شد." });
   } catch (error: any) {
-    console.error("POST /api/expenses error:", error);
     return apiError(error);
   }
 }

@@ -6,6 +6,6 @@ import { getAtelierFinanceCenter } from "@/services/studio/financeCenter";
 export async function GET() {
   try {
     await requirePermission("studio.finance.view");
-    return NextResponse.json({ success: true, data: await getAtelierFinanceCenter(await getScopedProjectIds()) });
+    return NextResponse.json({ success: true, data: await getAtelierFinanceCenter(await getScopedProjectIds(["studio.finance.view"])) });
   } catch (error) { return apiError(error, "دریافت مرکز مالی آتلیه"); }
 }

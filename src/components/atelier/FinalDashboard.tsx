@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   CalendarDays,
@@ -14,7 +14,8 @@ import {
   AlertCircle,
   Camera,
 } from "lucide-react";
-import { toJalaliDate } from "@/lib/dateUtils";
+import { getJalaliPresetRange, toBusinessGregorianDateString, toJalaliDate } from "@/lib/dateUtils";
+import { DashboardRangeFilter } from "./DashboardRangeFilter";
 import { canSeeAtelierSection } from "@/lib/atelierNavigation";
 import { CashChart, DistributionChart } from "./OverviewCharts";
 import {
@@ -33,35 +34,50 @@ export function FinalDashboard({
   onNavigate,
   userName = "مدیر سیستم",
   permissions = [],
+  selectedProjectId = null,
+  onProjectChange,
 }: {
   onNavigate: (tab: string) => void;
   userName?: string;
   permissions?: string[];
+  selectedProjectId?: string | null;
+  onProjectChange?: (id: string | null) => void;
 }) {
+  const [range, setRange] = useState(() => getJalaliPresetRange("this_month")!);
+  const controller = useRef<AbortController | null>(null);
+  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   const [data, setData] = useState<any>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true);
   const load = useCallback(async () => {
+    controller.current?.abort();
+    const current = new AbortController(); controller.current = current;
     setLoading(true);
     setError("");
+    setData(null);
     try {
-      const response = await fetch("/api/atelier/dashboard", {
+      const params = new URLSearchParams({ startDate: toBusinessGregorianDateString(range.start), endDate: toBusinessGregorianDateString(range.end) });
+      if (selectedProjectId) params.set("projectId", selectedProjectId);
+      const response = await fetch(`/api/atelier/dashboard?${params}`, {
         cache: "no-store",
+        signal: current.signal,
       });
       const body = await response.json();
       if (!response.ok || !body.success)
         throw new Error(body.error || "دریافت اطلاعات ممکن نشد.");
-      setData(body.dashboard);
+      if (!current.signal.aborted) { setData(body.dashboard); setProjects(body.dashboard.overview.availableProjects); }
     } catch (reason) {
+      if (current.signal.aborted) return;
       setError(
         reason instanceof Error ? reason.message : "ارتباط با سرور برقرار نشد.",
       );
     } finally {
-      setLoading(false);
+      if (!current.signal.aborted) setLoading(false);
     }
-  }, []);
+  }, [range, selectedProjectId]);
   useEffect(() => {
     void load();
+    return () => controller.current?.abort();
   }, [load]);
   const overview = data?.overview;
   const finance = overview?.finance;
@@ -106,10 +122,15 @@ export function FinalDashboard({
             سلام، {userName}
           </h1>
           <p className="mt-2 text-sm text-slate-400">
-            خلاصه‌ای از وضعیت امروز آتلیه
+            خلاصهٔ بازه انتخابی؛ وضعیت جاری و برنامه‌های پیش رو مستقل از بازه هستند.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 max-w-full flex-wrap items-center gap-3">
+          <DashboardRangeFilter range={range} onChange={setRange} />
+          {onProjectChange && <select aria-label="پروژه داشبورد" className="atelier-input min-w-0 max-w-full py-2 text-xs" value={selectedProjectId || ""} onChange={(event) => onProjectChange(event.target.value || null)}>
+            <option value="">همه پروژه‌های مجاز</option>
+            {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+          </select>}
           <div className="overview-secondary-surface flex items-center gap-3 rounded-xl border px-4 py-2.5">
             <CalendarDays className="h-5 w-5 text-slate-400" />
             <div>
@@ -169,9 +190,9 @@ export function FinalDashboard({
             />
             {finance && (
               <MetricCard
-                title="دریافت ماه جاری"
-                value={overviewMoney(finance.analytics.currentMonth.incoming)}
-                context={finance.analytics.currentMonth.label}
+                title="دریافت بازه انتخابی"
+                value={overviewMoney(finance.rangeAnalytics?.incoming)}
+                context={`پرداخت‌های تکمیل‌شده · پرداخت بازه: ${overviewMoney(finance.rangeAnalytics?.outgoing)}`}
                 icon={WalletCards}
                 tone="green"
                 onClick={() => navigate("finance")}
@@ -198,6 +219,8 @@ export function FinalDashboard({
             {finance ? (
               <CashChart
                 dashboard
+                periodPoints={finance.rangeAnalytics?.points}
+                periodLabel="بازه انتخابی"
                 months={finance.analytics.months}
                 days={finance.analytics.days}
               />
@@ -223,7 +246,7 @@ export function FinalDashboard({
                 color: ({ draft: tones.amber, signed: tones.green, completed: tones.blue, cancelled: tones.red } as Record<string, string>)[row.id] || tones.purple,
               }))}
               total={overview.contractCount}
-              centerLabel="کل قراردادها"
+              centerLabel="قراردادهای بازه"
             />
           </div>
           {quickActions.length > 0 && (

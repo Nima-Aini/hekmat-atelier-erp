@@ -655,7 +655,14 @@ export async function getContractById(
   client: typeof db | Transaction = db,
 ) {
   assertUuid(contractId);
-  const [row] = await client
+  const [row] = await getContractRecords([contractId], client);
+  if (!row) throw new ApiError(404, "قرارداد یافت نشد.");
+  return row;
+}
+
+async function getContractRecords(ids: string[], client: typeof db | Transaction = db) {
+  if (!ids.length) return [];
+  const rows = await client
     .select({
       contract: studioContracts,
       project: studioProjects,
@@ -683,14 +690,16 @@ export async function getContractById(
       eq(studioProjectTypes.id, studioContracts.projectTypeId),
     )
     .leftJoin(invoices, eq(invoices.id, studioContracts.invoiceId))
-    .where(eq(studioContracts.id, contractId))
-    .limit(1);
-  if (!row) throw new ApiError(404, "قرارداد یافت نشد.");
-  const items = await client
+    .where(inArray(studioContracts.id, ids));
+  const allItems = await client
     .select()
     .from(studioContractItems)
-    .where(eq(studioContractItems.contractId, contractId))
+    .where(inArray(studioContractItems.contractId, ids))
     .orderBy(asc(studioContractItems.position));
+  const byContract = new Map<string, typeof allItems>();
+  for (const item of allItems) byContract.set(item.contractId, [...(byContract.get(item.contractId) || []), item]);
+  return rows.map((row) => {
+  const items = byContract.get(row.contract.id) || [];
   return {
     ...row.contract,
     project: row.project,
@@ -716,18 +725,20 @@ export async function getContractById(
         ),
     ),
   };
+  });
 }
 
 export async function listContracts(
   status?: "pending" | "approved",
   allowedCoreProjectIds: string[] | null = null,
+  reporting = false,
 ) {
   const statusCondition =
     status === "pending"
       ? eq(studioContracts.status, CONTRACT_PENDING)
       : status === "approved"
         ? eq(studioContracts.status, CONTRACT_APPROVED)
-        : inArray(studioContracts.status, [
+        : reporting ? undefined : inArray(studioContracts.status, [
             CONTRACT_PENDING,
             CONTRACT_APPROVED,
           ]);
@@ -737,7 +748,7 @@ export async function listContracts(
       : allowedCoreProjectIds.length
         ? inArray(studioProjects.projectId, allowedCoreProjectIds)
         : sql`false`;
-  const rows = await db
+  const query = db
     .select({
       id: studioContracts.id,
       status: studioContracts.status,
@@ -754,9 +765,11 @@ export async function listContracts(
       status === "approved"
         ? asc(studioContracts.programDate)
         : desc(studioContracts.createdAt),
-    )
-    .limit(300);
-  const contracts = await Promise.all(rows.map((row) => getContractById(row.id)));
+    );
+  const rows = reporting ? await query : await query.limit(300);
+  const records = await getContractRecords(rows.map((row) => row.id));
+  const byId = new Map(records.map((row) => [row.id, row]));
+  const contracts = rows.flatMap((row) => byId.has(row.id) ? [byId.get(row.id)!] : []);
   if (status === "approved") {
     const now = Date.now();
     contracts.sort((a, b) => {
@@ -936,9 +949,13 @@ function simpleValues(value: SimpleMoneyInput, dateKey: string) {
   };
 }
 export async function listDailyVisits(
-  filters: { search?: string; from?: Date; to?: Date; payment?: string } = {},
+  filters: { search?: string; from?: Date; to?: Date; payment?: string; createdFrom?: Date; createdTo?: Date; projectId?: string; allowedCoreProjectIds?: string[] | null } = {},
 ) {
   const conditions = [];
+  if (filters.createdFrom) conditions.push(gte(studioDailyVisits.createdAt, filters.createdFrom));
+  if (filters.createdTo) conditions.push(lte(studioDailyVisits.createdAt, filters.createdTo));
+  if (filters.projectId) conditions.push(eq(invoices.projectId, filters.projectId));
+  if (filters.allowedCoreProjectIds != null) conditions.push(or(sql`${invoices.projectId} IS NULL`, filters.allowedCoreProjectIds.length ? inArray(invoices.projectId, filters.allowedCoreProjectIds) : sql`false`)!);
   if (filters.search)
     conditions.push(
       or(
@@ -955,18 +972,19 @@ export async function listDailyVisits(
   if (filters.payment === "due")
     conditions.push(gt(studioDailyVisits.price, studioDailyVisits.paidAmount));
   const rows = await db
-    .select({ record: studioDailyVisits, invoicePaid: invoices.paidAmount, invoiceBalance: invoices.balanceDue })
+    .select({ record: studioDailyVisits, coreProjectId: invoices.projectId, invoicePaid: invoices.paidAmount, invoiceBalance: invoices.balanceDue })
     .from(studioDailyVisits)
     .leftJoin(invoices, eq(invoices.id, studioDailyVisits.invoiceId))
     .where(conditions.length ? and(...conditions) : undefined)
-    .orderBy(desc(studioDailyVisits.visitDate))
+    .orderBy(filters.createdFrom ? desc(studioDailyVisits.createdAt) : desc(studioDailyVisits.visitDate))
     .limit(300);
   const visitIds = rows.map(({ record }) => record.id);
   const invoiceIds = rows.map(({ record }) => record.invoiceId).filter((id): id is string => Boolean(id));
   const assignments = visitIds.length ? await db.select().from(studioDailyVisitPersonnel).where(and(inArray(studioDailyVisitPersonnel.dailyVisitId, visitIds), eq(studioDailyVisitPersonnel.status, "active"))).orderBy(asc(studioDailyVisitPersonnel.createdAt)) : [];
   const paymentHistory = invoiceIds.length ? await db.select({ payment: payments, accountName: accounts.name }).from(payments).innerJoin(accounts, eq(accounts.id, payments.accountId)).where(and(inArray(payments.invoiceId, invoiceIds), eq(payments.status, "completed"))).orderBy(asc(payments.paymentDate)) : [];
-  return rows.map(({ record: row, invoicePaid, invoiceBalance }) => ({
+  return rows.map(({ record: row, coreProjectId, invoicePaid, invoiceBalance }) => ({
     ...row,
+    coreProjectId,
     paidAmount: Number(invoicePaid ?? row.paidAmount),
     remainingAmount: Number(invoiceBalance ?? (Number(row.price) - Number(row.paidAmount))),
     personnelAssignments: assignments.filter((assignment) => assignment.dailyVisitId === row.id),
@@ -1153,8 +1171,9 @@ export async function deleteDailyVisit(actor: EmployeeContext, id: string) {
   });
 }
 
-export async function listReservations() {
-  return db.select().from(studioReservations).orderBy(asc(studioReservations.reservedAt)).limit(300);
+export async function listReservations(reporting = false) {
+  const query = db.select().from(studioReservations).orderBy(asc(studioReservations.reservedAt));
+  return reporting ? query : query.limit(300);
 }
 export async function saveReservation(
   actor: EmployeeContext,

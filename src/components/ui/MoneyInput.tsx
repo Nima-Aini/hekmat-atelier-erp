@@ -65,15 +65,18 @@ export const MoneyInput: React.FC<MoneyInputProps> = ({
   const [displayValue, setDisplayValue] = useState<string>(() => displayMoneyValue(value));
 
   useEffect(() => {
+    setDisplayValue((current) => {
     if (value === undefined || value === null || value === "" || value === 0 || value === "0") {
-      setDisplayValue(displayMoneyValue(value));
+      return displayMoneyValue(value);
     } else {
-      const currentNumeric = parseFormattedNumber(displayValue);
+      const currentNumeric = parseFormattedNumber(current);
       const incomingNumeric = Number(value);
       if (currentNumeric !== incomingNumeric) {
-        setDisplayValue(formatThousands(value));
+        return formatThousands(value);
       }
     }
+    return current;
+    });
   }, [value]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {

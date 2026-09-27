@@ -18,7 +18,7 @@ import {
   getPeriodComparisonReport,
 } from "@/services/reporting";
 import { simulateInflationImpact } from "@/services/pricing";
-import { requirePermission } from "@/services/access";
+import { getScopedProjectIds, requireAnyPermission, requirePermission } from "@/services/access";
 
 export async function GET(req: Request) {
   try {
@@ -29,6 +29,13 @@ export async function GET(req: Request) {
     const globalReports = context.permissions.has("*") || context.roleCode === "manager" || context.permissions.has("financial.view");
     if (!globalReports && type === "dashboard") throw new ApiError(403, "گزارش شخصی از پنل همکار در دسترس است؛ گزارش مدیریتی نیاز به دسترسی مالی دارد.");
     if (!globalReports && type !== "sales") throw new ApiError(403, "دسترسی به گزارش مالی سراسری مجاز نیست.");
+    const scopedIds = await getScopedProjectIds(["reports.view"]);
+    if (scopedIds !== null) {
+      // Legacy global reports include shared datasets and cannot safely represent project grants.
+      const projectReports = ["sales", "financial", "expenses_center", "projects_center", "commissions_center"];
+      if (!projectId || !scopedIds.includes(projectId) || !projectReports.includes(type)) throw new ApiError(403, "این گزارش نیاز به دسترسی سراسری دارد؛ گزارش مجاز یک پروژه را انتخاب کنید.", "PROJECT_SCOPE_FORBIDDEN");
+      if (globalReports) await requireAnyPermission(["financial.view", "studio.finance.view"], projectId);
+    }
 
     const startDateStr = searchParams.get("startDate");
     const endDateStr = searchParams.get("endDate");

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiError } from "@/lib/apiError";
 import { canAccessPermission, getScopedProjectIds, requirePermission } from "@/services/access";
+import { redactContractFinance } from "@/services/studio/financialPrivacy";
 import {
   createPendingContract,
   listContracts,
@@ -12,8 +13,8 @@ export async function GET(req: NextRequest) {
     const value = new URL(req.url).searchParams.get("status");
     const status =
       value === "pending" || value === "approved" ? value : undefined;
-    const contracts = await listContracts(status, await getScopedProjectIds());
-    const visible = await Promise.all(contracts.map(async (contract) => await canAccessPermission(actor, "studio.finance.view", contract.project.projectId) ? contract : { ...contract, totalAmount: null, depositAmount: null, paidAmount: null, remainingAmount: null, items: contract.items.map((item) => ({ ...item, unitPrice: null })) }));
+    const contracts = await listContracts(status, await getScopedProjectIds(["studio.contract.view"]));
+    const visible = await Promise.all(contracts.map(async (contract) => await canAccessPermission(actor, "studio.finance.view", contract.project.projectId) ? contract : redactContractFinance(contract)));
     return NextResponse.json({
       success: true,
       contracts: visible,
