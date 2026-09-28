@@ -10,6 +10,7 @@ import {
   Save,
   ScrollText,
   Settings2,
+  Trash2,
 } from "lucide-react";
 import { AuditLogsView } from "@/components/views/AuditLogsView";
 import { BackupView } from "@/components/views/BackupView";
@@ -274,15 +275,18 @@ export function FinalSettingsView() {
 
 function ProjectTypes({ types, reload }: { types: any[]; reload: () => void }) {
   const [title, setTitle] = useState("");
+  const [editingFields, setEditingFields] = useState<string | null>(null);
+  const [fieldDraft, setFieldDraft] = useState<Array<{ key: string; label: string; type: string; required: boolean }>>([]);
   const saveType = async (value: any, id?: string) => {
     const data = await fetch("/api/atelier/settings", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "project_type", id, value }),
     }).then((r) => r.json());
-    if (!data.success) return atelierToast(data.error || "ثبت انجام نشد.", "error");
+    if (!data.success) { atelierToast(data.error || "ثبت انجام نشد.", "error"); return false; }
     setTitle("");
     reload();
+    return true;
   };
   const move = async (index: number, direction: -1 | 1) => {
     const target = types[index + direction];
@@ -308,9 +312,9 @@ function ProjectTypes({ types, reload }: { types: any[]; reload: () => void }) {
       {types.map((type) => (
         <div
           key={type.id}
-          className="flex items-center gap-3 rounded-xl border border-zinc-800 p-3"
+          className="flex flex-wrap items-center gap-3 rounded-xl border border-zinc-800 p-3"
         >
-          <span className="flex-1 text-sm font-bold">{type.title}</span>
+          <span className="min-w-0 basis-full break-words text-sm font-bold sm:basis-auto sm:flex-1">{type.title}</span>
           <span className="text-[10px] text-zinc-600">
             ترتیب {Number(type.sortOrder).toLocaleString("fa-IR")}
           </span>
@@ -331,6 +335,13 @@ function ProjectTypes({ types, reload }: { types: any[]; reload: () => void }) {
             aria-label="انتقال به پایین"
           >
             <ArrowDown className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => { setEditingFields(type.id); setFieldDraft(Array.isArray(type.fieldSchema) ? type.fieldSchema.map((field: any) => ({ key: String(field.key), label: String(field.label), type: String(field.type || "text"), required: field.required === true })) : []); }}
+            className="atelier-button-secondary text-xs"
+          >
+            ویرایش فیلدها
           </button>
           <button
             type="button"
@@ -370,6 +381,25 @@ function ProjectTypes({ types, reload }: { types: any[]; reload: () => void }) {
           </button>
         </div>
       ))}
+      {editingFields && (() => {
+        const current = types.find(type => type.id === editingFields);
+        if (!current) return null;
+        return <div className="rounded-2xl border border-red-900/60 bg-red-950/10 p-4">
+          <h3 className="font-bold">فیلدهای اختصاصی {current.title}</h3>
+          <p className="mt-1 text-xs text-zinc-400">افزودن یا حذف فیلد فقط فرم‌های آینده را تغییر می‌دهد؛ داده‌های قراردادهای قبلی پاک نمی‌شوند.</p>
+          <div className="mt-4 space-y-2">{fieldDraft.map((field, index) => <div key={field.key} className="grid min-w-0 gap-2 rounded-xl border border-zinc-800 p-2 sm:grid-cols-[minmax(0,1fr)_7rem_auto_auto] sm:items-end">
+            <label className="min-w-0"><span className="atelier-label">نام نمایشی</span><input aria-label={`عنوان فیلد ${index + 1}`} className="atelier-input w-full min-w-0" value={field.label} maxLength={80} onChange={event => setFieldDraft(rows => rows.map((row, i) => i === index ? { ...row, label: event.target.value } : row))} /></label>
+            <label><span className="atelier-label">نوع</span><select className="atelier-input w-full" value={field.type} onChange={event => setFieldDraft(rows => rows.map((row, i) => i === index ? { ...row, type: event.target.value } : row))}><option value="text">متن کوتاه</option><option value="textarea">متن بلند</option><option value="number">عدد</option><option value="time">ساعت</option><option value="date">تاریخ</option></select></label>
+            <label className="flex items-center gap-2 py-2 text-xs text-zinc-300"><input type="checkbox" checked={field.required} onChange={event => setFieldDraft(rows => rows.map((row, i) => i === index ? { ...row, required: event.target.checked } : row))} />الزامی</label>
+            <div className="flex items-center gap-1"><button type="button" disabled={index === 0} aria-label={`انتقال ${field.label} به بالا`} className="atelier-icon-button disabled:opacity-30" onClick={() => setFieldDraft(rows => { const copy = [...rows]; [copy[index - 1], copy[index]] = [copy[index], copy[index - 1]]; return copy; })}><ArrowUp className="h-4 w-4" /></button><button type="button" disabled={index === fieldDraft.length - 1} aria-label={`انتقال ${field.label} به پایین`} className="atelier-icon-button disabled:opacity-30" onClick={() => setFieldDraft(rows => { const copy = [...rows]; [copy[index], copy[index + 1]] = [copy[index + 1], copy[index]]; return copy; })}><ArrowDown className="h-4 w-4" /></button><button type="button" aria-label={`حذف فیلد ${field.label}`} className="atelier-icon-button text-red-400" onClick={() => setFieldDraft(rows => rows.filter((_, i) => i !== index))}><Trash2 className="h-4 w-4" /></button></div>
+          </div>)}</div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button type="button" className="atelier-button-secondary" disabled={fieldDraft.length >= 30} onClick={() => setFieldDraft(rows => [...rows, { key: `custom_${crypto.randomUUID().replaceAll("-", "")}`, label: "", type: "text", required: false }])}><Plus className="h-4 w-4" />افزودن فیلد</button>
+            <button type="button" className="atelier-button" disabled={fieldDraft.some(field => !field.label.trim())} onClick={async () => { if (await saveType({ title: current.title, active: current.active, sortOrder: current.sortOrder, fieldSchema: fieldDraft.map(field => ({ ...field, label: field.label.trim() })) }, current.id)) setEditingFields(null); }}>ذخیره فیلدها</button>
+            <button type="button" className="atelier-button-secondary" onClick={() => setEditingFields(null)}>انصراف</button>
+          </div>
+        </div>;
+      })()}
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -378,7 +408,7 @@ function ProjectTypes({ types, reload }: { types: any[]; reload: () => void }) {
               title,
               active: true,
               sortOrder: types.length * 10 + 10,
-              fieldSchema: [{ key: "subject", label: "موضوع" }],
+              fieldSchema: [],
             });
         }}
         className="flex gap-2 border-t border-zinc-900 pt-4"

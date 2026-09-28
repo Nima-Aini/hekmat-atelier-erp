@@ -149,7 +149,7 @@ jobs:
           SMOKE_BASE_URL: ${{ vars.READINESS_URL }}
           EXPECTED_GIT_SHA: ${{ github.sha }}
           EXPECTED_APP_ENV: production
-          EXPECTED_SCHEMA_VERSION: 011_atelier_finance_planning_polish
+          EXPECTED_SCHEMA_VERSION: 012_atelier_customer_defaults
 
   restore-drill:
     runs-on: ubuntu-latest

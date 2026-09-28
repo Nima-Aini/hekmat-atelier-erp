@@ -133,6 +133,19 @@ button.overview-metric:hover { border-color: color-mix(in srgb, var(--metric-acc
 .overview-shell > header { background: var(--surface-1); border-color: var(--border-dark); }
 .overview-shell > aside { background: var(--app-bg); border-color: var(--border-dark); }
 .overview-shell .app-main { background: var(--app-bg); }
+.app-main, .overview-shell .app-main {
+  background-color: var(--app-bg);
+  background-image: linear-gradient(270deg, rgba(8, 10, 15, .34), rgba(8, 10, 15, .74) 62%, rgba(8, 10, 15, .87)), var(--atelier-section-art);
+  background-position: center .75rem;
+  background-size: calc(100% - 1.5rem) 10.5rem;
+  background-repeat: no-repeat;
+}
+.app-main > * > :first-child:has(h1) { min-height: 9rem; padding: 1.15rem; }
+@media (max-width: 639px) {
+  .app-main, .overview-shell .app-main { background-position: center .5rem; background-size: calc(100% - 1rem) 9rem; }
+  .app-main > * > :first-child:has(h1) { min-height: 8rem; padding: .9rem; }
+}
+@media print { .app-main, .overview-shell .app-main { background-image: none; } }
 @media (max-width: 639px) {
   .overview-card, .overview-metric { padding: 16px; }
   .overview-chart { height: 230px; }

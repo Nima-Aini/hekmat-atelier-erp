@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bell,
@@ -46,6 +46,14 @@ const NAVIGATION = [
   { id: "ai", label: "دستیار هوش مصنوعی", icon: Bot },
   { id: "settings", label: "تنظیمات", icon: Settings },
 ] as const;
+
+const SECTION_ART: Record<string, string> = {
+  dashboard: "dashboard", contracts: "contracts-customers", customers: "contracts-customers",
+  daily_visits: "daily-visits", reservations: "calendar-planning", planning: "calendar-planning",
+  calendar: "calendar-planning", finance: "finance", equipment: "equipment",
+  personnel: "personnel", notifications: "studio-console", ai: "studio-console",
+  settings: "studio-console",
+};
 
 export const AppLayout: React.FC<AppLayoutProps> = ({
   activeTab,
@@ -321,7 +329,10 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
           </p>
         </div>
       </aside>
-      <main className="app-main relative min-w-0 overflow-x-clip p-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-6 lg:ml-[17rem] lg:p-7">
+      <main
+        className="app-main relative min-w-0 overflow-x-clip p-3 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-6 lg:ml-[17rem] lg:p-7"
+        style={{ "--atelier-section-art": `url('/atelier/headers/${SECTION_ART[activeTab] || "studio-console"}.jpg')` } as CSSProperties}
+      >
         {children}
       </main>
       <AtelierFeedbackHost />

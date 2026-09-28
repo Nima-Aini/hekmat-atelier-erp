@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 import { activeDatabaseDriver, db } from "../src/db";
 import { eq } from "drizzle-orm";
 import { migrateDatabase } from "../src/db/migrate";
+import { requiredMigrationIds } from "../src/db/migrations";
 import { backups } from "../src/db/schema";
 import { LocalBackupStorage, assertBackupId } from "../src/services/backupStorage";
 import { applyBackupRetention, createSystemBackup, restoreBackupToIsolatedDatabase, validateRestore, verifySystemBackup } from "../src/services/backup";
@@ -55,7 +56,7 @@ describe("native backup and restore safety", () => {
     const temporary = await storage.createTemporary(id); await temporary.handle.writeFile(archive); await temporary.handle.close(); await storage.commit(id, temporary.path);
     const checksum = crypto.createHash("sha256").update(archive).digest("hex");
     await storage.writeMetadata(id, { backupId: id, checksum, format: "postgres_custom", formatVersion: 1 });
-    await db.insert(backups).values({ id, filename: `${id}.dump`, sizeBytes: archive.length, sizeBytesBigint: archive.length, checksum, status: "completed", storageDriver: "local", storageKey: id, format: "postgres_custom", formatVersion: 1, schemaVersion: "011_atelier_finance_planning_polish" });
+    await db.insert(backups).values({ id, filename: `${id}.dump`, sizeBytes: archive.length, sizeBytesBigint: archive.length, checksum, status: "completed", storageDriver: "local", storageKey: id, format: "postgres_custom", formatVersion: 1, schemaVersion: requiredMigrationIds.at(-1) });
     vi.stubEnv("PG_RESTORE_BIN", await fakeRestoreBinary(root));
     await expect(verifySystemBackup(id, undefined, storage)).resolves.toMatchObject({ valid: true, checksum });
     const report = await validateRestore(id, undefined, storage); expect(report).toMatchObject({ backupValid: true, checksumValid: true, readable: true, metadataValid: true });
@@ -118,7 +119,7 @@ describe("native backup and restore safety", () => {
   it("reports safe deployment and schema identity in readiness", async () => {
     vi.stubEnv("GIT_SHA", "bb22e48c2299ddbefe6cee6854a21e6798a2e2df"); vi.stubEnv("APP_ENV", "staging");
     const response = await readiness(); const body = await response.json();
-    expect(response.status).toBe(200); expect(body).toMatchObject({ status: "ready", gitSha: "bb22e48c2299ddbefe6cee6854a21e6798a2e2df", schemaVersion: "011_atelier_finance_planning_polish", environment: "staging" });
+    expect(response.status).toBe(200); expect(body).toMatchObject({ status: "ready", gitSha: "bb22e48c2299ddbefe6cee6854a21e6798a2e2df", schemaVersion: requiredMigrationIds.at(-1), environment: "staging" });
     expect(JSON.stringify(body)).not.toMatch(/password|DATABASE_URL/i);
   });
 });

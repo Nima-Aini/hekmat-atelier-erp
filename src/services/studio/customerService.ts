@@ -18,7 +18,7 @@ export interface CreateStudioCustomerInput {
   address?: string | null;
   socialMedia?: string | null;
   referrer?: string | null;
-  customerType?: "wedding" | "portrait" | "commercial" | "family" | "industrial" | "event" | "child" | "modeling";
+  customerType?: string;
   groomName?: string | null;
   brideName?: string | null;
   contactPersonRole?: "groom" | "bride" | "father" | "mother" | "manager" | "self" | "other";
@@ -242,6 +242,9 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput, tra
             phone: input.phone?.trim() || null,
             address: input.address?.trim() || null,
             notes: input.notes?.trim() || null,
+            city: null,
+            paymentTermsDays: null,
+            creditLimit: null,
           })
           .returning();
         baseCustomerId = newCust.id;
@@ -269,9 +272,9 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput, tra
         customerType: input.customerType || "wedding",
         groomName: input.groomName?.trim() || null,
         brideName: input.brideName?.trim() || null,
-        contactPersonRole: input.contactPersonRole || "groom",
+        contactPersonRole: input.contactPersonRole || null,
         anniversaryDate: annDate,
-        specialPreferences: input.specialPreferences || {},
+        specialPreferences: typeof input.specialPreferences === "string" ? input.specialPreferences.trim() || null : null,
         socialConsent: input.socialConsent !== undefined ? Boolean(input.socialConsent) : false,
         socialMedia: input.socialMedia?.trim() || null,
         referrer: input.referrer?.trim() || null,

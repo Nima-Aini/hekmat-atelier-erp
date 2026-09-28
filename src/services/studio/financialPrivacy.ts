@@ -1,6 +1,6 @@
-import type { getContractById } from "./finalWorkflow";
+import type { getContractById, listContracts } from "./finalWorkflow";
 
-export function redactContractFinance(contract: Awaited<ReturnType<typeof getContractById>>) {
+export function redactContractFinance(contract: Awaited<ReturnType<typeof getContractById>> | Awaited<ReturnType<typeof listContracts>>[number]) {
   return {
     ...contract,
     totalAmount: null, discountAmount: null, depositAmount: null,
