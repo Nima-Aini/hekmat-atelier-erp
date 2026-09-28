@@ -212,7 +212,7 @@ export async function listContractCustomers(
 
 export async function getFinalCalendar(allowedCoreProjectIds: string[] | null, financeIds?: string[] | null) {
   const [contracts, config] = await Promise.all([
-    listContracts("approved", allowedCoreProjectIds),
+    listContracts("approved", allowedCoreProjectIds, true),
     getAtelierConfig(),
   ]);
   const days = new Map<string, ContractRecord[]>();

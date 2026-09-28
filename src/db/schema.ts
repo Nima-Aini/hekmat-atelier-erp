@@ -51,13 +51,13 @@ export const customers = pgTable("customers", {
   phone: text("phone"),
   email: text("email"),
   address: text("address"),
-  city: text("city").default("تهران"),
+  city: text("city"),
   region: text("region"),
   postalCode: text("postal_code"),
   latitude: numeric("latitude", { precision: 10, scale: 6 }),
   longitude: numeric("longitude", { precision: 10, scale: 6 }),
-  paymentTermsDays: integer("payment_terms_days").default(30),
-  creditLimit: numeric("credit_limit", { precision: 15, scale: 2 }).default("0"),
+  paymentTermsDays: integer("payment_terms_days"),
+  creditLimit: numeric("credit_limit", { precision: 15, scale: 2 }),
   assignedEmployeeId: uuid("assigned_employee_id"),
   status: text("status").default("active").notNull(), // active, inactive, churned
   healthScore: integer("health_score").default(85).notNull(), // 0..100

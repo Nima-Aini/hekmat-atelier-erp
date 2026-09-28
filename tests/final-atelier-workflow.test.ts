@@ -13,10 +13,12 @@ import type { EmployeeContext } from "../src/services/access";
 import {
   addRentalRequirement, approveContract, assignEquipmentToItem, assignPersonnelToItem,
   completeReservation, convertReservationToDailyVisit, createPendingContract, getPlanning, listDailyVisits, listReservations,
-  markRentalAsRented, saveDailyVisit, saveReservation, updateContract, updatePersonnelAssignment, deletePersonnelAssignment,
+  markRentalAsRented, saveDailyVisit, saveReservation, saveProjectType, getContractById, updateContract, updatePersonnelAssignment, deletePersonnelAssignment,
   updateEquipmentAssignment, deleteEquipmentAssignment,
 } from "../src/services/studio/finalWorkflow";
 import { getFinalCalendar, getFinalDashboard, getFinalNotifications, listContractCustomers, setNotificationArchived } from "../src/services/studio/finalInsights";
+import { parseDashboardRange } from "../src/lib/dashboardRange";
+import { toBusinessGregorianDateString } from "../src/lib/dateUtils";
 import { createStudioEquipment } from "../src/services/studio/equipmentService";
 import { createStudioPersonnel } from "../src/services/studio/personnelService";
 import { adjustAtelierAccountBalance, getAtelierFinanceCenter, payAtelierInstallment, recordAtelierReceipt, saveContractInstallments, updateContractFinance } from "../src/services/studio/financeCenter";
@@ -46,6 +48,7 @@ describe("Final Iranian atelier workflow", () => {
       idempotencyKey: randomUUID(), projectTypeId: typeId, customerName: "احمد و سارا", mobile,
       contractDate: new Date(), programDate: date, programEndDate: new Date(+date + 5 * 3600000), executionLocation: "باغ تست",
       typeMetadata: { brideName: "سارا", groomName: "احمد", venue: "باغ تست" },
+      customerDetails: { city: "تبریز", email: "atelier-test@example.invalid", groomName: "احمد", brideName: "سارا", contactPersonRole: "self", socialMedia: "@atelier_test", socialConsent: true, paymentTermsDays: 15, creditLimit: "500000" },
       items: [{ title: "عکاسی", quantity: 1, unitPrice: 60_000_000 }, { title: "فیلمبرداری", quantity: 1, unitPrice: 30_000_000 }, { title: "پهپاد", quantity: 1, unitPrice: 10_000_000 }],
       discountAmount: 10_000_000,
       paidAmount: 30_000_000, paymentAccountId: accountId,
@@ -53,6 +56,8 @@ describe("Final Iranian atelier workflow", () => {
     expect(contract).toMatchObject({ status: "draft", itemsTotal: 100_000_000, totalAmount: "90000000.00", paidAmount: 30_000_000, remainingAmount: 60_000_000 });
     expect(contract.typeMetadata).toMatchObject({ brideName: "سارا", groomName: "احمد" });
     expect(contract.items).toHaveLength(3);
+    expect(contract.customerDetails).toMatchObject({ city: "تبریز", email: "atelier-test@example.invalid", groomName: "احمد", socialConsent: true, paymentTermsDays: 15, creditLimit: "500000.00" });
+    expect((contract.typeMetadata as { __customerEnteredKeys: string[] }).__customerEnteredKeys).toEqual(expect.arrayContaining(["city", "email", "groomName"]));
 
     const replay = await createPendingContract(actor, { idempotencyKey: contract.idempotencyKey, projectTypeId: typeId, customerName: "تکراری", mobile, programDate: date, items: [{ title: "تکراری", unitPrice: 1 }] });
     expect(replay.id).toBe(contract.id);
@@ -62,12 +67,50 @@ describe("Final Iranian atelier workflow", () => {
     })).rejects.toThrow("بیشتر از جمع آیتم‌ها");
     expect(await db.select().from(customers).where(eq(customers.mobile, mobile))).toHaveLength(1);
     expect(await db.select().from(studioCustomers).where(eq(studioCustomers.id, contract.customer.studioCustomerId))).toHaveLength(1);
+    await expect(createPendingContract(actor, { idempotencyKey: randomUUID(), projectTypeId: typeId, customerName: "نام متفاوت", mobile, programDate: tomorrow(), items: [{ title: "خدمت", unitPrice: 1000 }] })).rejects.toThrow("نام دیگری");
+  });
+
+  it("does not silently assign Tehran or a contact role to a new contract customer", async () => {
+    const row = await createPendingContract(actor, { idempotencyKey: randomUUID(), projectTypeId: typeId, customerName: "مشتری بدون نشانی", mobile: `0916${Date.now().toString().slice(-7)}`, programDate: tomorrow(), items: [{ title: "خدمت", unitPrice: 1000 }] });
+    expect(row.customerDetails.city).toBeNull();
+    expect(row.customerDetails.latitude).toBeNull();
+    expect(row.customerDetails.longitude).toBeNull();
+    expect(row.customerDetails.contactPersonRole).toBeNull();
+    expect(row.customerDetails.paymentTermsDays).toBeNull();
+    expect(row.customerDetails.creditLimit).toBeNull();
+    expect((row.typeMetadata as { __customerEnteredKeys: string[] }).__customerEnteredKeys).toEqual([]);
+  });
+
+  it("keeps typed and required project fields configurable without erasing historical contracts", async () => {
+    const title = `نوع آزمون ${randomUUID()}`;
+    const type = await saveProjectType(actor, { title, fieldSchema: [{ key: "guestCount", label: "تعداد مهمان", type: "number", required: true }, { key: "ceremonyTime", label: "ساعت مراسم", type: "time", required: false }] });
+    const base = { idempotencyKey: randomUUID(), projectTypeId: type.id, customerName: "مشتری فیلد پویا", mobile: `0915${Date.now().toString().slice(-7)}`, programDate: tomorrow(), items: [{ title: "خدمت", unitPrice: 1000 }] };
+    await expect(createPendingContract(actor, base)).rejects.toThrow("تعداد مهمان");
+    const created = await createPendingContract(actor, { ...base, typeMetadata: { guestCount: "80", ceremonyTime: "18:30" } });
+    expect(created.typeMetadata).toMatchObject({ guestCount: "80" });
+    expect((created.typeMetadata as { __fieldDefinitions: unknown[] }).__fieldDefinitions).toEqual(expect.arrayContaining([expect.objectContaining({ key: "guestCount", type: "number", required: true })]));
+    // Simulate a contract created before definition snapshots existed.
+    await db.update(studioContracts).set({ typeMetadata: { guestCount: "80", ceremonyTime: "18:30" } }).where(eq(studioContracts.id, created.id));
+    await saveProjectType(actor, { title, fieldSchema: [{ key: "guestCount", label: "تعداد مهمان امروز", type: "time", required: false }, { key: "ceremonyTime", label: "ساعت شروع", type: "time", required: true }] }, type.id);
+    const backfilled = await getContractById(created.id);
+    expect(backfilled.typeMetadata).toMatchObject({ __fieldLabels: { guestCount: "تعداد مهمان" } });
+    await expect(updateContract(actor, created.id, { typeMetadata: { guestCount: "90" } })).resolves.toMatchObject({ typeMetadata: { guestCount: "90" } });
+    await saveProjectType(actor, { title, fieldSchema: [{ key: "ceremonyTime", label: "ساعت شروع", type: "time", required: true }] }, type.id);
+    const historical = await getContractById(created.id);
+    expect(historical.typeMetadata).toMatchObject({ guestCount: "90", __fieldLabels: { guestCount: "تعداد مهمان" } });
+    const updated = await updateContract(actor, created.id, { notes: "ویرایش بدون حذف فیلد قدیمی" });
+    expect(updated.typeMetadata).toMatchObject({ guestCount: "90", ceremonyTime: "18:30" });
   });
 
   it("edits pending data without losing payment metadata, then approves idempotently", async () => {
     const updated = await updateContract(actor, contract.id, { customerName: "احمد و سارا ویرایش", mobile: contract.customer.mobile, notes: "ویرایش تست", typeMetadata: { ceremonyNotes: "نور کم" } });
     expect(updated.typeMetadata).toMatchObject({ ceremonyNotes: "نور کم", paymentDraft: { accountId } });
     expect(updated.customer.name).toBe("احمد و سارا ویرایش");
+    const updatedDetails = await updateContract(actor, contract.id, { customerDetails: { city: "شیراز", phone: "0710000000" }, typeMetadata: { paymentDraft: null } });
+    expect(updatedDetails.customerDetails).toMatchObject({ city: "شیراز", phone: "0710000000" });
+    expect(updatedDetails.typeMetadata).toMatchObject({ paymentDraft: { accountId } });
+    const contractOnlyActor: EmployeeContext = { ...actor, permissions: new Set(["studio.contract.manage"]) };
+    await expect(updateContract(contractOnlyActor, contract.id, { customerDetails: { creditLimit: "900000" } })).rejects.toThrow("دسترسی همهٔ پروژه‌های مرتبط");
     const approved = await approveContract(actor, contract.id);
     const replay = await approveContract(actor, contract.id);
     expect(approved.status).toBe("signed");
@@ -167,6 +210,11 @@ describe("Final Iranian atelier workflow", () => {
     const visit = await saveDailyVisit(actor, { title: "عکس پرسنلی", date: new Date(), price: 2_000_000, paidAmount: 500_000, customerName: "مراجعه تست", mobile: visitMobile, accountId });
     expect(visit.remainingAmount).toBe(1_500_000);
     expect((await listDailyVisits()).some((row) => row.id === visit.id)).toBe(true);
+    const visitDay = toBusinessGregorianDateString(visit.visitDate);
+    const selectedDay = parseDashboardRange(visitDay, visitDay);
+    expect((await listDailyVisits({ from: selectedDay.start, to: selectedDay.end })).some(row => row.id === visit.id)).toBe(true);
+    const oldDay = parseDashboardRange("2020-01-01", "2020-01-01");
+    expect((await listDailyVisits({ from: oldDay.start, to: oldDay.end })).some(row => row.id === visit.id)).toBe(false);
     const balanceBefore = Number((await db.select().from(accounts).where(eq(accounts.id, accountId)))[0].balance);
     const secondKey = randomUUID(), secondDate = new Date();
     const second = await recordAtelierReceipt(actor, { sourceType: "daily_visit", sourceId: visit.id, accountId, amount: 750_000, paidAt: secondDate, idempotencyKey: secondKey });
@@ -189,6 +237,11 @@ describe("Final Iranian atelier workflow", () => {
     expect(await db.select().from(studioReservations).where(eq(studioReservations.id, convertible.id))).toHaveLength(1);
     const converted = await convertReservationToDailyVisit(actor, convertible.id, { price: 100_000, paidAmount: 0 });
     expect(converted.title).toBe("رزرو قابل انتقال");
+    const firstPage = await listDailyVisits({ limit: 1, offset: 0 });
+    const secondPage = await listDailyVisits({ limit: 1, offset: 1 });
+    expect(firstPage).toHaveLength(1);
+    expect(secondPage).toHaveLength(1);
+    expect(firstPage[0].id).not.toBe(secondPage[0].id);
     expect(await db.select().from(studioReservations).where(eq(studioReservations.id, convertible.id))).toHaveLength(0);
     expect((await convertReservationToDailyVisit(actor, convertible.id, { price: 100_000, paidAmount: 0 })).id).toBe(converted.id);
     const simpleCustomers = await db.select().from(customers).where(sql`${customers.mobile} IN (${visitMobile},${reservationMobile})`);

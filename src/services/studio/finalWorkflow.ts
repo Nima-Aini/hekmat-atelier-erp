@@ -107,7 +107,122 @@ type ContractInput = {
   discountAmount?: unknown;
   paymentAccountId?: unknown;
   paymentMethod?: unknown;
+  customerDetails?: unknown;
 };
+
+const customFieldTypes = ["text", "textarea", "number", "time", "date"] as const;
+type CustomFieldType = typeof customFieldTypes[number];
+type CustomField = { key: string; label: string; type: CustomFieldType; required: boolean };
+function normalizeProjectFields(value: unknown): CustomField[] {
+  if (!Array.isArray(value) || value.length > 30) throw new ApiError(400, "حداکثر ۳۰ فیلد اختصاصی معتبر است.");
+  const fields = value.map((field) => {
+    if (!field || typeof field !== "object" || Array.isArray(field)) throw new ApiError(400, "ساختار فیلد اختصاصی معتبر نیست.");
+    const key = String(field.key || "").trim();
+    const label = cleanText(field.label, "عنوان فیلد", true, 80)!;
+    const type = String(field.type || "text") as CustomFieldType;
+    if (!/^[A-Za-z][A-Za-z0-9_]{0,79}$/.test(key) || key.startsWith("__") || key === "paymentDraft") throw new ApiError(400, "شناسه فیلد اختصاصی معتبر نیست.");
+    if (!customFieldTypes.includes(type)) throw new ApiError(400, "نوع فیلد اختصاصی معتبر نیست.");
+    if (field.required !== undefined && typeof field.required !== "boolean") throw new ApiError(400, "الزامی بودن فیلد معتبر نیست.");
+    return { key, label, type, required: field.required === true };
+  });
+  if (new Set(fields.map(field => field.key)).size !== fields.length) throw new ApiError(400, "شناسه فیلدهای اختصاصی باید یکتا باشد.");
+  return fields;
+}
+function validateProjectMetadata(metadata: Record<string, unknown>, fields: CustomField[], requireAll: boolean) {
+  for (const field of fields) {
+    const value = metadata[field.key];
+    if (field.required && requireAll && (value === undefined || value === null || String(value).trim() === "")) throw new ApiError(400, `${field.label} الزامی است.`);
+    if (value === undefined || value === null || String(value).trim() === "") continue;
+    if (typeof value !== "string" || value.length > 2000) throw new ApiError(400, `${field.label} معتبر نیست.`);
+    if (field.type === "number" && !Number.isFinite(Number(value))) throw new ApiError(400, `${field.label} باید عدد باشد.`);
+    if (field.type === "time" && !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) throw new ApiError(400, `${field.label} زمان معتبری نیست.`);
+    if (field.type === "date" && Number.isNaN(new Date(value).getTime())) throw new ApiError(400, `${field.label} تاریخ معتبری نیست.`);
+  }
+}
+
+const customerDetailTextFields = ["phone", "email", "storeName", "city", "region", "postalCode", "address", "groomName", "brideName", "socialMedia", "referrer", "specialPreferences", "customerNotes", "studioNotes"] as const;
+type CustomerDetailTextField = typeof customerDetailTextFields[number];
+type CustomerDetails = Partial<Record<CustomerDetailTextField, string | null>> & {
+  latitude?: string | null; longitude?: string | null;
+  contactPersonRole?: "groom" | "bride" | "father" | "mother" | "manager" | "self" | "other" | null;
+  anniversaryDate?: Date | null;
+  socialConsent?: boolean;
+  vipLevel?: "standard" | "gold" | "platinum" | "vip";
+  paymentTermsDays?: number | null;
+  creditLimit?: string | null;
+};
+function parseCustomerDetails(value: unknown): CustomerDetails {
+  if (value === undefined || value === null) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiError(400, "اطلاعات مشتری معتبر نیست.");
+  const raw = value as Record<string, unknown>;
+  const details: CustomerDetails = {};
+  for (const key of customerDetailTextFields) if (Object.hasOwn(raw, key)) details[key] = cleanText(raw[key], key, false, 2000);
+  for (const key of ["latitude", "longitude"] as const) if (Object.hasOwn(raw, key)) {
+    const text = cleanText(raw[key], key, false, 30);
+    if (text && (!Number.isFinite(Number(text)) || Math.abs(Number(text)) > (key === "latitude" ? 90 : 180))) throw new ApiError(400, `${key} معتبر نیست.`);
+    details[key] = text;
+  }
+  if (Object.hasOwn(raw, "contactPersonRole")) {
+    const role = cleanText(raw.contactPersonRole, "نقش مخاطب", false, 20);
+    if (role && !["groom", "bride", "father", "mother", "manager", "self", "other"].includes(role)) throw new ApiError(400, "نقش مخاطب معتبر نیست.");
+    details.contactPersonRole = role as CustomerDetails["contactPersonRole"];
+  }
+  if (Object.hasOwn(raw, "anniversaryDate")) details.anniversaryDate = raw.anniversaryDate ? validDate(raw.anniversaryDate, "تاریخ مناسبت") : null;
+  if (Object.hasOwn(raw, "socialConsent")) {
+    if (typeof raw.socialConsent !== "boolean") throw new ApiError(400, "رضایت انتشار تصاویر معتبر نیست.");
+    details.socialConsent = raw.socialConsent;
+  }
+  if (Object.hasOwn(raw, "vipLevel")) {
+    if (!["standard", "gold", "platinum", "vip"].includes(String(raw.vipLevel))) throw new ApiError(400, "سطح مشتری معتبر نیست.");
+    details.vipLevel = raw.vipLevel as CustomerDetails["vipLevel"];
+  }
+  if (Object.hasOwn(raw, "paymentTermsDays")) {
+    const value = raw.paymentTermsDays;
+    if (value === null || value === "") details.paymentTermsDays = null;
+    else {
+      const days = Number(value);
+      if (!Number.isInteger(days) || days < 0 || days > 3650) throw new ApiError(400, "مهلت پرداخت معتبر نیست.");
+      details.paymentTermsDays = days;
+    }
+  }
+  if (Object.hasOwn(raw, "creditLimit")) details.creditLimit = raw.creditLimit === null || raw.creditLimit === "" ? null : decimal(raw.creditLimit, "سقف اعتبار", 2);
+  return details;
+}
+async function applyCustomerDetails(tx: Transaction, baseId: string, studioId: string, details: CustomerDetails) {
+  const base: Partial<typeof customers.$inferInsert> = { updatedAt: new Date() };
+  const studio: Partial<typeof studioCustomers.$inferInsert> = { updatedAt: new Date() };
+  for (const key of ["phone", "email", "storeName", "city", "region", "postalCode", "address", "customerNotes"] as const) {
+    if (details[key] === undefined) continue;
+    if (key === "customerNotes") base.notes = details[key];
+    else base[key] = details[key];
+  }
+  for (const key of ["latitude", "longitude", "paymentTermsDays", "creditLimit"] as const) if (details[key] !== undefined) base[key] = details[key] as never;
+  for (const key of ["groomName", "brideName", "contactPersonRole", "anniversaryDate", "socialMedia", "referrer", "socialConsent", "vipLevel"] as const) if (details[key] !== undefined) studio[key] = details[key] as never;
+  if (details.specialPreferences !== undefined) studio.specialPreferences = details.specialPreferences;
+  if (details.studioNotes !== undefined) studio.notes = details.studioNotes;
+  if (Object.keys(base).length > 1) await tx.update(customers).set(base).where(eq(customers.id, baseId));
+  if (Object.keys(studio).length > 1) await tx.update(studioCustomers).set(studio).where(eq(studioCustomers.id, studioId));
+}
+
+async function assertSharedCustomerEditScope(tx: Transaction, actor: EmployeeContext, studioId: string, financial: boolean) {
+  if (actor.permissions.has("*")) return;
+  const projects = await tx.select({ projectId: studioProjects.projectId })
+    .from(studioProjects).where(eq(studioProjects.studioCustomerId, studioId));
+  const projectIds = [...new Set(projects.flatMap(project => project.projectId ? [project.projectId] : []))];
+  const assignments = projectIds.length ? await tx.select({ projectId: employeeProjectAssignments.projectId, permissionSet: employeeProjectAssignments.permissionSet })
+    .from(employeeProjectAssignments)
+    .where(and(eq(employeeProjectAssignments.employeeId, actor.employeeId), eq(employeeProjectAssignments.status, "active"), inArray(employeeProjectAssignments.projectId, projectIds))) : [];
+  const grants = new Map(assignments.map(row => [row.projectId, (row.permissionSet || {}) as Record<string, unknown>]));
+  const permissions = financial ? ["studio.contract.manage", "studio.finance.manage"] : ["studio.contract.manage"];
+  const allowed = (projectId: string | null) => permissions.every(permission => {
+    if (!projectId) return actor.permissions.has(permission);
+    const scoped = grants.get(projectId);
+    return Boolean(scoped && scoped[permission] !== false && (scoped[permission] === true || actor.permissions.has(permission)));
+  });
+  if (!projects.every(project => allowed(project.projectId))) {
+    throw new ApiError(403, "ویرایش اطلاعات مشترک این مشتری به دسترسی همهٔ پروژه‌های مرتبط نیاز دارد.", "PROJECT_SCOPE_FORBIDDEN");
+  }
+}
 
 const cleanText = (
   value: unknown,
@@ -205,10 +320,19 @@ export async function saveProjectType(
       .toLowerCase()
       .replace(/[^a-z0-9_]+/g, "_")
       .replace(/^_|_$/g, "") || `type_${crypto.randomUUID().slice(0, 8)}`;
-  const fieldSchema = Array.isArray(value.fieldSchema)
-    ? value.fieldSchema.slice(0, 30)
-    : [];
+  const fieldSchema = value.fieldSchema === undefined ? undefined : normalizeProjectFields(value.fieldSchema);
   return db.transaction(async (tx) => {
+    if (id && fieldSchema !== undefined) {
+      assertUuid(id);
+      const [previousType] = await tx.select({ fieldSchema: studioProjectTypes.fieldSchema })
+        .from(studioProjectTypes).where(eq(studioProjectTypes.id, id)).for("update").limit(1);
+      if (!previousType) throw new ApiError(404, "نوع پروژه یافت نشد.");
+      const previousFields = normalizeProjectFields(previousType.fieldSchema);
+      const previousLabels = Object.fromEntries(previousFields.map(field => [field.key, field.label]));
+      await tx.update(studioContracts).set({
+        typeMetadata: sql`coalesce(${studioContracts.typeMetadata}, '{}'::jsonb) || jsonb_build_object('__fieldDefinitions', ${JSON.stringify(previousFields)}::jsonb, '__fieldLabels', ${JSON.stringify(previousLabels)}::jsonb)`,
+      }).where(and(eq(studioContracts.projectTypeId, id), sql`not (coalesce(${studioContracts.typeMetadata}, '{}'::jsonb) ? '__fieldDefinitions')`));
+    }
     const row = id
       ? (assertUuid(id),
         (
@@ -218,7 +342,7 @@ export async function saveProjectType(
               title,
               active: value.active !== false,
               sortOrder: Number(value.sortOrder || 0),
-              fieldSchema,
+              ...(fieldSchema !== undefined ? { fieldSchema } : {}),
               updatedAt: new Date(),
             })
             .where(eq(studioProjectTypes.id, id))
@@ -232,7 +356,7 @@ export async function saveProjectType(
               title,
               active: value.active !== false,
               sortOrder: Number(value.sortOrder || 0),
-              fieldSchema,
+              fieldSchema: fieldSchema || [],
             })
             .returning()
         )[0];
@@ -272,6 +396,7 @@ export async function createPendingContract(
   assertUuid(projectTypeId);
   const customerName = cleanText(value.customerName, "نام مشتری", true, 180)!;
   const mobile = cleanPhone(value.mobile);
+  const customerDetails = parseCustomerDetails(value.customerDetails);
   const contractDate = validDate(
     value.contractDate,
     "تاریخ ثبت قرارداد",
@@ -331,6 +456,10 @@ export async function createPendingContract(
       )
       .limit(1);
     if (!type) throw new ApiError(404, "نوع پروژه انتخاب‌شده یافت نشد.");
+    const projectFields = normalizeProjectFields(type.fieldSchema);
+    const providedMetadata = typeof value.typeMetadata === "object" && value.typeMetadata && !Array.isArray(value.typeMetadata)
+      ? value.typeMetadata as Record<string, unknown> : {};
+    validateProjectMetadata(providedMetadata, projectFields, true);
     if (paymentAccountId) {
       const [account] = await tx
         .select({ id: accounts.id })
@@ -341,33 +470,19 @@ export async function createPendingContract(
         .limit(1);
       if (!account) throw new ApiError(404, "حساب دریافت فعال یافت نشد.");
     }
-    const customerType = (
-      [
-        "wedding",
-        "portrait",
-        "commercial",
-        "family",
-        "industrial",
-        "event",
-        "child",
-        "modeling",
-      ] as const
-    ).includes(type.code as never)
-      ? (type.code as
-          | "wedding"
-          | "portrait"
-          | "commercial"
-          | "family"
-          | "industrial"
-          | "event"
-          | "child"
-          | "modeling")
-      : "portrait";
+    const customerType = type.code;
     const customer = await createStudioCustomer(
       { name: customerName, mobile, customerType },
       tx,
       true,
     );
+    const [canonicalCustomer] = await tx.select({ name: customers.name })
+      .from(customers).where(eq(customers.id, customer.customerId)).limit(1);
+    if (!canonicalCustomer || canonicalCustomer.name.trim() !== customerName) {
+      throw new ApiError(409, "این شماره همراه با نام دیگری در پروندهٔ مشتری ثبت شده است. پیش از ساخت قرارداد، نام پرونده را بررسی کنید.", "CUSTOMER_NAME_MISMATCH");
+    }
+    if (Object.keys(customerDetails).length) await assertSharedCustomerEditScope(tx, actor, customer.id, Object.hasOwn(customerDetails, "paymentTermsDays") || Object.hasOwn(customerDetails, "creditLimit"));
+    await applyCustomerDetails(tx, customer.customerId, customer.id, customerDetails);
     const projectTitle =
       type.code === "wedding"
         ? `${type.title} ${cleanText((value.typeMetadata as Record<string, unknown>)?.groomName, "نام داماد") || customerName}`
@@ -389,12 +504,6 @@ export async function createPendingContract(
     );
     const sequenceNumber = await getNextSequenceCode("studio_contract", tx);
     const contractNumber = `${configuredPrefix || "CTR"}-${sequenceNumber.replace(/^CTR-/, "")}`;
-    const metadata =
-      typeof value.typeMetadata === "object" &&
-      value.typeMetadata &&
-      !Array.isArray(value.typeMetadata)
-        ? (value.typeMetadata as Record<string, unknown>)
-        : {};
     const [contract] = await tx
       .insert(studioContracts)
       .values({
@@ -403,7 +512,10 @@ export async function createPendingContract(
         idempotencyKey,
         projectTypeId,
         typeMetadata: {
-          ...metadata,
+          ...providedMetadata,
+          __fieldLabels: Object.fromEntries(projectFields.map(field => [field.key, field.label])),
+          __fieldDefinitions: projectFields,
+          __customerEnteredKeys: Object.keys(customerDetails),
           paymentDraft:
             paidAmount > 0
               ? {
@@ -657,7 +769,21 @@ export async function getContractById(
   assertUuid(contractId);
   const [row] = await getContractRecords([contractId], client);
   if (!row) throw new ApiError(404, "قرارداد یافت نشد.");
-  return row;
+  const [profile] = await client.select({ base: customers, studio: studioCustomers })
+    .from(studioCustomers).innerJoin(customers, eq(customers.id, studioCustomers.customerId))
+    .where(eq(studioCustomers.id, row.customer.studioCustomerId)).limit(1);
+  const c = profile?.base, s = profile?.studio;
+  return { ...row, customerDetails: c && s ? {
+    phone: c.phone, email: c.email, storeName: c.storeName, city: c.city,
+    region: c.region, postalCode: c.postalCode, address: c.address,
+    latitude: c.latitude, longitude: c.longitude,
+    groomName: s.groomName, brideName: s.brideName, contactPersonRole: s.contactPersonRole,
+    anniversaryDate: s.anniversaryDate, socialMedia: s.socialMedia, referrer: s.referrer,
+    socialConsent: s.socialConsent, vipLevel: s.vipLevel,
+    specialPreferences: s.specialPreferences,
+    customerNotes: c.notes, studioNotes: s.notes,
+    paymentTermsDays: c.paymentTermsDays, creditLimit: c.creditLimit,
+  } : {} };
 }
 
 async function getContractRecords(ids: string[], client: typeof db | Transaction = db) {
@@ -808,15 +934,17 @@ export async function updateContract(
     const patch: Partial<typeof studioContracts.$inferInsert> = {
       updatedAt: new Date(),
     };
-    if (value.customerName !== undefined || value.mobile !== undefined) {
+    if (value.customerName !== undefined || value.mobile !== undefined || value.customerDetails !== undefined) {
       const [identity] = await tx
-        .select({ customerId: customers.id })
+        .select({ customerId: customers.id, studioCustomerId: studioCustomers.id })
         .from(studioProjects)
         .innerJoin(studioCustomers, eq(studioCustomers.id, studioProjects.studioCustomerId))
         .innerJoin(customers, eq(customers.id, studioCustomers.customerId))
         .where(eq(studioProjects.id, current.studioProjectId))
         .limit(1);
       if (!identity) throw new ApiError(422, "اتصال مشتری قرارداد کامل نیست.");
+      const parsedDetails = parseCustomerDetails(value.customerDetails);
+      await assertSharedCustomerEditScope(tx, actor, identity.studioCustomerId, Object.hasOwn(parsedDetails, "paymentTermsDays") || Object.hasOwn(parsedDetails, "creditLimit"));
       const customerPatch: Partial<typeof customers.$inferInsert> = { updatedAt: new Date() };
       if (value.customerName !== undefined) customerPatch.name = cleanText(value.customerName, "نام مشتری", true, 180)!;
       if (value.mobile !== undefined) {
@@ -825,7 +953,8 @@ export async function updateContract(
         if (duplicate) throw new ApiError(409, "این شماره تماس متعلق به مشتری دیگری است.", "CUSTOMER_MOBILE_EXISTS");
         customerPatch.mobile = mobile;
       }
-      await tx.update(customers).set(customerPatch).where(eq(customers.id, identity.customerId));
+      if (Object.keys(customerPatch).length > 1) await tx.update(customers).set(customerPatch).where(eq(customers.id, identity.customerId));
+      if (value.customerDetails !== undefined) await applyCustomerDetails(tx, identity.customerId, identity.studioCustomerId, parsedDetails);
     }
     if (value.programDate !== undefined)
       patch.programDate = validDate(value.programDate, "تاریخ برنامه");
@@ -840,16 +969,29 @@ export async function updateContract(
         value.termsAndConditions,
         "شرایط قرارداد",
       );
-    if (value.typeMetadata !== undefined) {
+    if (value.typeMetadata !== undefined || value.customerDetails !== undefined) {
       const nextMetadata =
         typeof value.typeMetadata === "object" &&
         value.typeMetadata &&
         !Array.isArray(value.typeMetadata)
           ? (value.typeMetadata as Record<string, unknown>)
           : {};
+      const { paymentDraft: _ignoredPaymentDraft, __customerEnteredKeys: _ignoredCustomerKeys, __fieldDefinitions: _ignoredFieldDefinitions, __fieldLabels: _ignoredFieldLabels, ...editableMetadata } = nextMetadata;
+      const [projectType] = current.projectTypeId ? await tx.select({ fieldSchema: studioProjectTypes.fieldSchema }).from(studioProjectTypes).where(eq(studioProjectTypes.id, current.projectTypeId)).limit(1) : [];
+      const currentMetadata = (current.typeMetadata || {}) as Record<string, unknown>;
+      const activeFields = projectType ? normalizeProjectFields(projectType.fieldSchema) : [];
+      const historicalFields = Array.isArray(currentMetadata.__fieldDefinitions) ? normalizeProjectFields(currentMetadata.__fieldDefinitions) : [];
+      const fieldValidators = [...historicalFields, ...activeFields.filter(field => !historicalFields.some(historical => historical.key === field.key))];
+      for (const field of fieldValidators) if (Object.hasOwn(editableMetadata, field.key) && editableMetadata[field.key] !== currentMetadata[field.key])
+        validateProjectMetadata({ [field.key]: editableMetadata[field.key] }, [field], false);
+      const previousEnteredKeys = Array.isArray((current.typeMetadata as Record<string, unknown> | null)?.__customerEnteredKeys)
+        ? (current.typeMetadata as Record<string, unknown>).__customerEnteredKeys as string[] : [];
       patch.typeMetadata = {
         ...((current.typeMetadata || {}) as Record<string, unknown>),
-        ...nextMetadata,
+        ...editableMetadata,
+        __fieldDefinitions: historicalFields.length ? historicalFields : activeFields,
+        __fieldLabels: currentMetadata.__fieldLabels || Object.fromEntries((historicalFields.length ? historicalFields : activeFields).map(field => [field.key, field.label])),
+        __customerEnteredKeys: [...new Set([...previousEnteredKeys, ...Object.keys(parseCustomerDetails(value.customerDetails))])],
       };
     }
     if (!approved && value.items !== undefined) {
@@ -949,7 +1091,7 @@ function simpleValues(value: SimpleMoneyInput, dateKey: string) {
   };
 }
 export async function listDailyVisits(
-  filters: { search?: string; from?: Date; to?: Date; payment?: string; createdFrom?: Date; createdTo?: Date; projectId?: string; allowedCoreProjectIds?: string[] | null } = {},
+  filters: { search?: string; from?: Date; to?: Date; payment?: string; createdFrom?: Date; createdTo?: Date; projectId?: string; allowedCoreProjectIds?: string[] | null; limit?: number; offset?: number } = {},
 ) {
   const conditions = [];
   if (filters.createdFrom) conditions.push(gte(studioDailyVisits.createdAt, filters.createdFrom));
@@ -977,7 +1119,8 @@ export async function listDailyVisits(
     .leftJoin(invoices, eq(invoices.id, studioDailyVisits.invoiceId))
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(filters.createdFrom ? desc(studioDailyVisits.createdAt) : desc(studioDailyVisits.visitDate))
-    .limit(300);
+    .limit(filters.limit ?? 300)
+    .offset(filters.offset ?? 0);
   const visitIds = rows.map(({ record }) => record.id);
   const invoiceIds = rows.map(({ record }) => record.invoiceId).filter((id): id is string => Boolean(id));
   const assignments = visitIds.length ? await db.select().from(studioDailyVisitPersonnel).where(and(inArray(studioDailyVisitPersonnel.dailyVisitId, visitIds), eq(studioDailyVisitPersonnel.status, "active"))).orderBy(asc(studioDailyVisitPersonnel.createdAt)) : [];

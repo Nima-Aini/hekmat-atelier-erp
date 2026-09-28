@@ -88,6 +88,7 @@ describe("Hekmat Atelier (حکمت آتلیه) Database Migration & Schema Verif
       "009_atelier_packages_personnel",
       "010_atelier_final_polish",
       "011_atelier_finance_planning_polish",
+      "012_atelier_customer_defaults",
     ]);
   });
 

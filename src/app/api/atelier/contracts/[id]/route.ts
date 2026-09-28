@@ -17,7 +17,9 @@ export async function GET(
     const { actor, owner } = await requireStudioResourceAccess("contract", id, "studio.contract.view");
     const contract = await getContractById(id);
     const finance = await canAccessPermission(actor, "studio.finance.view", owner.coreProjectId);
-    return NextResponse.json({ success: true, contract: finance ? contract : redactContractFinance(contract) });
+    if (finance) return NextResponse.json({ success: true, contract });
+    const { creditLimit: _creditLimit, paymentTermsDays: _paymentTermsDays, ...visibleDetails } = contract.customerDetails;
+    return NextResponse.json({ success: true, contract: { ...redactContractFinance(contract), customerDetails: visibleDetails } });
   } catch (error) {
     return apiError(error, "دریافت قرارداد");
   }
@@ -35,10 +37,12 @@ export async function PUT(
     );
     const body = await req.json();
     if (body.items !== undefined || body.paidAmount !== undefined || body.paymentAccountId !== undefined) ({ actor } = await requireStudioResourceAccess("contract", id, "studio.finance.manage"));
-    return NextResponse.json({
-      success: true,
-      contract: await updateContract(actor, id, body),
-    });
+    if (body.customerDetails && (body.customerDetails.creditLimit !== undefined || body.customerDetails.paymentTermsDays !== undefined)) ({ actor } = await requireStudioResourceAccess("contract", id, "studio.finance.manage"));
+    const contract = await updateContract(actor, id, body);
+    const finance = await canAccessPermission(actor, "studio.finance.view", contract.project.projectId);
+    if (finance) return NextResponse.json({ success: true, contract });
+    const { creditLimit: _creditLimit, paymentTermsDays: _paymentTermsDays, ...visibleDetails } = contract.customerDetails;
+    return NextResponse.json({ success: true, contract: { ...redactContractFinance(contract), customerDetails: visibleDetails } });
   } catch (error) {
     return apiError(error, "ویرایش قرارداد");
   }

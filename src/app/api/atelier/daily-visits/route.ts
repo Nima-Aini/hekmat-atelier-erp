@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiError } from "@/lib/apiError";
+import { apiError, pageNumber } from "@/lib/apiError";
 import { requireAnyPermission, requirePermission } from "@/services/access";
+import { parseDashboardRange } from "@/lib/dashboardRange";
 import {
   listDailyVisits,
   saveDailyVisit,
@@ -10,14 +11,22 @@ export async function GET(req: NextRequest) {
   try {
     await requireAnyPermission(["studio.daily_visits.view", "studio.daily_visits.manage", "studio.view"]);
     const p = new URL(req.url).searchParams;
+    const range = p.has("from") || p.has("to") ? parseDashboardRange(p.get("from"), p.get("to")) : null;
+    const paged = p.has("page");
+    const page = paged ? pageNumber(p.get("page"), 1) : 1;
+    const pageSize = paged ? pageNumber(p.get("pageSize"), 100, 100) : 300;
+    const visits = await listDailyVisits({
+      search: p.get("search") || undefined,
+      from: range?.start,
+      to: range?.end,
+      payment: p.get("payment") || undefined,
+      limit: paged ? pageSize + 1 : undefined,
+      offset: paged ? (page - 1) * pageSize : undefined,
+    });
     return NextResponse.json({
       success: true,
-      visits: await listDailyVisits({
-        search: p.get("search") || undefined,
-        from: p.get("from") ? new Date(p.get("from")!) : undefined,
-        to: p.get("to") ? new Date(p.get("to")!) : undefined,
-        payment: p.get("payment") || undefined,
-      }),
+      visits: paged ? visits.slice(0, pageSize) : visits,
+      ...(paged ? { hasMore: visits.length > pageSize } : {}),
     });
   } catch (error) {
     return apiError(error, "دریافت مراجعات روزانه");

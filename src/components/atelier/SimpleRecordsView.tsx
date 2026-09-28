@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Banknote, Edit3, Eye, Plus, Search, Trash2 } from "lucide-react";
 import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
@@ -14,6 +14,8 @@ import { AtelierModal } from "./AtelierModal";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 import { atelierConfirm, atelierToast } from "@/lib/atelierFeedback";
 import { AccountSelector, PaymentMethodSelect } from "./FinanceControls";
+import { dashboardPresetSelection, type DashboardDateSelection } from "@/lib/dashboardDateSelection";
+import { DashboardRangeFilter } from "./DashboardRangeFilter";
 
 const money = (value: unknown) =>
   `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
@@ -27,29 +29,48 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
     [personnel, setPersonnel] = useState<any[]>([]),
     [dailyVisitTitles, setDailyVisitTitles] = useState<any[]>([]),
     [loading, setLoading] = useState(true),
+    [loadingMore, setLoadingMore] = useState(false),
+    [hasMore, setHasMore] = useState(false),
+    [loadedPage, setLoadedPage] = useState(1),
     [error, setError] = useState("");
   const [query, setQuery] = useState(""),
     [payment, setPayment] = useState("all"),
     [filterDate, setFilterDate] = useState<Date | null>(null),
+    [visitSelection, setVisitSelection] = useState<DashboardDateSelection>(() => dashboardPresetSelection("today")),
     [editing, setEditing] = useState<any | "new" | null>(null),
     [converting, setConverting] = useState<any | null>(null),
     [viewing, setViewing] = useState<any | null>(null),
     [paying, setPaying] = useState<any | null>(null),
     [saving, setSaving] = useState(false);
-  const load = () => {
-    setLoading(true);
+  const recordsController = useRef<AbortController | null>(null);
+  const visitStart = reservation ? "" : toBusinessGregorianDateString(visitSelection.range.start);
+  const visitEnd = reservation ? "" : toBusinessGregorianDateString(visitSelection.range.end);
+  const serverSearch = reservation ? "" : query.trim();
+  const serverPayment = reservation ? "" : payment;
+  const load = useCallback((page = 1) => {
+    recordsController.current?.abort();
+    const controller = new AbortController();
+    recordsController.current = controller;
+    if (page === 1) setLoading(true);
+    else setLoadingMore(true);
     setError("");
-    fetch(`/api/atelier/${kind}`)
+    const params = reservation ? "" : `?from=${encodeURIComponent(visitStart)}&to=${encodeURIComponent(visitEnd)}&page=${page}&pageSize=100&search=${encodeURIComponent(serverSearch)}&payment=${encodeURIComponent(serverPayment)}`;
+    fetch(`/api/atelier/${kind}${params}`, { cache: "no-store", signal: controller.signal })
       .then((r) => r.json())
       .then((data) => {
         if (!data.success)
           throw new Error(data.error || "دریافت اطلاعات ممکن نشد.");
-        setRecords(data.visits || data.reservations || []);
+        if (!controller.signal.aborted) {
+          const next = data.visits || data.reservations || [];
+          setRecords(current => page === 1 ? next : [...current, ...next]);
+          setLoadedPage(page);
+          setHasMore(!reservation && Boolean(data.hasMore));
+        }
       })
-      .catch((reason) => setError(reason.message))
-      .finally(() => setLoading(false));
-  };
-  useEffect(load, [kind]);
+      .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); })
+      .finally(() => { if (!controller.signal.aborted) { setLoading(false); setLoadingMore(false); } });
+  }, [kind, reservation, visitStart, visitEnd, serverSearch, serverPayment]);
+  useEffect(() => { load(); return () => recordsController.current?.abort(); }, [load]);
   useEffect(() => {
     Promise.all([
       fetch("/api/accounts").then((r) => r.json()),
@@ -80,10 +101,10 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
             (payment === "paid"
               ? Number(row.remainingAmount) === 0
               : Number(row.remainingAmount) > 0)) &&
-          (!filterDate ||
+          (reservation ? !filterDate ||
             toBusinessGregorianDateString(
-              reservation ? row.reservedAt : row.visitDate,
-            ) === toBusinessGregorianDateString(filterDate)),
+              row.reservedAt,
+            ) === toBusinessGregorianDateString(filterDate) : true),
       ),
     [records, query, payment, filterDate, reservation],
   );
@@ -119,6 +140,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
           {reservation ? "رزرو جدید" : "مراجعه جدید"}
         </button>
       </div>
+      {!reservation && <DashboardRangeFilter selection={visitSelection} onChange={setVisitSelection} context="مراجعات روزانه" />}
       <div className="atelier-panel grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-[1fr_auto_auto]">
         <label className="relative">
           <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" />
@@ -138,19 +160,19 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
           <option value="paid">تسویه شده</option>
           <option value="due">دارای مانده</option>
         </select>}
-        <JalaliDatePicker
+        {reservation && <JalaliDatePicker
           value={filterDate}
           onChange={setFilterDate}
           placeholder="فیلتر تاریخ"
           className="min-w-48"
-        />
+        />}
       </div>
       {loading ? (
         <LoadingState />
       ) : error ? (
         <ErrorState text={error} retry={load} />
       ) : !filtered.length ? (
-        <EmptyState text={`هنوز ${title} ثبت نشده است.`} />
+        <EmptyState text={reservation ? `هنوز ${title} ثبت نشده است.` : "در بازه انتخاب‌شده مراجعه‌ای ثبت نشده است."} />
       ) : (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {filtered.map((row) => (
@@ -221,6 +243,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
           ))}
         </div>
       )}
+      {!reservation && hasMore && !loading && <button type="button" className="atelier-button-secondary mx-auto" disabled={loadingMore} onClick={() => load(loadedPage + 1)}>{loadingMore ? "در حال بارگذاری…" : "نمایش مراجعات بیشتر"}</button>}
       {editing && (
         <RecordForm
           reservation={reservation}

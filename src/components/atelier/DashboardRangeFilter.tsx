@@ -8,7 +8,7 @@ import { toJalaliDate } from "@/lib/dateUtils";
 import { dashboardPresets } from "@/lib/dashboardRange";
 import { dashboardCustomSelection, dashboardDaySelection, dashboardPresetSelection, dashboardSelectionLabel, type DashboardDateSelection } from "@/lib/dashboardDateSelection";
 
-export function DashboardRangeFilter({ selection, onChange }: { selection: DashboardDateSelection; onChange: (selection: DashboardDateSelection) => void }) {
+export function DashboardRangeFilter({ selection, onChange, context = "داشبورد" }: { selection: DashboardDateSelection; onChange: (selection: DashboardDateSelection) => void; context?: string }) {
   const [customOpen, setCustomOpen] = useState(false);
   const [start, setStart] = useState<Date | null>(null), [end, setEnd] = useState<Date | null>(null);
   const [validStart, setValidStart] = useState(true), [validEnd, setValidEnd] = useState(true);
@@ -36,21 +36,21 @@ export function DashboardRangeFilter({ selection, onChange }: { selection: Dashb
     document.addEventListener("mousedown", outside); document.addEventListener("focusin", outside); document.addEventListener("keydown", escape);
     return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); document.removeEventListener("mousedown", outside); document.removeEventListener("focusin", outside); document.removeEventListener("keydown", escape); };
   }, [customOpen]);
-  return <div className="flex min-w-0 max-w-full flex-col gap-2 lg:flex-row lg:items-center" aria-label="انتخاب تاریخ داشبورد">
+  return <div className="flex min-w-0 max-w-full flex-col gap-2 lg:flex-row lg:items-center" aria-label={`انتخاب تاریخ ${context}`}>
     <div ref={anchor} className="min-w-0 max-w-full shrink-0 lg:max-w-[330px]">
-      <JalaliDatePicker value={selection.range.start} onOpenChange={open => { if (open) setCustomOpen(false); }} onChange={date => { if (date) { setCustomOpen(false); onChange(dashboardDaySelection(date)); } }} triggerLabel={`انتخاب روز داشبورد؛ ${label}`} trigger={<>
+      <JalaliDatePicker value={selection.range.start} onOpenChange={open => { if (open) setCustomOpen(false); }} onChange={date => { if (date) { setCustomOpen(false); onChange(dashboardDaySelection(date)); } }} triggerLabel={`انتخاب روز ${context}؛ ${label}`} trigger={<>
         <CalendarDays className="h-4 w-4 shrink-0 text-zinc-400" />
         <span className="min-w-0"><b className="block truncate text-xs" title={label}>{label}</b>{selection.preset !== "today" && selection.preset !== "single" && <small className="block text-[10px] text-zinc-400">{rangeLabel}</small>}</span>
         <ChevronDown className="h-3 w-3 shrink-0 text-zinc-500" />
       </>} />
     </div>
-    <div role="group" aria-label="بازه‌های آماده داشبورد" className="flex min-w-0 max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-zinc-800/80 p-1 lg:overflow-visible">
+    <div role="group" aria-label={`بازه‌های آماده ${context}`} className="flex min-w-0 max-w-full items-center gap-1 overflow-x-auto rounded-xl border border-zinc-800/80 p-1 lg:overflow-visible">
       {dashboardPresets.map(([preset, title]) => <button key={preset} ref={preset === "custom" ? customButton : undefined} type="button" aria-pressed={selection.preset === preset} aria-expanded={preset === "custom" ? customOpen : undefined} aria-haspopup={preset === "custom" ? "dialog" : undefined} className={`shrink-0 whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[11px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 ${selection.preset === preset ? "bg-red-950 text-red-200 ring-1 ring-red-800/70" : "text-zinc-400 hover:bg-zinc-900 hover:text-white"}`} onClick={() => {
         if (preset === "custom") { setStart(selection.range.start); setEnd(selection.range.end); setValidStart(true); setValidEnd(true); setError(""); setCustomOpen(current => !current); }
         else { setCustomOpen(false); onChange(dashboardPresetSelection(preset)); }
       }}>{title}</button>)}
     </div>
-    {customOpen && createPortal(<div ref={panel} role="dialog" aria-label="بازه دلخواه داشبورد" dir="rtl" style={position} className="z-[130] space-y-3 rounded-2xl border border-zinc-800 bg-[#09090b] p-4 text-white shadow-2xl">
+    {customOpen && createPortal(<div ref={panel} role="dialog" aria-label={`بازه دلخواه ${context}`} dir="rtl" style={position} className="z-[130] space-y-3 rounded-2xl border border-zinc-800 bg-[#09090b] p-4 text-white shadow-2xl">
       <div className="flex items-center justify-between gap-2"><h2 className="text-sm font-bold">بازه دلخواه</h2><button type="button" aria-label="بستن انتخاب بازه" onClick={close} className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-800 focus-visible:ring-2 focus-visible:ring-red-600"><X className="h-4 w-4" /></button></div>
       <div className="grid gap-3 sm:grid-cols-2">
         <JalaliDatePicker label="از تاریخ" value={start} onChange={date => { setStart(date); setValidStart(Boolean(date)); }} onValidityChange={setValidStart} />

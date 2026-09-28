@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Banknote, CheckCircle2, Edit3, FilePlus2, PackagePlus, Printer, Search, Trash2 } from "lucide-react";
 import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
@@ -28,8 +28,19 @@ const blankItem = (): ItemForm => ({
   unitPrice: 0,
   notes: "",
 });
-const formatMoney = (value: unknown) =>
-  `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
+const formatMoney = (value: unknown) => {
+  if (value === null || value === undefined || value === "") return "—";
+  const amount = Number(value);
+  return Number.isFinite(amount) ? `${amount.toLocaleString("fa-IR")} تومان` : "—";
+};
+type ProjectCustomField = { key: string; label: string; type?: "text" | "textarea" | "number" | "time" | "date"; required?: boolean };
+type ContractMetadata = Record<string, unknown> & {
+  __fieldLabels?: Record<string, string>;
+  __fieldDefinitions?: ProjectCustomField[];
+  __customerEnteredKeys?: string[];
+  paymentDraft?: { accountId?: string };
+};
+type CustomerFormDetails = Record<string, string | boolean>;
 const mergeTime = (date: Date, time: string) => {
   const parts = getBusinessDateTimeParts(date);
   const [hour, minute] = time.split(":").map(Number);
@@ -104,6 +115,19 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
       return atelierToast(response.error || "تأیید قرارداد انجام نشد.", "error");
     atelierToast("قرارداد تأیید شد.", "success");
     await load();
+  };
+
+  const openContract = async (id: string, print = false) => {
+    try {
+      const response = await fetch(`/api/atelier/contracts/${id}`).then((r) => r.json());
+      if (!response.success) throw new Error(response.error || "دریافت قرارداد انجام نشد.");
+      if (print && (response.contract.totalAmount == null || response.contract.items?.some((item: any) => item.unitPrice == null)))
+        throw new Error("برای چاپ قرارداد، دسترسی به اطلاعات مالی لازم است.");
+      if (print) setPrinting(response.contract);
+      else setEditing(response.contract);
+    } catch (reason) {
+      atelierToast(reason instanceof Error ? reason.message : "دریافت قرارداد انجام نشد.", "error");
+    }
   };
 
   return (
@@ -207,7 +231,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
                   <button
-                    onClick={() => setEditing(contract)}
+                    onClick={() => void openContract(contract.id)}
                     className="atelier-button-secondary flex-1"
                   >
                     <Edit3 className="h-4 w-4" />
@@ -226,7 +250,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
                       <button onClick={() => onNavigateFinance?.(contract.id)} className="atelier-button-secondary flex-1">
                         <Banknote className="h-4 w-4" /> مشاهده در مالی
                       </button>
-                      <button onClick={() => setPrinting(contract)} className="atelier-button flex-1">
+                      <button disabled={contract.totalAmount == null} title={contract.totalAmount == null ? "برای چاپ قرارداد، دسترسی مالی لازم است" : undefined} onClick={() => void openContract(contract.id, true)} className="atelier-button flex-1 disabled:cursor-not-allowed disabled:opacity-50">
                         <Printer className="h-4 w-4" /> چاپ قرارداد
                       </button>
                     </>
@@ -314,8 +338,8 @@ function ContractForm({
     initial?.customer?.name || "",
   );
   const [mobile, setMobile] = useState(initial?.customer?.mobile || "");
-  const [contractDate, setContractDate] = useState<Date>(
-    initial?.contractDate ? new Date(initial.contractDate) : new Date(),
+  const [contractDate, setContractDate] = useState<Date | null>(
+    initial?.contractDate ? new Date(initial.contractDate) : null,
   );
   const [programDate, setProgramDate] = useState<Date | null>(
     initial?.programDate ? new Date(initial.programDate) : null,
@@ -328,7 +352,7 @@ function ContractForm({
           minute: "2-digit",
           hourCycle: "h23",
         }).format(new Date(initial.programDate))
-      : "10:00",
+      : "",
   );
   const [location, setLocation] = useState(initial?.executionLocation || "");
   const [paidAmount, setPaidAmount] = useState(
@@ -336,11 +360,23 @@ function ContractForm({
   );
   const [discountAmount, setDiscountAmount] = useState(Number(initial?.discountAmount || 0));
   const [accountId, setAccountId] = useState(
-    initial?.typeMetadata?.paymentDraft?.accountId || accounts[0]?.id || "",
+    initial?.typeMetadata?.paymentDraft?.accountId || "",
   );
-  const [metadata, setMetadata] = useState<Record<string, string>>(
+  const [metadata, setMetadata] = useState<ContractMetadata>(
     initial?.typeMetadata || {},
   );
+  const touchedProjectFields = useRef(new Set<string>());
+  const [customerDetails, setCustomerDetails] = useState<CustomerFormDetails>(() => {
+    const values: Record<string, unknown> = initial?.customerDetails || {};
+    const enteredKeys: string[] = Array.isArray(initial?.typeMetadata?.__customerEnteredKeys) ? initial.typeMetadata.__customerEnteredKeys : [];
+    return Object.fromEntries(enteredKeys.filter(key => Object.hasOwn(values, key)).map(key => [key, typeof values[key] === "boolean" ? values[key] : String(values[key] ?? "")]));
+  });
+  const setCustomerDetail = (key: string, value: string | boolean) => setCustomerDetails((current) => {
+    if (value === "" && (key === "vipLevel" || key === "socialConsent")) {
+      const next = { ...current }; delete next[key]; return next;
+    }
+    return { ...current, [key]: value };
+  });
   const [items, setItems] = useState<ItemForm[]>(
     initial?.items?.length
       ? initial.items.map((item: any) => ({
@@ -354,7 +390,7 @@ function ContractForm({
   );
   const [notes, setNotes] = useState(initial?.notes || "");
   const [terms, setTerms] = useState(
-    initial?.termsAndConditions || config?.contract?.defaultTerms || "",
+    initial?.termsAndConditions || "",
   );
   const [itemPicker, setItemPicker] = useState(false);
   const [packagePicker, setPackagePicker] = useState(false);
@@ -377,32 +413,60 @@ function ContractForm({
     [items],
   );
   const finalTotal = Math.max(0, total - discountAmount);
-  const fields = Array.isArray(selectedType?.fieldSchema)
+  const financeRedacted = Boolean(initial) && initial.totalAmount == null;
+  const activeFields: ProjectCustomField[] = Array.isArray(selectedType?.fieldSchema)
     ? selectedType.fieldSchema
     : [];
+  const savedFields: ProjectCustomField[] = Array.isArray(metadata.__fieldDefinitions) ? metadata.__fieldDefinitions : [];
+  const fields: ProjectCustomField[] = activeFields.map((field) => {
+    const saved = initial ? savedFields.find(row => row.key === field.key) : undefined;
+    return { ...field, label: saved?.label || metadata.__fieldLabels?.[field.key] || field.label, type: saved?.type || field.type || "text", required: !initial && field.required === true };
+  });
+  if (initial) for (const [key, value] of Object.entries(metadata)) {
+    if (key === "paymentDraft" || key.startsWith("__") || typeof value !== "string" || fields.some((field) => field.key === key)) continue;
+    const saved = savedFields.find(row => row.key === key);
+    fields.push({ key, label: saved?.label || metadata.__fieldLabels?.[key] || key, type: saved?.type || "text" });
+  }
   const updateItem = (index: number, patch: Partial<ItemForm>) =>
     setItems((current) =>
       current.map((item, i) => (i === index ? { ...item, ...patch } : item)),
     );
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!projectTypeId || !programDate)
-      return atelierToast("نوع پروژه و تاریخ برنامه الزامی است.", "error");
+    if (!projectTypeId || !programDate || !contractDate || !time)
+      return atelierToast("نوع پروژه، تاریخ قرارداد، تاریخ و ساعت برنامه الزامی است.", "error");
+    const selectedStart = mergeTime(programDate, time);
+    const originalStart = initial?.programDate ? new Date(initial.programDate) : null;
+    const selectedParts = getBusinessDateTimeParts(selectedStart);
+    const originalParts = originalStart ? getBusinessDateTimeParts(originalStart) : null;
+    const sameStart = Boolean(originalParts &&
+      selectedParts.year === originalParts.year && selectedParts.month === originalParts.month &&
+      selectedParts.day === originalParts.day && selectedParts.hour === originalParts.hour &&
+      selectedParts.minute === originalParts.minute);
+    const programStart = sameStart && originalStart ? originalStart : selectedStart;
+    const programEnd = sameStart && initial?.programEndDate
+      ? new Date(initial.programEndDate)
+      : new Date(programStart.getTime() + 4 * 3600000);
+    const customerDetailsToSave = { ...customerDetails };
+    for (const key of ["groomName", "brideName"] as const) {
+      if (!fields.some((field) => field.key === key)) continue;
+      delete customerDetailsToSave[key];
+      if (touchedProjectFields.current.has(key)) customerDetailsToSave[key] = String(metadata[key] ?? "");
+    }
     await onSave({
       projectTypeId,
       customerName,
       mobile,
       contractDate: contractDate.toISOString(),
-      programDate: mergeTime(programDate, time).toISOString(),
-      programEndDate: new Date(
-        mergeTime(programDate, time).getTime() + 4 * 3600000,
-      ).toISOString(),
+      programDate: programStart.toISOString(),
+      programEndDate: programEnd.toISOString(),
       executionLocation: location,
-      typeMetadata: metadata,
-      items: approved ? undefined : items,
-      paidAmount: approved ? undefined : paidAmount,
-      discountAmount: approved ? undefined : discountAmount,
-      paymentAccountId: paidAmount > 0 ? accountId : undefined,
+      typeMetadata: { ...metadata, __fieldLabels: Object.fromEntries(fields.map(field => [field.key, field.label])) },
+      customerDetails: customerDetailsToSave,
+      items: approved || financeRedacted ? undefined : items,
+      paidAmount: approved || financeRedacted ? undefined : paidAmount,
+      discountAmount: approved || financeRedacted ? undefined : discountAmount,
+      paymentAccountId: !approved && !financeRedacted && paidAmount > 0 ? accountId : undefined,
       notes,
       termsAndConditions: terms,
     });
@@ -428,6 +492,7 @@ function ContractForm({
             onChange={(event) => {
               setProjectTypeId(event.target.value);
               setMetadata({});
+              touchedProjectFields.current.clear();
             }}
             className="atelier-input w-full py-3"
           >
@@ -461,7 +526,7 @@ function ContractForm({
                 label="تاریخ ثبت قرارداد"
                 required
                 value={contractDate}
-                onChange={(value) => value && setContractDate(value)}
+                onChange={setContractDate}
                 disabled={approved}
               />
               <JalaliDatePicker
@@ -480,29 +545,52 @@ function ContractForm({
               />
               <div><Field label="تالار / باغ / لوکیشن" value={location} onChange={setLocation} /><p className="mt-1 text-[10px] text-zinc-600">مثال: تالار محمد / باغ احسان</p></div>
             </section>
+            <section className="atelier-panel p-4">
+              <h3 className="mb-1 text-sm font-black">اطلاعات پرونده مشتری</h3>
+              <p className="mb-4 text-xs text-zinc-500">در قرارداد جدید این فیلدها خالی‌اند. هنگام ویرایش، مقدار فیلدهای ثبت‌شده از پروندهٔ مشترک و به‌روز مشتری خوانده می‌شود و ممکن است پس از ثبت این قرارداد تغییر کرده باشد. تغییرات شما نیز در همان پرونده ذخیره می‌شود.</p>
+              {fields.some((field) => field.key === "groomName" || field.key === "brideName") &&
+                <p className="mb-4 text-xs text-zinc-400">نام عروس و داماد در بخش اطلاعات مخصوص پروژه ثبت می‌شود؛ تغییر آن‌ها پروندهٔ مشتری را نیز به‌روزرسانی می‌کند.</p>}
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {([[
+                  "phone", "تلفن دوم", "tel"], ["email", "ایمیل", "email"], ["storeName", "نام مجموعه", "text"],
+                  ["city", "شهر", "text"], ["region", "منطقه", "text"], ["postalCode", "کد پستی", "text"],
+                  ["address", "آدرس", "text"], ["latitude", "عرض جغرافیایی", "text"], ["longitude", "طول جغرافیایی", "text"],
+                  ["groomName", "نام داماد", "text"], ["brideName", "نام عروس", "text"],
+                  ["socialMedia", "شبکه اجتماعی", "text"], ["referrer", "منبع آشنایی", "text"],
+                ] as const).filter(([key]) => !["groomName", "brideName"].includes(key) || !fields.some((field) => field.key === key)).map(([key, label, type]) => <Field key={key} label={label} type={type} value={String(customerDetails[key] || "")} onChange={(value) => setCustomerDetail(key, value)} />)}
+                <label className="block"><span className="atelier-label">نقش مخاطب</span><select className="atelier-input w-full py-2.5" value={String(customerDetails.contactPersonRole || "")} onChange={(event) => setCustomerDetail("contactPersonRole", event.target.value)}><option value="">انتخاب نشده</option>{[["groom","داماد"],["bride","عروس"],["father","پدر"],["mother","مادر"],["manager","مدیر"],["self","خود مشتری"],["other","سایر"]].map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+                <JalaliDatePicker label="تاریخ مناسبت" value={customerDetails.anniversaryDate ? new Date(String(customerDetails.anniversaryDate)) : null} onChange={(value) => setCustomerDetail("anniversaryDate", value?.toISOString() || "")} />
+                <label className="block"><span className="atelier-label">سطح مشتری</span><select className="atelier-input w-full py-2.5" value={String(customerDetails.vipLevel || "")} onChange={(event) => setCustomerDetail("vipLevel", event.target.value)}><option value="">انتخاب نشده</option>{[["standard","استاندارد"],["gold","طلایی"],["platinum","پلاتینیوم"],["vip","ویژه"]].map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+                <label className="block"><span className="atelier-label">رضایت انتشار تصاویر</span><select className="atelier-input w-full py-2.5" value={customerDetails.socialConsent === undefined || customerDetails.socialConsent === "" ? "" : String(customerDetails.socialConsent)} onChange={(event) => setCustomerDetail("socialConsent", event.target.value === "" ? "" : event.target.value === "true")}><option value="">ثبت نشده</option><option value="true">بله</option><option value="false">خیر</option></select></label>
+                {!financeRedacted && <>
+                  <Field label="مهلت پرداخت (روز)" type="number" value={String(customerDetails.paymentTermsDays ?? "")} onChange={(value) => setCustomerDetail("paymentTermsDays", value)} />
+                  <Field label="سقف اعتبار (تومان)" type="number" value={String(customerDetails.creditLimit ?? "")} onChange={(value) => setCustomerDetail("creditLimit", value)} />
+                </>}
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                {[["specialPreferences","ترجیحات ویژه"],["customerNotes","یادداشت مشتری"],["studioNotes","یادداشت آتلیه"]].map(([key,label]) => <label className="block" key={key}><span className="atelier-label">{label}</span><textarea className="atelier-input min-h-24 w-full py-2.5" value={String(customerDetails[key] || "")} onChange={(event) => setCustomerDetail(key,event.target.value)} /></label>)}
+              </div>
+            </section>
             {fields.length > 0 && (
               <section className="atelier-panel-red p-4">
                 <h3 className="mb-4 text-sm font-black">
                   اطلاعات مخصوص {selectedType?.title}
                 </h3>
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                  {fields.map((field: any) => (
-                    <Field
-                      key={field.key}
-                      label={field.label}
-                      value={metadata[field.key] || ""}
-                      onChange={(value) =>
-                        setMetadata((current) => ({
-                          ...current,
-                          [field.key]: value,
-                        }))
-                      }
-                    />
-                  ))}
+                  {fields.map((field) => {
+                    const setValue = (value: string) => {
+                      touchedProjectFields.current.add(field.key);
+                      setMetadata(current => ({ ...current, [field.key]: value }));
+                    };
+                    const value = String(metadata[field.key] || "");
+                    if (field.type === "date") return <JalaliDatePicker key={field.key} label={field.label} required={field.required} value={value ? new Date(value) : null} onChange={date => setValue(date?.toISOString() || "")} />;
+                    if (field.type === "textarea") return <label key={field.key} className="block"><span className="atelier-label">{field.label}{field.required && <span className="text-red-400"> *</span>}</span><textarea required={field.required} className="atelier-input min-h-24 w-full py-2.5" value={value} onChange={event => setValue(event.target.value)} /></label>;
+                    return <Field key={field.key} label={field.label} required={field.required} type={field.type === "number" ? "number" : field.type === "time" ? "time" : "text"} value={value} onChange={setValue} />;
+                  })}
                 </div>
               </section>
             )}
-            {!approved && (
+            {!approved && !financeRedacted && (
               <section>
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="text-sm font-black">آیتم های قرارداد</h3>
@@ -576,7 +664,7 @@ function ContractForm({
                 </div>
               </section>
             )}
-            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            {financeRedacted ? <section className="atelier-panel p-4 text-sm text-zinc-400">اطلاعات مالی این قرارداد برای حساب شما قابل مشاهده یا ویرایش نیست.</section> : <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
               <div>
                 <label className="atelier-label">جمع آیتم‌ها</label>
                 <div className="rounded-xl border border-zinc-800 bg-black/40 px-3 py-3 text-sm font-black">
@@ -622,10 +710,10 @@ function ContractForm({
                   </select>
                 </div>
               )}
-            </section>
+            </section>}
             <section className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="atelier-label">توضیحات</label>
+                <label className="atelier-label">توضیحات خاص مراسم</label>
                 <textarea
                   value={notes}
                   onChange={(event) => setNotes(event.target.value)}
@@ -811,12 +899,8 @@ function PrintPreview({
             {formatMoney(contract.remainingAmount)}
           </p>
         </section>
-        <section className="mt-8 min-h-24 border-t border-black pt-4 text-sm">
-          <b>شرایط و توضیحات:</b>
-          <p className="mt-2 whitespace-pre-wrap leading-7">
-            {contract.termsAndConditions || contract.notes || "—"}
-          </p>
-        </section>
+        {contract.notes && <section className="mt-8 border-t border-black pt-4 text-sm"><b>توضیحات خاص مراسم:</b><p className="mt-2 whitespace-pre-wrap leading-7">{contract.notes}</p></section>}
+        {contract.termsAndConditions && <section className="mt-6 min-h-24 border-t border-black pt-4 text-sm"><b>شرایط قرارداد:</b><p className="mt-2 whitespace-pre-wrap leading-7">{contract.termsAndConditions}</p></section>}
         {identity.printInfo && (
           <p className="mt-5 whitespace-pre-wrap border-t border-black/30 pt-3 text-xs leading-6">
             {identity.printInfo}

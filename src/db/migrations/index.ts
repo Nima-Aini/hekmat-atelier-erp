@@ -12,8 +12,9 @@ import * as atelierFinanceCashflow from "./008_atelier_finance_cashflow";
 import * as atelierPackagesPersonnel from "./009_atelier_packages_personnel";
 import * as atelierFinalPolish from "./010_atelier_final_polish";
 import * as atelierFinancePlanningPolish from "./011_atelier_finance_planning_polish";
+import * as atelierCustomerDefaults from "./012_atelier_customer_defaults";
 
-const migrations = [studioFinancialLinks, studioReconciliationIndexes, studioAuthorizationAudit, studioConstraintsIndexes, backupRecovery, atelierProduct, atelierFinalWorkflow, atelierFinanceCashflow, atelierPackagesPersonnel, atelierFinalPolish, atelierFinancePlanningPolish] as const;
+const migrations = [studioFinancialLinks, studioReconciliationIndexes, studioAuthorizationAudit, studioConstraintsIndexes, backupRecovery, atelierProduct, atelierFinalWorkflow, atelierFinanceCashflow, atelierPackagesPersonnel, atelierFinalPolish, atelierFinancePlanningPolish, atelierCustomerDefaults] as const;
 export const requiredMigrationIds = migrations.map((migration) => migration.id);
 
 function rowCount(result: unknown) {
