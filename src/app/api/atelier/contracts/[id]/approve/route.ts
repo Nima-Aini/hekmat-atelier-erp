@@ -12,7 +12,7 @@ export async function POST(
     const { actor } = await requireStudioResourceAccess(
       "contract",
       id,
-      "studio.finance.manage",
+      "studio.contract.approve",
     );
     return NextResponse.json({
       success: true,

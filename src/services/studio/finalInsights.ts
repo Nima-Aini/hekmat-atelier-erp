@@ -1,9 +1,10 @@
 import { toBusinessGregorianDateString, toJalaliDate } from "@/lib/dateUtils";
 import { db } from "@/db";
-import { studioNotifications } from "@/db/schema";
+import { studioNotifications, studioNotificationReads } from "@/db/schema";
 import { desc, eq } from "drizzle-orm";
 import { ApiError, assertUuid } from "@/lib/apiError";
 import type { EmployeeContext } from "@/services/access";
+import { canAccessPermission } from "@/services/access";
 import { logAuditEvent } from "@/services/audit";
 import {
   getAtelierConfig,
@@ -16,6 +17,8 @@ import { getAtelierFinanceCenter } from "@/services/studio/financeCenter";
 import { buildRangeAnalytics } from "./overviewAnalytics";
 import { inDashboardRange, type DashboardRange } from "@/lib/dashboardRange";
 import { redactContractFinance } from "./financialPrivacy";
+import { equipmentMaintenanceAlerts } from "./equipmentCalendar";
+import { notificationCategory } from "@/lib/atelierNotifications";
 
 type ContractRecord = Awaited<ReturnType<typeof listContracts>>[number];
 
@@ -26,12 +29,12 @@ const dayKey = (value: Date | string | null | undefined) =>
 export async function getFinalDashboard(
   allowedCoreProjectIds: string[] | null,
   includeFinance: boolean,
-  options: { range?: DashboardRange; projectId?: string; financeProjectIds?: string[] | null } = {},
+  options: { range?: DashboardRange; projectId?: string; financeProjectIds?: string[] | null; actor?: EmployeeContext } = {},
 ) {
   const [allContracts, visits, reservations, center] = await Promise.all([
     listContracts(undefined, allowedCoreProjectIds, true),
     listDailyVisits({ createdFrom: options.range?.start, createdTo: options.range?.end, projectId: options.projectId, allowedCoreProjectIds }),
-    options.projectId ? Promise.resolve([]) : listReservations(true),
+    options.projectId ? Promise.resolve([]) : listReservations(true, options.actor),
     includeFinance ? getAtelierFinanceCenter(options.projectId ? [options.projectId] : options.financeProjectIds === undefined ? allowedCoreProjectIds : options.financeProjectIds, !options.projectId) : Promise.resolve(null),
   ]);
   const currentContracts = options.projectId ? allContracts.filter((row) => row.project.projectId === options.projectId) : allContracts;
@@ -157,6 +160,7 @@ export async function listContractCustomers(
   allowedCoreProjectIds: string[] | null,
   includeFinance = true,
   financeProjectIds: string[] | null = null,
+  editableProjectIds?: string[] | null,
 ) {
   const contracts = await listContracts(undefined, allowedCoreProjectIds);
   const grouped = new Map<
@@ -172,6 +176,7 @@ export async function listContractCustomers(
       total: number;
       remaining: number;
       hasFinance: boolean;
+      canEdit: boolean;
     }
   >();
   const now = Date.now();
@@ -187,8 +192,10 @@ export async function listContractCustomers(
       total: 0,
       remaining: 0,
       hasFinance: false,
+      canEdit: false,
     };
     current.contractCount += 1;
+    if (editableProjectIds !== undefined && (editableProjectIds === null || (contract.project.projectId && editableProjectIds.includes(contract.project.projectId)))) current.canEdit = true;
     if (includeFinance && (financeProjectIds === null || (contract.project.projectId && financeProjectIds.includes(contract.project.projectId)))) {
       current.total += numeric(contract.totalAmount);
       current.remaining += numeric(contract.remainingAmount);
@@ -238,14 +245,22 @@ export async function getFinalCalendar(allowedCoreProjectIds: string[] | null, f
 export async function getFinalNotifications(
   allowedCoreProjectIds: string[] | null,
   includeArchived = false,
+  actor?: EmployeeContext,
 ) {
+  const permits = (permission: string) => !actor || actor.permissions.has("*") || actor.permissions.has(permission);
+  const permissionScope = async (permission: string) => {
+    if (!actor || actor.permissions.has("*")) return allowedCoreProjectIds;
+    const decisions = await Promise.all((allowedCoreProjectIds || []).map(async id => await canAccessPermission(actor, permission, id) ? id : null));
+    return decisions.filter((id): id is string => id !== null);
+  };
+  const [contractScope, planningScope, financeScope, equipmentScope] = await Promise.all([permissionScope("studio.contract.view"), permissionScope("studio.planning.view"), permissionScope("studio.finance.view"), permissionScope("studio.equipment.view")]);
   const [contracts, reservations, visits, planning, config, finance] = await Promise.all([
-    listContracts(undefined, allowedCoreProjectIds),
-    listReservations(),
-    listDailyVisits(),
-    getPlanning(allowedCoreProjectIds),
+    permits("studio.contract.view") ? listContracts(undefined, contractScope, true) : [],
+    permits("studio.reservations.view") ? listReservations(true, actor) : [],
+    permits("studio.finance.view") ? listDailyVisits({ allowedCoreProjectIds: financeScope }) : [],
+    permits("studio.planning.view") ? getPlanning(planningScope) : { contracts: [] },
     getAtelierConfig(),
-    getAtelierFinanceCenter(allowedCoreProjectIds),
+    permits("studio.finance.view") ? getAtelierFinanceCenter(financeScope) : { installments: [] },
   ]);
   const now = Date.now();
   const reminder = (config.notifications || {}) as Record<string, unknown>;
@@ -265,6 +280,9 @@ export async function getFinalNotifications(
     result.push({
       id,
       priority,
+      severity: priority === "normal" ? "info" : priority,
+      category: notificationCategory(id),
+      entityType: tab,
       title,
       message,
       tab,
@@ -277,7 +295,7 @@ export async function getFinalNotifications(
       push(
         `pending:${contract.id}`,
         "warning",
-        "قرارداد در انتظار قدیمی",
+        "پیش‌قرارداد قدیمی",
         `قرارداد ${contract.contractNumber} برای ${contract.customer.name} هنوز تأیید نشده است.`,
         "contracts",
         contract.id,
@@ -295,7 +313,7 @@ export async function getFinalNotifications(
           contract.id,
           contract.programDate,
         );
-      if (numeric(contract.remainingAmount) > 0)
+      if (permits("studio.finance.view") && (financeScope === null || Boolean(contract.project.projectId && financeScope.includes(contract.project.projectId))) && numeric(contract.remainingAmount) > 0)
         push(
           `contract-due:${contract.id}`,
           "normal",
@@ -385,17 +403,17 @@ export async function getFinalNotifications(
       installment.dueDate,
     );
   }
+  if (permits("studio.equipment.view")) result.push(...await equipmentMaintenanceAlerts(equipmentScope));
   const order = { critical: 0, warning: 1, normal: 2 } as const;
   const sorted = result
     .sort(
       (a, b) =>
         order[a.priority as keyof typeof order] -
         order[b.priority as keyof typeof order],
-    )
-    .slice(0, 100);
+    );
   const existing = await db.select().from(studioNotifications).orderBy(desc(studioNotifications.createdAt));
   const currentKeys = new Set(sorted.map((item) => String(item.id)));
-  for (const row of existing.filter((item) => item.conditionKey && !item.resolvedAt && !currentKeys.has(item.conditionKey))) {
+  for (const row of existing.filter((item) => allowedCoreProjectIds === null && (!actor || actor.permissions.has("*")) && item.notificationType === "operational_alert" && item.conditionKey && !item.resolvedAt && !currentKeys.has(item.conditionKey))) {
     await db.update(studioNotifications).set({ resolvedAt: new Date(), updatedAt: new Date() }).where(eq(studioNotifications.id, row.id));
   }
   const active: Array<Record<string, unknown>> = [];
@@ -420,10 +438,12 @@ export async function getFinalNotifications(
       }).onConflictDoNothing().returning();
       record = created || (await db.select().from(studioNotifications).where(eq(studioNotifications.conditionKey, conditionKey)).orderBy(desc(studioNotifications.createdAt)).limit(1))[0];
     }
-    if (record) active.push({ ...item, id: record.id, conditionKey, archivedAt: record.archivedAt });
+    if (record) active.push({ ...item, severity: item.priority === "normal" ? "info" : item.priority, id: record.id, conditionKey, archivedAt: record.archivedAt, createdAt: record.createdAt, resolvedAt: record.resolvedAt });
   }
-  if (!includeArchived) return active;
-  return existing.filter((row) => row.archivedAt).map((row) => ({
+  const visibleEntityIds = new Set([...contracts.map(row => row.id), ...reservations.map(row => row.id), ...visits.map(row => row.id), ...finance.installments.map(row => row.id), ...planning.contracts.flatMap(row => row.items.flatMap(item => [item.id, ...item.rentalRequirements.map(rental => rental.id)])), ...result.map(item => String(item.entityId))]);
+  const security = existing.filter(row => row.notificationType === "security_alert" && (!actor || actor.permissions.has("*") || actor.permissions.has("admin.settings")) && !row.resolvedAt && Boolean(row.archivedAt) === includeArchived);
+  const financeEntities = new Set([...visits.map(row => row.id), ...finance.installments.map(row => row.id), ...contracts.filter(row => financeScope === null || Boolean(row.project.projectId && financeScope.includes(row.project.projectId))).map(row => row.id)]);
+  const selected: Array<Record<string, unknown>> = includeArchived ? existing.filter(row => row.notificationType === "operational_alert" && row.archivedAt && visibleEntityIds.has(String((row.payload as Record<string, unknown>)?.entityId)) && (notificationCategory(row.conditionKey || "") !== "finance" || (permits("studio.finance.view") && financeEntities.has(String((row.payload as Record<string, unknown>)?.entityId))))).map((row) => ({
     ...((row.payload || {}) as Record<string, unknown>),
     id: row.id,
     conditionKey: row.conditionKey,
@@ -432,7 +452,17 @@ export async function getFinalNotifications(
     archivedAt: row.archivedAt,
     archivedById: row.archivedById,
     resolvedAt: row.resolvedAt,
-  }));
+    createdAt: row.createdAt,
+    category: (row.payload as Record<string, unknown>)?.category || notificationCategory(row.conditionKey || ""),
+  })) : active;
+  selected.push(...security.map(row => ({ ...((row.payload || {}) as Record<string, unknown>), id: row.id, conditionKey: row.conditionKey, message: row.messageText, date: row.scheduledFor, createdAt: row.createdAt, archivedAt: row.archivedAt, resolvedAt: row.resolvedAt })));
+  const reads = actor ? await db.select().from(studioNotificationReads).where(eq(studioNotificationReads.employeeId, actor.employeeId)) : [];
+  return selected.map((row): Record<string, unknown> => ({ ...row, readAt: reads.find(read => read.notificationId === row.id)?.readAt || null }));
+}
+
+export async function setNotificationRead(actor: EmployeeContext, id: string) {
+  assertUuid(id);
+  await db.insert(studioNotificationReads).values({ notificationId: id, employeeId: actor.employeeId }).onConflictDoNothing();
 }
 
 export async function setNotificationArchived(actor: EmployeeContext, id: string, archived: boolean) {

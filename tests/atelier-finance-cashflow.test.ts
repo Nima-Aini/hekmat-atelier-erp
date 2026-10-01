@@ -56,7 +56,7 @@ describe("Atelier finance and cashflow", () => {
     expect(center.summary.liquidity).toBeGreaterThanOrEqual(12_000_000);
     expect(center.summary.payable).toBeGreaterThanOrEqual(2_000_000);
     expect(center.forecast.map((row) => row.days)).toEqual([7, 30, 60, 90]);
-    expect(center.reports.expensesByCategory.some((row) => row.label === "salary")).toBe(true);
+    expect(center.reports.expensesByCategory.some((row) => row.label === "دستمزد")).toBe(true);
   });
 
   it("keeps one Persian finance menu entry and all eleven internal sections", () => {

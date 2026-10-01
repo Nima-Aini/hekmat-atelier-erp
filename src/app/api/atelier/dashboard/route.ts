@@ -32,7 +32,7 @@ export async function GET(request: Request) {
       dashboard: await getFinalDashboard(
         allowed,
         includeFinance,
-        { range, projectId, financeProjectIds: includeFinance ? await getScopedProjectIds(["studio.finance.view"]) : [] },
+        { range, projectId, financeProjectIds: includeFinance ? await getScopedProjectIds(["studio.finance.view"]) : [], actor },
       ),
     });
   } catch (error) {

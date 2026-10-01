@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 const script = path.join(process.cwd(), "scripts", "validate-deploy-config.sh");
@@ -17,7 +17,9 @@ const valid = {
 };
 
 function validate(overrides: Record<string, string>) {
-  return spawnSync(process.env.TEST_BASH_BIN || "bash", [script.replace(/\\/g, "/")], { env: { ...process.env, ...valid, ...overrides }, encoding: "utf8" });
+  const gitBash = "C:\\Program Files\\Git\\bin\\bash.exe";
+  const bash = process.env.TEST_BASH_BIN || (process.platform === "win32" && existsSync(gitBash) ? gitBash : "bash");
+  return spawnSync(bash, [script.replace(/\\/g, "/")], { env: { ...process.env, ...valid, ...overrides }, encoding: "utf8" });
 }
 
 describe("deployment target safety", () => {

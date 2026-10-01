@@ -43,6 +43,14 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
     [paying, setPaying] = useState<any | null>(null),
     [saving, setSaving] = useState(false);
   const recordsController = useRef<AbortController | null>(null);
+  const [reservationFilter, setReservationFilter] = useState("all");
+  const [reservationPerson, setReservationPerson] = useState("");
+  const [permissions, setPermissions] = useState<string[]>([]);
+  const hasPermission = (permission: string) => permissions.includes("*") || permissions.includes(permission);
+  const canCreate = reservation ? (hasPermission("studio.reservations.create") || hasPermission("studio.reservations.manage")) : hasPermission("studio.daily_visits.manage");
+  const canEdit = reservation ? (hasPermission("studio.reservations.edit") || hasPermission("studio.reservations.manage")) : hasPermission("studio.daily_visits.manage");
+  const canDelete = reservation ? (hasPermission("studio.reservations.delete") || hasPermission("studio.reservations.manage")) : hasPermission("studio.daily_visits.manage");
+  const canReceive = hasPermission("studio.finance.create_receipt") || hasPermission("studio.finance.manage");
   const visitStart = reservation ? "" : toBusinessGregorianDateString(visitSelection.range.start);
   const visitEnd = reservation ? "" : toBusinessGregorianDateString(visitSelection.range.end);
   const serverSearch = reservation ? "" : query.trim();
@@ -54,7 +62,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
     if (page === 1) setLoading(true);
     else setLoadingMore(true);
     setError("");
-    const params = reservation ? "" : `?from=${encodeURIComponent(visitStart)}&to=${encodeURIComponent(visitEnd)}&page=${page}&pageSize=100&search=${encodeURIComponent(serverSearch)}&payment=${encodeURIComponent(serverPayment)}`;
+    const params = reservation ? `?scope=${reservationFilter}&personnel=${encodeURIComponent(reservationPerson)}` : `?from=${encodeURIComponent(visitStart)}&to=${encodeURIComponent(visitEnd)}&page=${page}&pageSize=100&search=${encodeURIComponent(serverSearch)}&payment=${encodeURIComponent(serverPayment)}`;
     fetch(`/api/atelier/${kind}${params}`, { cache: "no-store", signal: controller.signal })
       .then((r) => r.json())
       .then((data) => {
@@ -62,6 +70,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
           throw new Error(data.error || "دریافت اطلاعات ممکن نشد.");
         if (!controller.signal.aborted) {
           const next = data.visits || data.reservations || [];
+          if (reservation && data.personnelOptions) setPersonnel(data.personnelOptions);
           setRecords(current => page === 1 ? next : [...current, ...next]);
           setLoadedPage(page);
           setHasMore(!reservation && Boolean(data.hasMore));
@@ -69,7 +78,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
       })
       .catch((reason) => { if (!controller.signal.aborted) setError(reason.message); })
       .finally(() => { if (!controller.signal.aborted) { setLoading(false); setLoadingMore(false); } });
-  }, [kind, reservation, visitStart, visitEnd, serverSearch, serverPayment]);
+  }, [kind, reservation, reservationFilter, reservationPerson, visitStart, visitEnd, serverSearch, serverPayment]);
   useEffect(() => { load(); return () => recordsController.current?.abort(); }, [load]);
   useEffect(() => {
     Promise.all([
@@ -82,6 +91,7 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
       if (settingsBody.success) setDailyVisitTitles((settingsBody.dailyVisitTitles || []).filter((item: any) => item.active));
     }).catch(() => undefined);
   }, []);
+  useEffect(() => { fetch("/api/auth/employee-me").then(response => response.json()).then(body => setPermissions(body.navigationPermissions || body.permissions || [])).catch(() => undefined); }, []);
   useEffect(() => {
     const listener = (event: Event) => {
       const id = (event as CustomEvent).detail?.id;
@@ -135,12 +145,14 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
               : "این اطلاعات مشتری رسمی قرارداد ایجاد نمی‌کند."}
           </p>
         </div>
-        <button onClick={() => setEditing("new")} className="atelier-button">
+        {canCreate && <button onClick={() => setEditing("new")} className="atelier-button">
           <Plus className="h-4 w-4" />
           {reservation ? "رزرو جدید" : "مراجعه جدید"}
-        </button>
+        </button>}
       </div>
       {!reservation && <DashboardRangeFilter selection={visitSelection} onChange={setVisitSelection} context="مراجعات روزانه" />}
+      {reservation && <select className="atelier-input" aria-label="فیلتر پرسنل رزرو" value={reservationPerson} onChange={e => setReservationPerson(e.target.value)}><option value="">همه پرسنل</option>{personnel.map(person => <option key={person.id} value={person.id}>{person.fullName}</option>)}</select>}
+      {reservation && <select className="atelier-input" aria-label="محدوده رزروها" value={reservationFilter} onChange={e => setReservationFilter(e.target.value)}><option value="all">همه رزروهای مجاز</option><option value="mine">رزروهای من</option><option value="shared">اشتراک‌گذاری‌شده</option></select>}
       <div className="atelier-panel grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-[1fr_auto_auto]">
         <label className="relative">
           <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" />
@@ -223,21 +235,21 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
               )}
               <div className="mt-4 flex gap-2">
                 <button onClick={() => setViewing(row)} className="atelier-button-secondary flex-1"><Eye className="h-4 w-4" />نمایش</button>
-                <button
+                {canEdit && <button
                   onClick={() => setEditing(row)}
                   className="atelier-button-secondary flex-1"
                 >
                   <Edit3 className="h-4 w-4" />
                   ویرایش
-                </button>
-                {!reservation && Number(row.remainingAmount) > 0 && <button onClick={() => setPaying(row)} className="atelier-button flex-1"><Banknote className="h-4 w-4" />ثبت پرداخت</button>}
-                {reservation && <button onClick={() => setConverting(row)} className="atelier-button flex-1">انتقال به مراجعه روزانه</button>}
-                <button
+                </button>}
+                {!reservation && canReceive && Number(row.remainingAmount) > 0 && <button onClick={() => setPaying(row)} className="atelier-button flex-1"><Banknote className="h-4 w-4" />ثبت پرداخت</button>}
+                {reservation && canEdit && hasPermission("studio.daily_visits.manage") && <button onClick={() => setConverting(row)} className="atelier-button flex-1">انتقال به مراجعه روزانه</button>}
+                {canDelete && <button
                   onClick={() => void remove(row)}
                   className={reservation ? "atelier-button-secondary flex-1 !border-red-900 text-red-300" : "atelier-icon-button text-red-400"}
                 >
                   <Trash2 className="h-4 w-4" />{reservation && "حذف"}
-                </button>
+                </button>}
               </div>
             </article>
           ))}
@@ -306,6 +318,17 @@ function RecordForm({
   const originalDate = initial
     ? new Date(reservation ? initial.reservedAt : initial.visitDate)
     : new Date();
+  const [itemId, setItemId] = useState<string>(initial?.itemSnapshot?.itemId || "");
+  const [sharingOptions, setSharingOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [ownerEmployeeId, setOwnerEmployeeId] = useState(initial?.ownerEmployeeId || "");
+  const [assignedPersonnelId, setAssignedPersonnelId] = useState(initial?.assignedPersonnelId || "");
+  const [viewerEmployeeIds, setViewerEmployeeIds] = useState<string[]>(initial?.viewerEmployeeIds || []);
+  const [sharedPersonnelIds, setSharedPersonnelIds] = useState<string[]>(initial?.sharedPersonnelIds || []);
+  const [sharingChanged, setSharingChanged] = useState(false);
+  useEffect(() => { if (reservation) void fetch("/api/atelier/reservations").then(r => r.json()).then(body => setSharingOptions(body.viewerOptions || [])); }, [reservation]);
+  const [optionKey, setOptionKey] = useState<string>(initial?.itemSnapshot?.optionKey || "");
+  const selectedItem = dailyVisitTitles.find(item => item.id === itemId);
+  const historicalSelection = initial?.itemSnapshot?.itemId === itemId && (initial?.itemSnapshot?.optionKey || "") === optionKey;
   const [title, setTitle] = useState(initial?.title || ""),
     [date, setDate] = useState<Date | null>(originalDate),
     [time, setTime] = useState(
@@ -341,6 +364,9 @@ function RecordForm({
     }
     await onSave({
       title,
+      ...(reservation && (!initial || sharingChanged) ? { ownerEmployeeId: ownerEmployeeId || undefined, assignedPersonnelId: assignedPersonnelId || null, viewerEmployeeIds, sharedPersonnelIds } : {}),
+      itemId: reservation ? undefined : itemId || null,
+      optionKey: reservation ? undefined : optionKey || null,
       date: final.toISOString(),
       price: reservation ? undefined : price,
       customerName,
@@ -358,16 +384,24 @@ function RecordForm({
       onClose={onClose}
     >
       <form onSubmit={(event) => void submit(event)} className="space-y-4">
+        {reservation && <label className="block">اشتراک‌گذاری با پرسنل<select multiple className="atelier-input" value={sharedPersonnelIds} onChange={e => { setSharedPersonnelIds(Array.from(e.target.selectedOptions, option => option.value)); setSharingChanged(true); }}>{personnel.map(person => <option key={person.id} value={person.id}>{person.fullName}</option>)}</select></label>}
+        {reservation && <fieldset className="grid gap-3 rounded-xl border border-zinc-800 p-3"><legend>مسئول و دسترسی رزرو</legend><label>مسئول رزرو<select className="atelier-input" value={ownerEmployeeId} onChange={e => { setOwnerEmployeeId(e.target.value); setSharingChanged(true); }}><option value="">خودم</option>{sharingOptions.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><label>پرسنل مسئول<select className="atelier-input" value={assignedPersonnelId} onChange={e => { setAssignedPersonnelId(e.target.value); setSharingChanged(true); }}><option value="">انتخاب نشده</option>{personnel.map(person => <option key={person.id} value={person.id}>{person.fullName}</option>)}</select></label><label>افراد مجاز به مشاهده<select multiple className="atelier-input" value={viewerEmployeeIds} onChange={e => { setViewerEmployeeIds(Array.from(e.target.selectedOptions, option => option.value)); setSharingChanged(true); }}>{sharingOptions.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><p className="text-xs text-zinc-500">رزرو فقط برای مسئول، پرسنل منتخب، افراد مجاز و مدیر قابل مشاهده است.</p></fieldset>}
         <div className="grid gap-4 sm:grid-cols-2">
           {!reservation && dailyVisitTitles.length ? (
             <label>
               <span className="atelier-label">عنوان *</span>
-              <select value={dailyVisitTitles.some((item) => item.title === title) ? title : "custom"} onChange={(event) => setTitle(event.target.value === "custom" ? "" : event.target.value)} className="atelier-input w-full py-2.5">
-                <option value="">انتخاب عنوان</option>
-                {dailyVisitTitles.map((item) => <option key={item.id} value={item.title}>{item.title}</option>)}
-                <option value="custom">عنوان سفارشی</option>
+              <select value={itemId} onChange={(event) => { const item = dailyVisitTitles.find(row => row.id === event.target.value); setItemId(item?.id || ""); setOptionKey(""); setTitle(item?.title || ""); if (item) setPrice(Number(item.defaultPrice || 0)); }} className="atelier-input w-full py-2.5">
+                <option value="">عنوان سفارشی</option>
+                {itemId && !selectedItem && <option value={itemId}>{initial?.itemSnapshot?.itemTitle} (سابق)</option>}
+                {dailyVisitTitles.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
               </select>
-              {!dailyVisitTitles.some((item) => item.title === title) && <input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder="عنوان سفارشی" className="atelier-input mt-2 w-full py-2.5" />}
+              {!itemId && <input required value={title} onChange={(event) => setTitle(event.target.value)} placeholder="عنوان سفارشی" className="atelier-input mt-2 w-full py-2.5" />}
+              {(selectedItem?.mode === "secondary_options" || (historicalSelection && optionKey)) && <select aria-label="گزینه ثانویه" required value={optionKey} onChange={event => { const option = selectedItem?.secondaryOptions?.find((row: any) => row.key === event.target.value); setOptionKey(event.target.value); if (option) { setTitle(`${selectedItem.title} — ${option.title}`); setPrice(Number(option.defaultPrice ?? selectedItem.defaultPrice ?? 0)); } }} className="atelier-input mt-2 w-full py-2.5">
+                <option value="">انتخاب گزینه ثانویه</option>
+                {historicalSelection && optionKey && !selectedItem?.secondaryOptions?.some((row: any) => row.key === optionKey && row.active) && <option value={optionKey}>{initial?.itemSnapshot?.optionTitle} (سابق)</option>}
+                {(selectedItem?.secondaryOptions || []).filter((row: any) => row.active).map((row: any) => <option key={row.key} value={row.key}>{row.title}</option>)}
+              </select>}
+              {historicalSelection && itemId && <p className="mt-1 text-xs text-zinc-500">عنوان ثبت‌شده: {initial.title}</p>}
             </label>
           ) : <Input label="عنوان" value={title} set={setTitle} required />}
           <JalaliDatePicker

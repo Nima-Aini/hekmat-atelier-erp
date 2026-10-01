@@ -1,5 +1,5 @@
 import { and, eq, gt, inArray, lt, ne, sql } from "drizzle-orm";
-import { equipmentReservations, studioCalendarEvents } from "@/db/schema";
+import { equipmentReservations, studioCalendarEvents, studioEquipment } from "@/db/schema";
 import { ApiError, assertUuid } from "@/lib/apiError";
 import type { Transaction } from "@/services/product";
 
@@ -24,6 +24,9 @@ export async function assertEquipmentScheduleAvailable(
   excludeReservationId?: string,
 ) {
   assertUuid(equipmentId);
+  const [equipment] = await tx.select().from(studioEquipment).where(eq(studioEquipment.id, equipmentId)).for("update");
+  if (!equipment) throw new ApiError(404, "تجهیز یافت نشد.");
+  if (equipment.currentHealthStatus !== "healthy" || equipment.locationType === "maintenance") throw new ApiError(409, "تجهیز خراب یا در تعمیر است؛ ابتدا وضعیت سلامت آن را بررسی کنید.", "EQUIPMENT_NOT_HEALTHY");
   const filters = [
     eq(equipmentReservations.equipmentId, equipmentId),
     inArray(equipmentReservations.status, ACTIVE_RESERVATION_STATUSES),

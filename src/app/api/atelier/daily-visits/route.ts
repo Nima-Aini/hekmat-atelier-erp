@@ -6,6 +6,7 @@ import {
   listDailyVisits,
   saveDailyVisit,
 } from "@/services/studio/finalWorkflow";
+import { assertDailyVisitFinancialPermissions } from "@/services/studio/dailyVisitAuthorization";
 
 export async function GET(req: NextRequest) {
   try {
@@ -35,8 +36,10 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const actor = await requirePermission("studio.daily_visits.manage");
+    const body = await req.json();
+    await assertDailyVisitFinancialPermissions(actor, body, true);
     return NextResponse.json(
-      { success: true, visit: await saveDailyVisit(actor, await req.json()) },
+      { success: true, visit: await saveDailyVisit(actor, body) },
       { status: 201 },
     );
   } catch (error) {

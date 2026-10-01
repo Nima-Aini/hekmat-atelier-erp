@@ -5,6 +5,7 @@ import {
   deleteDailyVisit,
   saveDailyVisit,
 } from "@/services/studio/finalWorkflow";
+import { assertDailyVisitFinancialPermissions } from "@/services/studio/dailyVisitAuthorization";
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -12,9 +13,11 @@ export async function PUT(
   try {
     const actor = await requirePermission("studio.daily_visits.manage");
     const { id } = await params;
+    const body = await req.json();
+    await assertDailyVisitFinancialPermissions(actor, body, false);
     return NextResponse.json({
       success: true,
-      visit: await saveDailyVisit(actor, await req.json(), id),
+      visit: await saveDailyVisit(actor, body, id),
     });
   } catch (error) {
     return apiError(error, "ویرایش مراجعه روزانه");

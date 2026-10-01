@@ -150,13 +150,13 @@ export function ContractCustomersView({ customerId = null, onViewCustomer, onNav
                     مانده {money(customer.remaining)}
                   </b>
                 </span>
-                <button
+                {customer.canEdit && <button
                   aria-label={`ویرایش مشتری ${customer.name}`}
                   onClick={() => setEditing(customer)}
                   className="atelier-icon-button"
                 >
                   <Edit3 className="h-4 w-4" />
-                </button>
+                </button>}
               </div>
             </article>
           ))}
@@ -203,7 +203,7 @@ function CustomerEdit({
           event.preventDefault();
           setSaving(true);
           try {
-            const data = await fetch(`/api/studio/customers/${customer.id}`, {
+            const data = await fetch(`/api/atelier/customers/${customer.id}`, {
               method: "PUT",
               headers: { "content-type": "application/json" },
               body: JSON.stringify({ name, mobile }),

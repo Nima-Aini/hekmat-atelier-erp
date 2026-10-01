@@ -26,9 +26,9 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const actor = await requirePermission("studio.contract.manage");
+    const actor = await requirePermission("studio.contract.create");
     const body = await req.json();
-    await requirePermission("studio.finance.manage");
+    if (Number(body.paidAmount || body.depositAmount || 0) > 0) await requirePermission("studio.finance.create_receipt");
     const contract = await createPendingContract(actor, {
       ...body,
       idempotencyKey: req.headers.get("idempotency-key") || body.idempotencyKey,

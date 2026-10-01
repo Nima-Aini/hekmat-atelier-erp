@@ -7,14 +7,19 @@ import {
   deleteReservation,
   saveReservation,
 } from "@/services/studio/finalWorkflow";
+import { assertDailyVisitFinancialPermissions } from "@/services/studio/dailyVisitAuthorization";
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const actor = await requirePermission("studio.reservations.manage");
+    const actor = await requirePermission("studio.reservations.edit");
     const { id } = await params;
     const body = await req.json();
+    if (body.action === "convert_to_daily_visit") {
+      await requirePermission("studio.daily_visits.manage");
+      await assertDailyVisitFinancialPermissions(actor, body.dailyVisit || {}, true);
+    }
     return NextResponse.json({
       success: true,
       reservation: body.action === "complete_delete"
@@ -32,7 +37,7 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const actor = await requirePermission("studio.reservations.manage");
+    const actor = await requirePermission("studio.reservations.delete");
     const { id } = await params;
     await deleteReservation(actor, id);
     return NextResponse.json({ success: true });

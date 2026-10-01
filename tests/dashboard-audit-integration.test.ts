@@ -57,20 +57,20 @@ describe("Production audit regression on disposable database", () => {
     await db.insert(expenses).values({ expenseNumber: randomUUID(), title: "هزینه پروژه الف", projectId: a.project.projectId, amount: "10", status: "posted" });
   });
   it("combines range + project without filtering current counts or using invoice lifetime paid totals", async () => {
-    const result = await getFinalDashboard(state.allowed, true, { range, projectId: a.project.projectId!, financeProjectIds: state.allowed });
+    const result = await getFinalDashboard(state.allowed, true, { range, projectId: a.project.projectId!, financeProjectIds: state.allowed, actor });
     expect(result.overview).toMatchObject({ contractCount: 1, activeProjects: 1, pendingContracts: 0, finance: { rangeAnalytics: { incoming: 300 } } });
     expect(result.overview.finance!.rangeAnalytics!.points.reduce((sum, point) => sum + point.incoming, 0)).toBe(300);
-    const empty = await getFinalDashboard(state.allowed, true, { range: parseDashboardRange("2024-01-01", "2024-01-02"), projectId: a.project.projectId! });
+    const empty = await getFinalDashboard(state.allowed, true, { range: parseDashboardRange("2024-01-01", "2024-01-02"), projectId: a.project.projectId!, actor });
     expect(empty.overview).toMatchObject({ contractCount: 0, activeProjects: 1, finance: { rangeAnalytics: { incoming: 0 } } });
     expect(empty.overview.activities).toHaveLength(0);
   });
   it("redacts nested financial fields and excludes forbidden project finance from reporting", async () => {
-    const hidden = await getFinalDashboard(state.allowed, false, { range });
+    const hidden = await getFinalDashboard(state.allowed, false, { range, actor });
     expect(hidden.overview.finance).toBeNull();
     expect(hidden.overview.recentContracts[0]).toMatchObject({ totalAmount: null, discountAmount: null, itemsTotal: null, project: { totalContractValue: null }, items: [{ unitPrice: null }] });
     const calendar = await getFinalCalendar(state.allowed, []);
     expect(calendar.days[0].contracts[0]).toMatchObject({ totalAmount: null, itemsTotal: null, project: { totalContractValue: null } });
-    const mixed = await getFinalDashboard([a.project.projectId!, b.project.projectId!], true, { range, financeProjectIds: state.allowed });
+    const mixed = await getFinalDashboard([a.project.projectId!, b.project.projectId!], true, { range, financeProjectIds: state.allowed, actor });
     expect(mixed.overview.recentContracts.find(row => row.id === b.id)!.totalAmount).toBeNull();
     const report = await getAtelierReports([a.project.projectId!, b.project.projectId!], actor.employeeId, true, { finance: true, wages: true, financeIds: state.allowed, wageIds: [] });
     expect(report.finance!.profitability.map(row => row.id)).toEqual([a.project.id]);
@@ -129,7 +129,7 @@ describe("Production audit regression on disposable database", () => {
   it("reports more than 300 contracts, including completed statuses, without N+1 hydration", async () => {
     await db.insert(studioContracts).values(Array.from({ length: 300 }, () => ({ contractNumber: `AUDIT-${randomUUID()}`, studioProjectId: a.project.id, projectTypeId: a.projectTypeId, status: "completed", createdAt: range.start, deliveryCommitmentDate: range.end })));
     expect(await listContracts(undefined, state.allowed, true)).toHaveLength(301);
-    expect((await getFinalDashboard(state.allowed, false, { range })).overview.contractCount).toBe(301);
+    expect((await getFinalDashboard(state.allowed, false, { range, actor })).overview.contractCount).toBe(301);
     expect(await listContracts(undefined, state.allowed)).toHaveLength(1);
   });
 });

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { normalizeDailyVisitOptions, resolveDailyVisitItem } from "@/lib/dailyVisitItems";
 import {
   and,
   asc,
@@ -59,6 +60,7 @@ import {
   assertEquipmentScheduleAvailable,
   lockScheduleResources,
 } from "@/services/studio/scheduling";
+import { assertDailyVisitFinancialPermissions } from "@/services/studio/dailyVisitAuthorization";
 
 export const CONTRACT_PENDING = "draft";
 export const CONTRACT_APPROVED = "signed";
@@ -300,10 +302,17 @@ export async function listDailyVisitTitles(includeInactive = false) {
 export async function saveDailyVisitTitle(actor: EmployeeContext, value: Record<string, unknown>, id?: string) {
   const title = cleanText(value.title, "عنوان مراجعه", true, 120)!;
   return db.transaction(async (tx) => {
-    const values = { title, active: value.active !== false, sortOrder: Number(value.sortOrder || 0), updatedAt: new Date() };
+    const [existing] = id ? (assertUuid(id), await tx.select().from(studioDailyVisitTitles).where(eq(studioDailyVisitTitles.id, id)).for("update").limit(1)) : [];
+    const mode = String(value.mode ?? existing?.mode ?? "simple");
+    if (!["simple", "secondary_options"].includes(mode)) throw new ApiError(400, "نوع آیتم مراجعه نامعتبر است.");
+    const secondaryOptions = normalizeDailyVisitOptions(value.secondaryOptions ?? existing?.secondaryOptions ?? []);
+    if (mode === "secondary_options" && value.active !== false && !secondaryOptions.some(option => option.active)) throw new ApiError(400, "آیتم دومرحله‌ای باید حداقل یک گزینه فعال داشته باشد.");
+    const sortOrder = Number(value.sortOrder ?? existing?.sortOrder ?? 0);
+    if (!Number.isSafeInteger(sortOrder)) throw new ApiError(400, "ترتیب نمایش نامعتبر است.");
+    const values = { title, active: value.active !== false, sortOrder, mode, defaultPrice: money(value.defaultPrice ?? existing?.defaultPrice ?? 0, "قیمت پیش‌فرض").toFixed(2), secondaryOptions, updatedAt: new Date() };
     const [row] = id ? (assertUuid(id), await tx.update(studioDailyVisitTitles).set(values).where(eq(studioDailyVisitTitles.id, id)).returning()) : await tx.insert(studioDailyVisitTitles).values(values).onConflictDoUpdate({ target: studioDailyVisitTitles.title, set: values }).returning();
     if (!row) throw new ApiError(404, "عنوان مراجعه یافت نشد.");
-    await logAuditEvent(id ? "DAILY_VISIT_TITLE_UPDATED" : "DAILY_VISIT_TITLE_CREATED", "studio_daily_visit_title", row.id, { title: row.title, active: row.active, sortOrder: row.sortOrder }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
+    await logAuditEvent(id ? "DAILY_VISIT_TITLE_UPDATED" : "DAILY_VISIT_TITLE_CREATED", "studio_daily_visit_title", row.id, { before: existing || null, after: values }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }, tx);
     return row;
   });
 }
@@ -557,7 +566,7 @@ export async function createPendingContract(
       project.id,
       {
         actionType: "CONTRACT_CREATED",
-        title: `ثبت قرارداد در انتظار ${contractNumber}`,
+        title: `ثبت پیش‌قرارداد ${contractNumber}`,
         description: `قرارداد ${type.title} برای ${customerName} ثبت شد.`,
         authorName: actor.employeeName,
         actorEmployeeId: actor.employeeId,
@@ -602,7 +611,7 @@ export async function approveContract(
     if (contract.status === CONTRACT_APPROVED && contract.invoiceId)
       return getContractById(contractId, tx);
     if (contract.status !== CONTRACT_PENDING)
-      throw new ApiError(409, "فقط قرارداد در انتظار قابل تأیید است.");
+      throw new ApiError(409, "فقط پیش‌قرارداد قابل تأیید است.");
     const [project] = await tx
       .select({
         id: studioProjects.id,
@@ -1063,6 +1072,8 @@ export async function updateContract(
 }
 
 type SimpleMoneyInput = {
+  itemId?: unknown;
+  optionKey?: unknown;
   title?: unknown;
   date?: unknown;
   price?: unknown;
@@ -1236,15 +1247,43 @@ export async function saveDailyVisit(
   value: SimpleMoneyInput,
   id?: string,
 ) {
-  const vals = simpleValues(
-    value,
-    "visitDate",
-  ) as typeof studioDailyVisits.$inferInsert;
+  if (!await canAccessPermission(actor, "studio.daily_visits.manage")) throw new ApiError(403, "دسترسی مدیریت مراجعات روزانه وجود ندارد.", "PERMISSION_REQUIRED");
+  await assertDailyVisitFinancialPermissions(actor, value as Record<string, unknown>, !id);
   return db.transaction(async (tx) => {
-    let row;
+    const key = id ? null : cleanText(value.idempotencyKey, "کلید درخواست", false, 160) || crypto.randomUUID();
+    if (key) {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`daily-visit:${key}`}, 0))`);
+      const [prior] = await tx.select().from(studioDailyVisits).where(eq(studioDailyVisits.idempotencyKey, key)).limit(1);
+      if (prior) {
+        const personnel = await syncDailyVisitPersonnel(tx, actor, prior, undefined);
+        return { ...prior, remainingAmount: Number(prior.price) - Number(prior.paidAmount), ...personnel };
+      }
+    }
+    let existing: typeof studioDailyVisits.$inferSelect | undefined;
     if (id) {
       assertUuid(id);
-      const [existing] = await tx.select().from(studioDailyVisits).where(eq(studioDailyVisits.id, id)).for("update").limit(1);
+      [existing] = await tx.select().from(studioDailyVisits).where(eq(studioDailyVisits.id, id)).for("update").limit(1);
+      if (!existing || existing.status !== "active") throw new ApiError(404, "مراجعه روزانه یافت نشد.");
+    }
+    const itemId = value.itemId === undefined ? existing?.itemSnapshot?.itemId || null : value.itemId ? String(value.itemId) : null;
+    const optionKey = value.optionKey === undefined ? existing?.itemSnapshot?.optionKey || null : value.optionKey ? String(value.optionKey) : null;
+    const unchangedItem = existing?.itemSnapshot && itemId === existing.itemSnapshot.itemId && optionKey === existing.itemSnapshot.optionKey;
+    let itemSnapshot = unchangedItem && existing ? existing.itemSnapshot : null;
+    let normalized = { ...value };
+    if (unchangedItem && existing) {
+      // Historical snapshots survive renamed, removed and disabled configuration.
+      normalized = { ...normalized, title: existing.title, price: value.price ?? existing.price };
+    } else if (itemId) {
+      assertUuid(itemId);
+      const [item] = await tx.select().from(studioDailyVisitTitles).where(eq(studioDailyVisitTitles.id, itemId)).for("share").limit(1);
+      if (!item) throw new ApiError(404, "آیتم مراجعه یافت نشد.");
+      const resolved = resolveDailyVisitItem(item, optionKey, value.price);
+      normalized = { ...normalized, title: resolved.title, price: resolved.price };
+      itemSnapshot = resolved.itemSnapshot;
+    } else if (optionKey) throw new ApiError(400, "گزینه ثانویه بدون آیتم معتبر نیست.");
+    const vals = { ...simpleValues(normalized, "visitDate"), itemSnapshot } as typeof studioDailyVisits.$inferInsert;
+    let row;
+    if (id) {
       if (!existing || existing.status !== "active") throw new ApiError(404, "مراجعه روزانه یافت نشد.");
       if (!existing.invoiceId) throw new ApiError(409, "اتصال مالی مراجعه کامل نیست.");
       const financial = await updateSimpleInvoice(tx, existing.invoiceId, vals as ReturnType<typeof simpleValues>);
@@ -1254,14 +1293,7 @@ export async function saveDailyVisit(
         .where(eq(studioDailyVisits.id, id))
         .returning();
     } else {
-      const key = cleanText(value.idempotencyKey, "کلید درخواست", false, 160) || crypto.randomUUID();
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`daily-visit:${key}`}, 0))`);
-      const [prior] = await tx.select().from(studioDailyVisits).where(eq(studioDailyVisits.idempotencyKey, key)).limit(1);
-      if (prior) {
-        const personnel = await syncDailyVisitPersonnel(tx, actor, prior, undefined);
-        return { ...prior, remainingAmount: Number(prior.price) - Number(prior.paidAmount), ...personnel };
-      }
-      const canonical = await createSimpleInvoice(tx, actor, "daily_visit", key, vals as ReturnType<typeof simpleValues>, cleanText(value.accountId, "حساب", false, 80), cleanText(value.paymentMethod, "روش پرداخت", false, 50));
+      const canonical = await createSimpleInvoice(tx, actor, "daily_visit", key!, vals as ReturnType<typeof simpleValues>, cleanText(value.accountId, "حساب", false, 80), cleanText(value.paymentMethod, "روش پرداخت", false, 50));
       [row] = await tx
         .insert(studioDailyVisits)
         .values({ ...vals, customerId: canonical.customer.id, invoiceId: canonical.invoice.id, idempotencyKey: key, financialStatus: "posted", status: "active", createdById: actor.employeeId })
@@ -1314,18 +1346,22 @@ export async function deleteDailyVisit(actor: EmployeeContext, id: string) {
   });
 }
 
-export async function listReservations(reporting = false) {
-  const query = db.select().from(studioReservations).orderBy(asc(studioReservations.reservedAt));
+export async function listReservations(reporting = false, actor?: EmployeeContext) {
+  const { reservationScope } = await import("./reservationAccess");
+  const query = db.select().from(studioReservations).where(await reservationScope(actor)).orderBy(asc(studioReservations.reservedAt));
   return reporting ? query : query.limit(300);
 }
 export async function saveReservation(
   actor: EmployeeContext,
-  value: SimpleMoneyInput & { status?: unknown },
+  value: SimpleMoneyInput & { status?: unknown; ownerEmployeeId?: unknown; assignedPersonnelId?: unknown; viewerEmployeeIds?: unknown; sharedPersonnelIds?: unknown },
   id?: string,
 ) {
+  if (id) await (await import("./reservationAccess")).assertReservationAccess(actor, id);
+  const ownership = await (await import("./reservationAccess")).reservationOwnership(actor, value, id);
   const vals = {
     title: cleanText(value.title, "عنوان", true, 180)!,
     reservedAt: validDate(value.date, "تاریخ رزرو"),
+    ...ownership,
     customerName: cleanText(value.customerName, "اسم مشتری", true, 180)!,
     mobile: cleanPhone(value.mobile),
     notes: cleanText(value.notes, "توضیحات"),
@@ -1334,7 +1370,7 @@ export async function saveReservation(
     let row;
     if (id) {
       assertUuid(id);
-      const [existing] = await tx.select().from(studioReservations).where(eq(studioReservations.id, id)).for("update").limit(1);
+      const [existing] = await tx.select().from(studioReservations).where(and(eq(studioReservations.id, id), await (await import("./reservationAccess")).reservationScope(actor))).for("update").limit(1);
       if (!existing || existing.status === "cancelled") throw new ApiError(404, "رزرو یافت نشد.");
       [row] = await tx
         .update(studioReservations)
@@ -1345,7 +1381,7 @@ export async function saveReservation(
       const key = cleanText(value.idempotencyKey, "کلید درخواست", false, 160) || crypto.randomUUID();
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${`reservation:${key}`}, 0))`);
       const [prior] = await tx.select().from(studioReservations).where(eq(studioReservations.idempotencyKey, key)).limit(1);
-      if (prior) return { ...prior, remainingAmount: Number(prior.price) - Number(prior.paidAmount) };
+      if (prior) { await (await import("./reservationAccess")).assertReservationAccess(actor, prior.id); return { ...prior, remainingAmount: Number(prior.price) - Number(prior.paidAmount) }; }
       [row] = await tx
         .insert(studioReservations)
         .values({ ...vals, price: "0", paidAmount: "0", idempotencyKey: key, financialStatus: "not_applicable", status: "pending", createdById: actor.employeeId })
@@ -1375,8 +1411,9 @@ export async function completeReservation(actor: EmployeeContext, id: string) {
 }
 async function hardDeleteReservation(actor: EmployeeContext, id: string, action: string) {
   assertUuid(id);
+  await (await import("./reservationAccess")).assertReservationAccess(actor, id);
   return db.transaction(async (tx) => {
-    const [current] = await tx.select().from(studioReservations).where(eq(studioReservations.id, id)).for("update").limit(1);
+    const [current] = await tx.select().from(studioReservations).where(and(eq(studioReservations.id, id), await (await import("./reservationAccess")).reservationScope(actor))).for("update").limit(1);
     if (!current) throw new ApiError(404, "رزرو یافت نشد.");
     await logAuditEvent(
       action,
@@ -1400,6 +1437,8 @@ export async function deleteReservation(actor: EmployeeContext, id: string) {
 
 export async function convertReservationToDailyVisit(actor: EmployeeContext, id: string, value: SimpleMoneyInput) {
   assertUuid(id);
+  if (!await canAccessPermission(actor, "studio.reservations.edit")) throw new ApiError(403, "دسترسی ویرایش رزرو وجود ندارد.", "PERMISSION_REQUIRED");
+  if (!await canAccessPermission(actor, "studio.daily_visits.manage")) throw new ApiError(403, "دسترسی مدیریت مراجعات روزانه وجود ندارد.", "PERMISSION_REQUIRED");
   const [reservation] = await db.select().from(studioReservations).where(eq(studioReservations.id, id)).limit(1);
   if (!reservation) {
     const converted = (await listDailyVisits()).find(
@@ -1408,6 +1447,7 @@ export async function convertReservationToDailyVisit(actor: EmployeeContext, id:
     if (converted) return converted;
     throw new ApiError(404, "رزرو یافت نشد.");
   }
+  await (await import("./reservationAccess")).assertReservationAccess(actor, id);
   const visit = await saveDailyVisit(actor, {
     ...value,
     title: value.title ?? reservation.title,
@@ -1567,6 +1607,7 @@ export async function assignPersonnelToItem(
       .where(
         and(
           eq(studioPlanningPersonnel.personnelId, personnelId),
+          eq(studioPlanningPersonnel.status, "active"),
           ne(studioContractItems.contractId, info.item.contractId),
           lt(studioPlanningPersonnel.startsAt, end),
           gt(studioPlanningPersonnel.endsAt, start),
@@ -1690,7 +1731,7 @@ export async function updatePersonnelAssignment(actor: EmployeeContext, itemId: 
     await lockScheduleResources(tx, [], [...new Set([current.personnelId, personnelId])]);
     const [person] = await tx.select().from(studioPersonnel).where(and(eq(studioPersonnel.id, personnelId), eq(studioPersonnel.status, "active"))).limit(1);
     if (!person) throw new ApiError(404, "پرسنل فعال یافت نشد.");
-    const conflict = await tx.select({ id: studioPlanningPersonnel.id }).from(studioPlanningPersonnel).innerJoin(studioContractItems, eq(studioContractItems.id, studioPlanningPersonnel.contractItemId)).where(and(eq(studioPlanningPersonnel.personnelId, personnelId), ne(studioPlanningPersonnel.id, assignmentId), ne(studioContractItems.contractId, info.item.contractId), lt(studioPlanningPersonnel.startsAt, end), gt(studioPlanningPersonnel.endsAt, start))).limit(1);
+    const conflict = await tx.select({ id: studioPlanningPersonnel.id }).from(studioPlanningPersonnel).innerJoin(studioContractItems, eq(studioContractItems.id, studioPlanningPersonnel.contractItemId)).where(and(eq(studioPlanningPersonnel.personnelId, personnelId), eq(studioPlanningPersonnel.status, "active"), ne(studioPlanningPersonnel.id, assignmentId), ne(studioContractItems.contractId, info.item.contractId), lt(studioPlanningPersonnel.startsAt, end), gt(studioPlanningPersonnel.endsAt, start))).limit(1);
     if (conflict.length) throw new ApiError(409, `پرسنل «${person.fullName}» در این بازه برنامه دیگری دارد.`, "PERSONNEL_CONFLICT");
     if (!current.salaryRecordId) throw new ApiError(409, "پیوند مالی دستمزد این تخصیص ناقص است.");
     const [salary] = await tx.select().from(personnelSalaryRecords).where(eq(personnelSalaryRecords.id, current.salaryRecordId)).for("update").limit(1);

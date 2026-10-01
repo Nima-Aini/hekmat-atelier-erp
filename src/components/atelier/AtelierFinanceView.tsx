@@ -110,6 +110,10 @@ export function AtelierFinanceView({
     [data, setData] = useState<FinanceData | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [permissions, setPermissions] = useState<string[]>([]);
+  const hasPermission = (permission: string) => permissions.includes("*") || permissions.includes(permission) || permissions.includes("studio.finance.manage");
+  const canCreateReceipt = hasPermission("studio.finance.create_receipt");
+  const canCreateExpense = hasPermission("studio.finance.create_expense");
   const [receipt, setReceipt] = useState<any>(null),
     [contract, setContract] = useState<any>(null),
     [schedule, setSchedule] = useState<any>(null),
@@ -147,6 +151,9 @@ export function AtelierFinanceView({
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    fetch("/api/auth/employee-me").then(response => response.json()).then(body => setPermissions(body.navigationPermissions || body.permissions || [])).catch(() => undefined);
+  }, []);
   useEffect(() => {
     if (initialContractId && data) {
       const row = data.contractFinance?.find(
@@ -675,22 +682,30 @@ export function AtelierFinanceView({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <button
+          {canCreateReceipt && <button
             onClick={() => setReceipt({ sourceType: "contract" })}
             disabled={!data || busy}
             className="atelier-button !border-emerald-700 !bg-emerald-800"
           >
             <BanknoteArrowDown className="h-4 w-4" />
-            ثبت دریافت
-          </button>
-          <button
+            ثبت دریافت مرتبط
+          </button>}
+          {canCreateReceipt && <button
+            onClick={() => setReceipt({ sourceType: "manual" })}
+            disabled={!data || busy}
+            className="atelier-button !border-emerald-700 !bg-emerald-950"
+          >
+            <BanknoteArrowDown className="h-4 w-4" />
+            ثبت دریافت آزاد
+          </button>}
+          {canCreateExpense && <button
             onClick={() => setExpenseOpen(true)}
             disabled={!data || busy}
             className="atelier-button"
           >
             <ArrowUpRight className="h-4 w-4" />
-            ثبت هزینه / پرداخت
-          </button>
+            ثبت پرداخت / هزینه آزاد
+          </button>}
           <button
             aria-label="به‌روزرسانی مالی"
             onClick={() => void load()}
@@ -716,7 +731,7 @@ export function AtelierFinanceView({
         aria-label="بخش‌های مالی"
         className="flex gap-1 overflow-x-auto border-b border-slate-800 pb-2"
       >
-        {TABS.map((name) => (
+        {TABS.filter(name => name !== "گزارش مالی" || data?.access?.reports).filter(name => name !== "سود قراردادها" || data?.access?.profit).map((name) => (
           <button
             key={name}
             aria-current={tab === name ? "page" : undefined}
@@ -804,17 +819,8 @@ export function AtelierFinanceView({
                   setExpense({ ...expense, category: e.target.value })
                 }
               >
-                {!expense.studioProjectId && (
-                  <option value="general">عمومی</option>
-                )}
-                <option value="rental">اجاره</option>
-                <option value="personnel">پرسنل</option>
-                <option value="location">لوکیشن</option>
-                <option value="printing_album">چاپ و آلبوم</option>
-                <option value="catering">پذیرایی</option>
-                <option value="transport">رفت و آمد</option>
-                <option value="retouch_edit">رتوش و تدوین</option>
-                <option value="misc">سایر</option>
+                <option value="">انتخاب دسته فعال</option>
+                {(data?.expenseCategories || []).filter((row: any) => row.active).map((row: any) => <option key={row.code} value={row.code}>{row.title}</option>)}
               </select>
             </label>
             <label>
@@ -826,7 +832,7 @@ export function AtelierFinanceView({
                   setExpense({
                     ...expense,
                     studioProjectId: e.target.value,
-                    category: "misc",
+                    category: expense.category || "",
                   })
                 }
               >
@@ -987,7 +993,10 @@ function ReceiptModal({
   onSave,
 }: any) {
   const isInstallment = target.sourceType === "installment";
+  const isManual = target.sourceType === "manual";
   const [sourceId, setSourceId] = useState(target.sourceId || ""),
+    [title, setTitle] = useState(""),
+    [counterparty, setCounterparty] = useState(""),
     [amount, setAmount] = useState(Number(target.remainingAmount || 0)),
     [paidAt, setPaidAt] = useState<Date | null>(new Date()),
     [accountId, setAccountId] = useState(""),
@@ -995,13 +1004,15 @@ function ReceiptModal({
     [notes, setNotes] = useState("");
   const source = isInstallment
       ? target
+      : isManual
+        ? { sourceType: "manual", sourceId: "manual" }
       : sources.find((r: any) => r.sourceId === sourceId),
     contract = contracts.find(
       (r: any) => r.id === (isInstallment ? target.contractId : sourceId),
     );
   return (
     <AtelierModal
-      title={isInstallment ? "پرداخت قسط" : "ثبت دریافت"}
+      title={isInstallment ? "پرداخت قسط" : isManual ? "ثبت دریافت آزاد" : "ثبت دریافت"}
       onClose={onClose}
       wide
     >
@@ -1010,7 +1021,9 @@ function ReceiptModal({
           e.preventDefault();
           onSave({
             sourceType: isInstallment ? undefined : source?.sourceType,
-            sourceId: isInstallment ? undefined : sourceId,
+            sourceId: isInstallment || isManual ? undefined : sourceId,
+            title: isManual ? title : undefined,
+            counterparty: isManual ? counterparty : undefined,
             accountId,
             amount,
             paidAt: paidAt?.toISOString(),
@@ -1022,8 +1035,9 @@ function ReceiptModal({
         className="space-y-5"
       >
         <section className="overview-secondary-surface rounded-2xl border p-4">
-          <h3 className="font-black">این دریافت متعلق به چیست؟</h3>
-          {!isInstallment && !target.sourceId && (
+          <h3 className="font-black">{isManual ? "مشخصات دریافت آزاد" : "این دریافت متعلق به چیست؟"}</h3>
+          {isManual && <div className="mt-3 grid gap-3 sm:grid-cols-2"><label><span className="atelier-label">عنوان *</span><input required maxLength={200} value={title} onChange={event => setTitle(event.target.value)} className={inputClass} /></label><label><span className="atelier-label">مشتری / طرف حساب اختیاری</span><input value={counterparty} onChange={event => setCounterparty(event.target.value)} className={inputClass} /></label></div>}
+          {!isManual && !isInstallment && !target.sourceId && (
             <select
               required
               className={`${inputClass} mt-3`}
@@ -1041,7 +1055,7 @@ function ReceiptModal({
               ))}
             </select>
           )}
-          <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+          {!isManual && <div className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
             <p>
               <span className="text-zinc-500">مشتری:</span>{" "}
               {target.customerName ||
@@ -1068,7 +1082,7 @@ function ReceiptModal({
                 </p>
               </>
             )}
-          </div>
+          </div>}
         </section>
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -1113,7 +1127,7 @@ function ReceiptModal({
             انصراف
           </button>
           <button
-            disabled={busy || !source || !accountId || amount <= 0}
+            disabled={busy || !source || !accountId || amount <= 0 || (isManual && !title.trim())}
             className="atelier-button !bg-emerald-700"
           >
             ثبت نهایی دریافت

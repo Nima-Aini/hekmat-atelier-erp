@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import type { SpawnOptions } from "node:child_process";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import crypto, { randomUUID } from "node:crypto";
@@ -19,27 +20,29 @@ import { GET as readiness } from "../src/app/api/readiness/route";
 import { GET as health } from "../src/app/api/health/route";
 
 const temporaryDirectories: string[] = [];
+const restoreFixture = vi.hoisted(() => ({ path: "" }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:child_process")>();
+  return { ...original, spawn(command: string, args: string[], options: SpawnOptions) {
+    if (command !== restoreFixture.path) return original.spawn(command, args, options);
+    expect(args).toContain("--list");
+    return original.spawn(process.execPath, ["-e", "process.exit(0)"], options);
+  } };
+});
 async function temporaryDirectory() { const directory = await mkdtemp(path.join(tmpdir(), "atelier-backup-test-")); temporaryDirectories.push(directory); return directory; }
 
-// Windows cannot spawn Unix shebang fixtures. An explicitly supplied no-op
-// executable keeps these metadata/checksum tests identical; the separate
-// PostgreSQL recovery drill always uses the real pg_restore binary.
+// Only the archive-list subprocess is a fixture. Execute portable Node rather
+// than a Unix shebang; checksum/schema validation remains real. Native restore
+// coverage lives in zz-backup-postgres-drill.test.ts and is not mocked.
 async function fakeRestoreBinary(root: string) {
-  if (process.env.TEST_PG_RESTORE_BIN) {
-    const fixture = path.join(root, "pg_restore.exe");
-    await copyFile(process.env.TEST_PG_RESTORE_BIN, fixture);
-    // The existing Git-for-Windows no-op fixture uses the installed MSYS runtime.
-    await copyFile(path.join(path.dirname(process.env.TEST_PG_RESTORE_BIN), "msys-2.0.dll"), path.join(root, "msys-2.0.dll"));
-    return fixture;
-  }
   const fixture = path.join(root, "pg_restore");
-  await writeFile(fixture, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  restoreFixture.path = fixture;
   return fixture;
 }
 
 describe("native backup and restore safety", () => {
   beforeAll(migrateDatabase);
-  afterEach(async () => { vi.unstubAllEnvs(); await exitMaintenanceMode(); await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
+  afterEach(async () => { vi.restoreAllMocks(); vi.unstubAllEnvs(); await exitMaintenanceMode(); await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 
   it("uses atomic local files with restrictive IDs and blocks traversal", async () => {
     const root = await temporaryDirectory(); const storage = new LocalBackupStorage(root); const id = randomUUID();

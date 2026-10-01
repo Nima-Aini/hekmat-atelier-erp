@@ -2,13 +2,23 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { db } from "@/db";
 import { accounts, atelierExpenseSources, customers, expensePaymentAllocations, expenses, payments, personnelSalaryRecords, studioContractItems, studioContracts, studioCustomers, studioDailyVisitPersonnel, studioDailyVisits, studioPersonnel, studioPlanningPersonnel, studioProjects } from "@/db/schema";
 import { ApiError, assertUuid } from "@/lib/apiError";
+import { canAccessPermission, type EmployeeContext } from "@/services/access";
 
-export async function getPersonnelFinancialFile(personnelId: string, from?: Date, to?: Date) {
+export async function getPersonnelFinancialFile(personnelId: string, from?: Date, to?: Date, actor?: EmployeeContext) {
   assertUuid(personnelId);
   const [person] = await db.select().from(studioPersonnel).where(eq(studioPersonnel.id, personnelId)).limit(1);
   if (!person) throw new ApiError(404, "پرسنل یافت نشد.");
   const salaryRows = await db.select().from(personnelSalaryRecords).where(eq(personnelSalaryRecords.personnelId, personnelId)).orderBy(asc(personnelSalaryRecords.createdAt));
-  const activeSalaries = salaryRows.filter((row) => row.financialStatus !== "voided");
+  const projectIds = [...new Set(salaryRows.map(row => row.studioProjectId).filter((id): id is string => Boolean(id)))];
+  const projects = projectIds.length ? await db.select({ id: studioProjects.id, projectId: studioProjects.projectId }).from(studioProjects).where(inArray(studioProjects.id, projectIds)) : [];
+  const allowed = await Promise.all(salaryRows.map(async row => {
+    if (row.financialStatus === "voided") return false;
+    if (!actor || actor.permissions.has("*")) return true;
+    const coreId = projects.find(project => project.id === row.studioProjectId)?.projectId;
+    if (row.studioProjectId && !coreId) return false;
+    return canAccessPermission(actor, "studio.personnel.finance.view", coreId);
+  }));
+  const activeSalaries = salaryRows.filter((_, index) => allowed[index]);
   const salaryIds = activeSalaries.map((row) => row.id);
   const [contractWork, visitWork, links] = salaryIds.length ? await Promise.all([
     db.select({ salaryRecordId: studioPlanningPersonnel.salaryRecordId, assignment: studioPlanningPersonnel, item: studioContractItems, contract: studioContracts, project: studioProjects, customerName: customers.name })
@@ -41,6 +51,7 @@ export async function getPersonnelFinancialFile(personnelId: string, from?: Date
       wage,
       paid,
       remaining: Math.max(0, wage - paid),
+      dueDate: expense?.dueDate || null,
       expenseId: expense?.id || null,
     };
   }).filter((row) => inRange(row.date));
