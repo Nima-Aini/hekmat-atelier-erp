@@ -36,6 +36,7 @@ export async function POST(req: Request) {
         phone: body.phone || null,
         address: body.address || null,
         city: body.city || "تهران",
+        partnerCategory: body.partnerCategory || null,
         notes: body.notes || null,
       })
       .returning();

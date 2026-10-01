@@ -1,0 +1,3 @@
+import { NextRequest,NextResponse } from "next/server";import { apiError } from "@/lib/apiError";import { requirePermission } from "@/services/access";import { saveTemplate } from "@/services/studio/catalog";
+export async function POST(req:NextRequest){try{const actor=await requirePermission("studio.catalog.manage");return NextResponse.json({success:true,template:await saveTemplate(actor,await req.json())},{status:201});}catch(error){return apiError(error,"ثبت قالب گردش‌کار");}}
+export async function PUT(req:NextRequest){try{const actor=await requirePermission("studio.catalog.manage");const body=await req.json();return NextResponse.json({success:true,template:await saveTemplate(actor,body,body.id)});}catch(error){return apiError(error,"ویرایش قالب گردش‌کار");}}

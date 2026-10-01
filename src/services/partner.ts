@@ -2,7 +2,7 @@ import { db } from "@/db";
 import {
   employees, customers, invoices, commissionLedger, payments, tasks,
   customerAssignments, customerProjectMemberships, employeeProjectAssignments, projects, projectTargets,
-  projectCompensations, employeeAccounts, roles, permissions, rolePermissions, orders,
+  projectCompensations, employeeAccounts, employeePermissions, roles, permissions, rolePermissions, orders,
 } from "@/db/schema";
 import { and, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import { logAuditEvent } from "@/services/audit";
@@ -78,8 +78,13 @@ export async function employeePermissionSet(employeeId: string) {
   if (!account?.roleId) return [];
   const [role] = await db.select({ code: roles.code }).from(roles).where(eq(roles.id, account.roleId)).limit(1);
   if (role?.code === "admin") return [{ code: "*", name: "همه دسترسی‌ها" }];
-  const rows = await db.select({ code: permissions.code, name: permissions.name }).from(rolePermissions).innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id)).where(eq(rolePermissions.roleId, account.roleId));
-  return rows;
+  const [roleRows, directRows] = await Promise.all([
+    db.select({ code: permissions.code, name: permissions.name }).from(rolePermissions).innerJoin(permissions, eq(rolePermissions.permissionId, permissions.id)).where(eq(rolePermissions.roleId, account.roleId)),
+    db.select({ code: permissions.code, name: permissions.name, granted: employeePermissions.granted }).from(employeePermissions).innerJoin(permissions, eq(employeePermissions.permissionId, permissions.id)).where(eq(employeePermissions.employeeId, employeeId)),
+  ]);
+  const merged = new Map(roleRows.map((row) => [row.code, { code: row.code, name: row.name }]));
+  for (const row of directRows) row.granted ? merged.set(row.code, { code: row.code, name: row.name }) : merged.delete(row.code);
+  return Array.from(merged.values());
 }
 
 export async function getProjectDashboard(projectId: string) {

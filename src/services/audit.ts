@@ -6,6 +6,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 export interface AuditContext {
   userId?: string;
+  employeeId?: string;
   userName?: string;
   ipAddress?: string;
 }
@@ -39,6 +40,9 @@ export async function logAuditEvent(
       entityId: validEntityId,
       projectId: typeof finalDetails.projectId === "string" && UUID_REGEX.test(finalDetails.projectId) ? finalDetails.projectId : null,
       userId: context?.userId || "system_user",
+      actorEmployeeId: context?.employeeId && UUID_REGEX.test(context.employeeId)
+        ? context.employeeId
+        : null,
       userName: context?.userName || "کاربر سیستم",
       details: {
         ...finalDetails,
@@ -46,7 +50,7 @@ export async function logAuditEvent(
       },
     });
   } catch (err) {
-    console.error("Failed to write audit log:", err);
-    if (client !== db) throw err;
+    console.error("audit.write_failed", { name: err instanceof Error ? err.name : "UnknownError" });
+    throw err;
   }
 }

@@ -1,0 +1,935 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Banknote, CheckCircle2, Edit3, FilePlus2, PackagePlus, Printer, Search, Trash2 } from "lucide-react";
+import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
+import { MoneyInput } from "@/components/ui/MoneyInput";
+import { expandPackageToContractItems } from "@/lib/atelierCatalog";
+import {
+  getBusinessDateTimeParts,
+  tehranDateTimeToUtc,
+  toJalaliDate,
+} from "@/lib/dateUtils";
+import { AtelierModal } from "./AtelierModal";
+import { ContractCancellationDialog } from "./ContractCancellationDialog";
+import { EmptyState, ErrorState, LoadingState } from "./StatusView";
+import { atelierConfirm, atelierToast } from "@/lib/atelierFeedback";
+
+type ItemForm = {
+  title: string;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  notes: string;
+};
+const blankItem = (): ItemForm => ({
+  title: "",
+  description: "",
+  quantity: 1,
+  unitPrice: 0,
+  notes: "",
+});
+const formatMoney = (value: unknown) => {
+  if (value === null || value === undefined || value === "") return "—";
+  const amount = Number(value);
+  return Number.isFinite(amount) ? `${amount.toLocaleString("fa-IR")} تومان` : "—";
+};
+type ProjectCustomField = { key: string; label: string; type?: "text" | "textarea" | "number" | "time" | "date"; required?: boolean };
+type ContractMetadata = Record<string, unknown> & {
+  __fieldLabels?: Record<string, string>;
+  __fieldDefinitions?: ProjectCustomField[];
+  __customerEnteredKeys?: string[];
+  paymentDraft?: { accountId?: string };
+};
+type CustomerFormDetails = Record<string, string | boolean>;
+const mergeTime = (date: Date, time: string) => {
+  const parts = getBusinessDateTimeParts(date);
+  const [hour, minute] = time.split(":").map(Number);
+  return tehranDateTimeToUtc({
+    ...parts,
+    hour: hour || 0,
+    minute: minute || 0,
+  });
+};
+
+export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (contractId: string) => void }) {
+  const [status, setStatus] = useState<"pending" | "approved">("pending");
+  const [contracts, setContracts] = useState<any[]>([]);
+  const [types, setTypes] = useState<any[]>([]);
+  const [accounts, setAccounts] = useState<any[]>([]);
+  const [config, setConfig] = useState<any>({});
+  const [catalog, setCatalog] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState<any | "new" | null>(null);
+  const [printing, setPrinting] = useState<any | null>(null);
+  const [cancelling, setCancelling] = useState<any | null>(null);
+  const [permissions, setPermissions] = useState<string[]>([]);
+  useEffect(() => { fetch("/api/auth/employee-me").then(response => response.json()).then(body => setPermissions(body.navigationPermissions || body.permissions || [])).catch(() => undefined); }, []);
+  const hasPermission = (permission: string) => permissions.includes("*") || permissions.includes(permission);
+  const canCreate = hasPermission("studio.contract.create") || hasPermission("studio.contract.manage");
+  const canEdit = hasPermission("studio.contract.edit") || hasPermission("studio.contract.manage");
+  const canApprove = hasPermission("studio.contract.approve") || hasPermission("studio.contract.manage");
+  const canCancel = hasPermission("studio.contract.cancel") && hasPermission("studio.finance.view") && hasPermission("studio.finance.refund");
+  const canDeleteDraft = permissions.includes("*") || permissions.includes("studio.contract.delete_draft") || permissions.includes("studio.contract.manage");
+  const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState("date_desc");
+  const visibleContracts = useMemo(() => contracts.filter((contract) => `${contract.contractNumber} ${contract.customer.name} ${contract.customer.mobile} ${contract.projectType.title}`.includes(query.trim())).sort((a, b) => sort === "date_asc" ? +new Date(a.programDate) - +new Date(b.programDate) : sort === "amount_desc" ? Number(b.totalAmount) - Number(a.totalAmount) : +new Date(b.programDate) - +new Date(a.programDate)), [contracts, query, sort]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [contractData, settingsData, accountData] = await Promise.all([
+        fetch(`/api/atelier/contracts?status=${status}`).then((r) => r.json()),
+        fetch("/api/atelier/settings").then((r) => r.json()),
+        fetch("/api/accounts").then((r) => r.json()),
+      ]);
+      if (!contractData.success)
+        throw new Error(contractData.error || "دریافت قراردادها ممکن نشد.");
+      setContracts(contractData.contracts || []);
+      setTypes(settingsData.projectTypes || []);
+      setConfig(settingsData.config || {});
+      setCatalog(settingsData.catalog || []);
+      setAccounts(accountData.accounts || []);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "خطای نامشخص");
+    } finally {
+      setLoading(false);
+    }
+  }, [status]);
+  useEffect(() => {
+    void load();
+  }, [load]);
+  useEffect(() => {
+    const listener = (event: Event) => {
+      const id = (event as CustomEvent).detail?.id;
+      if (id)
+        fetch(`/api/atelier/contracts/${id}`)
+          .then((r) => r.json())
+          .then((data) => data.success && setEditing(data.contract));
+    };
+    window.addEventListener("akma:navigate-item", listener);
+    return () => window.removeEventListener("akma:navigate-item", listener);
+  }, []);
+
+  const approve = async (contract: any) => {
+    if (!(await atelierConfirm(`قرارداد ${contract.contractNumber} تایید و سند مالی آن ثبت شود؟`)))
+      return;
+    const response = await fetch(
+      `/api/atelier/contracts/${contract.id}/approve`,
+      { method: "POST" },
+    ).then((r) => r.json());
+    if (!response.success)
+      return atelierToast(response.error || "تأیید قرارداد انجام نشد.", "error");
+    atelierToast("قرارداد تأیید شد.", "success");
+    await load();
+  };
+
+  const openContract = async (id: string, print = false) => {
+    try {
+      const response = await fetch(`/api/atelier/contracts/${id}`).then((r) => r.json());
+      if (!response.success) throw new Error(response.error || "دریافت قرارداد انجام نشد.");
+      if (print && (response.contract.totalAmount == null || response.contract.items?.some((item: any) => item.unitPrice == null)))
+        throw new Error("برای چاپ قرارداد، دسترسی به اطلاعات مالی لازم است.");
+      if (print) setPrinting(response.contract);
+      else setEditing(response.contract);
+    } catch (reason) {
+      atelierToast(reason instanceof Error ? reason.message : "دریافت قرارداد انجام نشد.", "error");
+    }
+  };
+
+  return (
+    <>
+      <div className="no-print space-y-5">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <p className="atelier-kicker">قراردادهای رسمی آتلیه</p>
+            <h1 className="mt-1 text-2xl font-black">قرارداد</h1>
+            <p className="mt-2 text-xs text-zinc-500">
+              ثبت، تأیید، ویرایش و چاپ قرارداد با اتصال مالی امن
+            </p>
+          </div>
+          {canCreate && <button onClick={() => setEditing("new")} className="atelier-button">
+            <FilePlus2 className="h-4 w-4" />
+            قرارداد جدید
+          </button>}
+        </div>
+        <div className="inline-flex rounded-2xl border border-zinc-800 bg-zinc-950 p-1">
+          <button
+            onClick={() => setStatus("approved")}
+            className={`rounded-xl px-4 py-2 text-xs font-bold ${status === "approved" ? "bg-red-700 text-white" : "text-zinc-500"}`}
+          >
+            قرارداد های تایید شده
+          </button>
+          <button
+            onClick={() => setStatus("pending")}
+            className={`rounded-xl px-4 py-2 text-xs font-bold ${status === "pending" ? "bg-red-700 text-white" : "text-zinc-500"}`}
+          >
+            پیش‌قراردادها
+          </button>
+        </div>
+        <div className="atelier-panel grid gap-3 p-3 sm:grid-cols-[1fr_auto]">
+          <label className="relative"><Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-600" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="جستجو در قراردادها" className="atelier-input w-full py-2.5 pr-9" /></label>
+          <select value={sort} onChange={(event) => setSort(event.target.value)} className="atelier-input py-2.5"><option value="date_desc">جدیدترین برنامه</option><option value="date_asc">نزدیک‌ترین برنامه</option><option value="amount_desc">بیشترین مبلغ</option></select>
+        </div>
+        {loading ? (
+          <LoadingState />
+        ) : error ? (
+          <ErrorState text={error} retry={load} />
+        ) : !visibleContracts.length ? (
+          <EmptyState
+            text={
+              status === "pending"
+                ? "پیش‌قراردادی ثبت نشده است."
+                : "قرارداد تاییدشده‌ای ثبت نشده است."
+            }
+          />
+        ) : (
+          <div className="grid gap-3 lg:grid-cols-2">
+            {visibleContracts.map((contract) => (
+              <article
+                key={contract.id}
+                className="atelier-panel group p-4 transition hover:border-red-950 sm:p-5"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-red-400">
+                      {contract.contractNumber}
+                    </p>
+                    <h2 className="mt-1 font-black">
+                      {contract.customer.name}
+                    </h2>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      {contract.projectType.title} • {contract.customer.mobile}
+                    </p>
+                  </div>
+                  <span
+                    className={`rounded-full border px-2.5 py-1 text-[10px] ${contract.status === "signed" ? "border-emerald-900 bg-emerald-950/30 text-emerald-400" : "border-orange-900 bg-orange-950/30 text-orange-400"}`}
+                  >
+                    {contract.status === "signed" ? "تایید شده" : "پیش‌قرارداد"}
+                  </span>
+                </div>
+                <div className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-black/30 p-3 text-xs">
+                  <span className="text-zinc-500">
+                    تاریخ ثبت
+                    <b className="mt-1 block text-zinc-200">
+                      {toJalaliDate(contract.contractDate)}
+                    </b>
+                  </span>
+                  <span className="text-zinc-500">
+                    تاریخ برنامه
+                    <b className="mt-1 block text-zinc-200">
+                      {contract.programDate
+                        ? toJalaliDate(contract.programDate)
+                        : "—"}
+                    </b>
+                  </span>
+                  <span className="text-zinc-500">
+                    مبلغ کل
+                    <b className="mt-1 block text-zinc-200">
+                      {formatMoney(contract.totalAmount)}
+                    </b>
+                  </span>
+                  <span className="text-zinc-500">
+                    مانده
+                    <b className="mt-1 block text-red-400">
+                      {formatMoney(contract.remainingAmount)}
+                    </b>
+                  </span>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {((contract.status === "draft" && canDeleteDraft) || (contract.status === "signed" && canCancel)) && <button type="button" onClick={() => setCancelling(contract)} className="atelier-button-secondary text-red-400">{contract.status === "draft" ? "حذف پیش‌قرارداد" : "ابطال قرارداد"}</button>}
+                  {canEdit && <button
+                    onClick={() => void openContract(contract.id)}
+                    className="atelier-button-secondary flex-1"
+                  >
+                    <Edit3 className="h-4 w-4" />
+                    ویرایش
+                  </button>}
+                  {contract.status === "draft" ? (canApprove &&
+                    <button
+                      onClick={() => void approve(contract)}
+                      className="atelier-button flex-1"
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                      تایید قرارداد
+                    </button>
+                  ) : (
+                    <>
+                      <button onClick={() => onNavigateFinance?.(contract.id)} className="atelier-button-secondary flex-1">
+                        <Banknote className="h-4 w-4" /> مشاهده در مالی
+                      </button>
+                      <button disabled={contract.totalAmount == null} title={contract.totalAmount == null ? "برای چاپ قرارداد، دسترسی مالی لازم است" : undefined} onClick={() => void openContract(contract.id, true)} className="atelier-button flex-1 disabled:cursor-not-allowed disabled:opacity-50">
+                        <Printer className="h-4 w-4" /> چاپ قرارداد
+                      </button>
+                    </>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+        {cancelling && <ContractCancellationDialog contract={cancelling} onClose={() => setCancelling(null)} onSaved={() => { setCancelling(null); void load(); }} />}
+        {editing && (
+          <ContractForm
+            initial={editing === "new" ? null : editing}
+            types={types}
+            accounts={accounts}
+            config={config}
+            catalog={catalog}
+            saving={saving}
+            onClose={() => setEditing(null)}
+            onSave={async (body) => {
+              setSaving(true);
+              try {
+                const url =
+                  editing === "new"
+                    ? "/api/atelier/contracts"
+                    : `/api/atelier/contracts/${editing.id}`;
+                const response = await fetch(url, {
+                  method: editing === "new" ? "POST" : "PUT",
+                  headers: {
+                    "content-type": "application/json",
+                    ...(editing === "new"
+                      ? { "idempotency-key": crypto.randomUUID() }
+                      : {}),
+                  },
+                  body: JSON.stringify(body),
+                }).then((r) => r.json());
+                if (!response.success)
+                  throw new Error(response.error || "ذخیره انجام نشد.");
+                setEditing(null);
+                await load();
+              } catch (reason) {
+                atelierToast(reason instanceof Error ? reason.message : "ذخیره انجام نشد.", "error");
+              } finally {
+                setSaving(false);
+              }
+            }}
+          />
+        )}
+      </div>
+      {printing && (
+        <PrintPreview
+          contract={printing}
+          config={config}
+          onClose={() => setPrinting(null)}
+        />
+      )}
+    </>
+  );
+}
+
+function ContractForm({
+  initial,
+  types,
+  accounts,
+  config,
+  catalog,
+  saving,
+  onClose,
+  onSave,
+}: {
+  initial: any;
+  types: any[];
+  accounts: any[];
+  config: any;
+  catalog: any[];
+  saving: boolean;
+  onClose: () => void;
+  onSave: (body: any) => Promise<void>;
+}) {
+  const approved = initial?.status === "signed";
+  const [projectTypeId, setProjectTypeId] = useState(
+    initial?.projectTypeId || "",
+  );
+  const selectedType = types.find((type) => type.id === projectTypeId);
+  const [customerName, setCustomerName] = useState(
+    initial?.customer?.name || "",
+  );
+  const [mobile, setMobile] = useState(initial?.customer?.mobile || "");
+  const [contractDate, setContractDate] = useState<Date | null>(
+    initial?.contractDate ? new Date(initial.contractDate) : null,
+  );
+  const [programDate, setProgramDate] = useState<Date | null>(
+    initial?.programDate ? new Date(initial.programDate) : null,
+  );
+  const [time, setTime] = useState(
+    initial?.programDate
+      ? new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Asia/Tehran",
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+        }).format(new Date(initial.programDate))
+      : "",
+  );
+  const [location, setLocation] = useState(initial?.executionLocation || "");
+  const [paidAmount, setPaidAmount] = useState(
+    Number(initial?.paidAmount || initial?.depositAmount || 0),
+  );
+  const [discountAmount, setDiscountAmount] = useState(Number(initial?.discountAmount || 0));
+  const [accountId, setAccountId] = useState(
+    initial?.typeMetadata?.paymentDraft?.accountId || "",
+  );
+  const [metadata, setMetadata] = useState<ContractMetadata>(
+    initial?.typeMetadata || {},
+  );
+  const touchedProjectFields = useRef(new Set<string>());
+  const [customerDetails, setCustomerDetails] = useState<CustomerFormDetails>(() => {
+    const values: Record<string, unknown> = initial?.customerDetails || {};
+    const enteredKeys: string[] = Array.isArray(initial?.typeMetadata?.__customerEnteredKeys) ? initial.typeMetadata.__customerEnteredKeys : [];
+    return Object.fromEntries(enteredKeys.filter(key => Object.hasOwn(values, key)).map(key => [key, typeof values[key] === "boolean" ? values[key] : String(values[key] ?? "")]));
+  });
+  const setCustomerDetail = (key: string, value: string | boolean) => setCustomerDetails((current) => {
+    if (value === "" && (key === "vipLevel" || key === "socialConsent")) {
+      const next = { ...current }; delete next[key]; return next;
+    }
+    return { ...current, [key]: value };
+  });
+  const [items, setItems] = useState<ItemForm[]>(
+    initial?.items?.length
+      ? initial.items.map((item: any) => ({
+          title: item.title,
+          description: item.description || "",
+          quantity: Number(item.quantity),
+          unitPrice: Number(item.unitPrice),
+          notes: item.notes || "",
+        }))
+      : [blankItem()],
+  );
+  const [notes, setNotes] = useState(initial?.notes || "");
+  const [terms, setTerms] = useState(
+    initial?.termsAndConditions || "",
+  );
+  const [itemPicker, setItemPicker] = useState(false);
+  const [packagePicker, setPackagePicker] = useState(false);
+  const activeItems = catalog.filter((row) => row.kind === "service" && row.active);
+  const activePackages = catalog.filter((row) => row.kind === "package" && row.active);
+  const addCatalogItem = (catalogItem: any) => setItems((current) => [...current, { title: catalogItem.name, description: catalogItem.description || "", quantity: 1, unitPrice: Number(catalogItem.basePrice || catalogItem.defaultPrice || 0), notes: "" }]);
+  const addPackage = (pack: any) => {
+    const snapshots = expandPackageToContractItems(pack, activeItems);
+    if (!snapshots.length) return atelierToast("این پکیج آیتم فعالی ندارد.", "error");
+    setItems((current) => [...current, ...snapshots]);
+    setPackagePicker(false);
+  };
+  const total = useMemo(
+    () =>
+      items.reduce(
+        (sum, item) =>
+          sum + Number(item.quantity || 0) * Number(item.unitPrice || 0),
+        0,
+      ),
+    [items],
+  );
+  const finalTotal = Math.max(0, total - discountAmount);
+  const financeRedacted = Boolean(initial) && initial.totalAmount == null;
+  const activeFields: ProjectCustomField[] = Array.isArray(selectedType?.fieldSchema)
+    ? selectedType.fieldSchema
+    : [];
+  const savedFields: ProjectCustomField[] = Array.isArray(metadata.__fieldDefinitions) ? metadata.__fieldDefinitions : [];
+  const fields: ProjectCustomField[] = activeFields.map((field) => {
+    const saved = initial ? savedFields.find(row => row.key === field.key) : undefined;
+    return { ...field, label: saved?.label || metadata.__fieldLabels?.[field.key] || field.label, type: saved?.type || field.type || "text", required: !initial && field.required === true };
+  });
+  if (initial) for (const [key, value] of Object.entries(metadata)) {
+    if (key === "paymentDraft" || key.startsWith("__") || typeof value !== "string" || fields.some((field) => field.key === key)) continue;
+    const saved = savedFields.find(row => row.key === key);
+    fields.push({ key, label: saved?.label || metadata.__fieldLabels?.[key] || key, type: saved?.type || "text" });
+  }
+  const updateItem = (index: number, patch: Partial<ItemForm>) =>
+    setItems((current) =>
+      current.map((item, i) => (i === index ? { ...item, ...patch } : item)),
+    );
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!projectTypeId || !programDate || !contractDate || !time)
+      return atelierToast("نوع پروژه، تاریخ قرارداد، تاریخ و ساعت برنامه الزامی است.", "error");
+    const selectedStart = mergeTime(programDate, time);
+    const originalStart = initial?.programDate ? new Date(initial.programDate) : null;
+    const selectedParts = getBusinessDateTimeParts(selectedStart);
+    const originalParts = originalStart ? getBusinessDateTimeParts(originalStart) : null;
+    const sameStart = Boolean(originalParts &&
+      selectedParts.year === originalParts.year && selectedParts.month === originalParts.month &&
+      selectedParts.day === originalParts.day && selectedParts.hour === originalParts.hour &&
+      selectedParts.minute === originalParts.minute);
+    const programStart = sameStart && originalStart ? originalStart : selectedStart;
+    const programEnd = sameStart && initial?.programEndDate
+      ? new Date(initial.programEndDate)
+      : new Date(programStart.getTime() + 4 * 3600000);
+    const customerDetailsToSave = { ...customerDetails };
+    for (const key of ["groomName", "brideName"] as const) {
+      if (!fields.some((field) => field.key === key)) continue;
+      delete customerDetailsToSave[key];
+      if (touchedProjectFields.current.has(key)) customerDetailsToSave[key] = String(metadata[key] ?? "");
+    }
+    await onSave({
+      projectTypeId,
+      customerName,
+      mobile,
+      contractDate: contractDate.toISOString(),
+      programDate: programStart.toISOString(),
+      programEndDate: programEnd.toISOString(),
+      executionLocation: location,
+      typeMetadata: { ...metadata, __fieldLabels: Object.fromEntries(fields.map(field => [field.key, field.label])) },
+      customerDetails: customerDetailsToSave,
+      items: approved || financeRedacted ? undefined : items,
+      paidAmount: approved || financeRedacted ? undefined : paidAmount,
+      discountAmount: approved || financeRedacted ? undefined : discountAmount,
+      paymentAccountId: !approved && !financeRedacted && paidAmount > 0 ? accountId : undefined,
+      notes,
+      termsAndConditions: terms,
+    });
+  };
+
+  return (
+    <AtelierModal
+      title={
+        initial ? `ویرایش قرارداد ${initial.contractNumber}` : "قرارداد جدید"
+      }
+      onClose={onClose}
+      wide
+    >
+      <form onSubmit={(event) => void submit(event)} className="space-y-6">
+        <section>
+          <label className="atelier-label">
+            نوع پروژه <span className="text-red-400">*</span>
+          </label>
+          <select
+            required
+            disabled={Boolean(initial)}
+            value={projectTypeId}
+            onChange={(event) => {
+              setProjectTypeId(event.target.value);
+              setMetadata({});
+              touchedProjectFields.current.clear();
+            }}
+            className="atelier-input w-full py-3"
+          >
+            <option value="">ابتدا نوع پروژه را انتخاب کنید</option>
+            {types
+              .filter((type) => type.active)
+              .map((type) => (
+                <option key={type.id} value={type.id}>
+                  {type.title}
+                </option>
+              ))}
+          </select>
+        </section>
+        {projectTypeId && (
+          <>
+            <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <Field
+                label="نام مشتری"
+                required
+                value={customerName}
+                onChange={setCustomerName}
+              />
+              <Field
+                label="شماره تماس"
+                required
+                value={mobile}
+                onChange={setMobile}
+                dir="ltr"
+              />
+              <JalaliDatePicker
+                label="تاریخ ثبت قرارداد"
+                required
+                value={contractDate}
+                onChange={setContractDate}
+                disabled={approved}
+              />
+              <JalaliDatePicker
+                label="تاریخ برنامه"
+                required
+                value={programDate}
+                onChange={(value) => setProgramDate(value)}
+              />
+              <Field
+                label="ساعت"
+                required
+                value={time}
+                onChange={setTime}
+                type="time"
+                dir="ltr"
+              />
+              <div><Field label="تالار / باغ / لوکیشن" value={location} onChange={setLocation} /><p className="mt-1 text-[10px] text-zinc-600">مثال: تالار محمد / باغ احسان</p></div>
+            </section>
+            <section className="atelier-panel p-4">
+              <h3 className="mb-1 text-sm font-black">اطلاعات پرونده مشتری</h3>
+              <p className="mb-4 text-xs text-zinc-500">در قرارداد جدید این فیلدها خالی‌اند. هنگام ویرایش، مقدار فیلدهای ثبت‌شده از پروندهٔ مشترک و به‌روز مشتری خوانده می‌شود و ممکن است پس از ثبت این قرارداد تغییر کرده باشد. تغییرات شما نیز در همان پرونده ذخیره می‌شود.</p>
+              {fields.some((field) => field.key === "groomName" || field.key === "brideName") &&
+                <p className="mb-4 text-xs text-zinc-400">نام عروس و داماد در بخش اطلاعات مخصوص پروژه ثبت می‌شود؛ تغییر آن‌ها پروندهٔ مشتری را نیز به‌روزرسانی می‌کند.</p>}
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {([[
+                  "phone", "تلفن دوم", "tel"], ["email", "ایمیل", "email"], ["storeName", "نام مجموعه", "text"],
+                  ["city", "شهر", "text"], ["region", "منطقه", "text"], ["postalCode", "کد پستی", "text"],
+                  ["address", "آدرس", "text"], ["latitude", "عرض جغرافیایی", "text"], ["longitude", "طول جغرافیایی", "text"],
+                  ["groomName", "نام داماد", "text"], ["brideName", "نام عروس", "text"],
+                  ["socialMedia", "شبکه اجتماعی", "text"], ["referrer", "منبع آشنایی", "text"],
+                ] as const).filter(([key]) => !["groomName", "brideName"].includes(key) || !fields.some((field) => field.key === key)).map(([key, label, type]) => <Field key={key} label={label} type={type} value={String(customerDetails[key] || "")} onChange={(value) => setCustomerDetail(key, value)} />)}
+                <label className="block"><span className="atelier-label">نقش مخاطب</span><select className="atelier-input w-full py-2.5" value={String(customerDetails.contactPersonRole || "")} onChange={(event) => setCustomerDetail("contactPersonRole", event.target.value)}><option value="">انتخاب نشده</option>{[["groom","داماد"],["bride","عروس"],["father","پدر"],["mother","مادر"],["manager","مدیر"],["self","خود مشتری"],["other","سایر"]].map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+                <JalaliDatePicker label="تاریخ مناسبت" value={customerDetails.anniversaryDate ? new Date(String(customerDetails.anniversaryDate)) : null} onChange={(value) => setCustomerDetail("anniversaryDate", value?.toISOString() || "")} />
+                <label className="block"><span className="atelier-label">سطح مشتری</span><select className="atelier-input w-full py-2.5" value={String(customerDetails.vipLevel || "")} onChange={(event) => setCustomerDetail("vipLevel", event.target.value)}><option value="">انتخاب نشده</option>{[["standard","استاندارد"],["gold","طلایی"],["platinum","پلاتینیوم"],["vip","ویژه"]].map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+                <label className="block"><span className="atelier-label">رضایت انتشار تصاویر</span><select className="atelier-input w-full py-2.5" value={customerDetails.socialConsent === undefined || customerDetails.socialConsent === "" ? "" : String(customerDetails.socialConsent)} onChange={(event) => setCustomerDetail("socialConsent", event.target.value === "" ? "" : event.target.value === "true")}><option value="">ثبت نشده</option><option value="true">بله</option><option value="false">خیر</option></select></label>
+                {!financeRedacted && <>
+                  <Field label="مهلت پرداخت (روز)" type="number" value={String(customerDetails.paymentTermsDays ?? "")} onChange={(value) => setCustomerDetail("paymentTermsDays", value)} />
+                  <Field label="سقف اعتبار (تومان)" type="number" value={String(customerDetails.creditLimit ?? "")} onChange={(value) => setCustomerDetail("creditLimit", value)} />
+                </>}
+              </div>
+              <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                {[["specialPreferences","ترجیحات ویژه"],["customerNotes","یادداشت مشتری"],["studioNotes","یادداشت آتلیه"]].map(([key,label]) => <label className="block" key={key}><span className="atelier-label">{label}</span><textarea className="atelier-input min-h-24 w-full py-2.5" value={String(customerDetails[key] || "")} onChange={(event) => setCustomerDetail(key,event.target.value)} /></label>)}
+              </div>
+            </section>
+            {fields.length > 0 && (
+              <section className="atelier-panel-red p-4">
+                <h3 className="mb-4 text-sm font-black">
+                  اطلاعات مخصوص {selectedType?.title}
+                </h3>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {fields.map((field) => {
+                    const setValue = (value: string) => {
+                      touchedProjectFields.current.add(field.key);
+                      setMetadata(current => ({ ...current, [field.key]: value }));
+                    };
+                    const value = String(metadata[field.key] || "");
+                    if (field.type === "date") return <JalaliDatePicker key={field.key} label={field.label} required={field.required} value={value ? new Date(value) : null} onChange={date => setValue(date?.toISOString() || "")} />;
+                    if (field.type === "textarea") return <label key={field.key} className="block"><span className="atelier-label">{field.label}{field.required && <span className="text-red-400"> *</span>}</span><textarea required={field.required} className="atelier-input min-h-24 w-full py-2.5" value={value} onChange={event => setValue(event.target.value)} /></label>;
+                    return <Field key={field.key} label={field.label} required={field.required} type={field.type === "number" ? "number" : field.type === "time" ? "time" : "text"} value={value} onChange={setValue} />;
+                  })}
+                </div>
+              </section>
+            )}
+            {!approved && !financeRedacted && (
+              <section>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-black">آیتم های قرارداد</h3>
+                  <div className="flex flex-wrap gap-2">
+                    <button type="button" onClick={() => { setItemPicker((value) => !value); setPackagePicker(false); }} className="atelier-button-secondary">افزودن آیتم</button>
+                    <button type="button" onClick={() => { setPackagePicker((value) => !value); setItemPicker(false); }} className="atelier-button-secondary"><PackagePlus className="h-4 w-4" />افزودن پکیج</button>
+                  </div>
+                </div>
+                {itemPicker && <div className="mb-3 grid gap-2 rounded-2xl border border-zinc-800 bg-black/40 p-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {activeItems.map((item) => <button key={item.id} type="button" onClick={() => { addCatalogItem(item); setItemPicker(false); }} className="rounded-xl border border-zinc-800 p-3 text-right text-xs hover:border-red-800"><b className="block text-zinc-100">{item.name}</b><span className="mt-1 block text-zinc-500">{formatMoney(item.basePrice)}</span></button>)}
+                  <button type="button" onClick={() => { setItems((current) => [...current, blankItem()]); setItemPicker(false); }} className="rounded-xl border border-dashed border-red-900 p-3 text-right text-xs text-red-300">آیتم سفارشی</button>
+                </div>}
+                {packagePicker && <div className="mb-3 grid gap-2 rounded-2xl border border-red-950 bg-red-950/10 p-3 sm:grid-cols-2">
+                  {activePackages.map((pack) => <button key={pack.id} type="button" onClick={() => addPackage(pack)} className="rounded-xl border border-red-950 p-3 text-right hover:bg-red-950/30"><b className="block text-sm">{pack.name}</b><span className="mt-1 block text-xs text-zinc-500">{pack.description || `${(pack.itemIds || pack.specifications?.itemIds || []).length} آیتم`}</span></button>)}
+                  {!activePackages.length && <p className="text-xs text-zinc-500">پکیج فعالی در تنظیمات ثبت نشده است.</p>}
+                </div>}
+                <div className="space-y-3">
+                  {items.map((item, index) => (
+                    <div
+                      key={index}
+                      className="grid gap-3 rounded-2xl border border-zinc-800 bg-black/30 p-3 sm:grid-cols-2 lg:grid-cols-[1.2fr_.7fr_1fr_auto]"
+                    >
+                      <Field
+                        label="عنوان"
+                        required
+                        value={item.title}
+                        onChange={(value) =>
+                          updateItem(index, { title: value })
+                        }
+                      />
+                      <div>
+                        <label className="atelier-label">تعداد / مقدار</label>
+                        <input
+                          type="number"
+                          min="0.01"
+                          step="0.01"
+                          value={item.quantity}
+                          onChange={(event) =>
+                            updateItem(index, {
+                              quantity: Number(event.target.value),
+                            })
+                          }
+                          className="atelier-input w-full py-2.5"
+                        />
+                      </div>
+                      <div>
+                        <label className="atelier-label">قیمت</label>
+                        <MoneyInput
+                          value={item.unitPrice}
+                          onChange={(value) =>
+                            updateItem(index, { unitPrice: value })
+                          }
+                          unit="تومان"
+                          className="!rounded-xl !border-zinc-800 !bg-[#09090b] focus:!border-red-700"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={items.length === 1}
+                        onClick={() =>
+                          setItems((current) =>
+                            current.filter((_, i) => i !== index),
+                          )
+                        }
+                        className="atelier-icon-button self-end text-red-400"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+            {financeRedacted ? <section className="atelier-panel p-4 text-sm text-zinc-400">اطلاعات مالی این قرارداد برای حساب شما قابل مشاهده یا ویرایش نیست.</section> : <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <div>
+                <label className="atelier-label">جمع آیتم‌ها</label>
+                <div className="rounded-xl border border-zinc-800 bg-black/40 px-3 py-3 text-sm font-black">
+                  {formatMoney(total)}
+                </div>
+              </div>
+              <div><label className="atelier-label">مبلغ تخفیف</label><MoneyInput disabled={approved} value={discountAmount} onChange={setDiscountAmount} unit="تومان" className="!rounded-xl !border-zinc-800 !bg-[#09090b]" /></div>
+              <div><label className="atelier-label">مبلغ نهایی قرارداد</label><div className="rounded-xl border border-zinc-800 bg-black/40 px-3 py-3 text-sm font-black">{formatMoney(finalTotal)}</div></div>
+              <div>
+                <label className="atelier-label">مبلغ پرداخت شده</label>
+                <MoneyInput
+                  disabled={approved}
+                  value={paidAmount}
+                  onChange={setPaidAmount}
+                  unit="تومان"
+                  className="!rounded-xl !border-zinc-800 !bg-[#09090b] focus:!border-red-700"
+                />
+              </div>
+              <div>
+                <label className="atelier-label">مبلغ مانده</label>
+                <div className="rounded-xl border border-red-950 bg-red-950/15 px-3 py-3 text-sm font-black text-red-400">
+                  {formatMoney(Math.max(0, finalTotal - paidAmount))}
+                  <small className="mt-1 block font-normal text-zinc-600">
+                    مقدار قطعی در سرور محاسبه می‌شود.
+                  </small>
+                </div>
+              </div>
+              {!approved && paidAmount > 0 && (
+                <div className="sm:col-span-3">
+                  <label className="atelier-label">حساب دریافت</label>
+                  <select
+                    required
+                    value={accountId}
+                    onChange={(event) => setAccountId(event.target.value)}
+                    className="atelier-input w-full py-2.5"
+                  >
+                    <option value="">انتخاب حساب</option>
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </section>}
+            <section className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="atelier-label">توضیحات خاص مراسم</label>
+                <textarea
+                  value={notes}
+                  onChange={(event) => setNotes(event.target.value)}
+                  className="atelier-input min-h-40 w-full py-3"
+                />
+                <p className="mt-1 text-[10px] text-zinc-600">مثال: مراسم خانه بعد از تالار</p>
+              </div>
+              <div>
+                <label className="atelier-label">شرایط قرارداد</label>
+                <textarea
+                  value={terms}
+                  onChange={(event) => setTerms(event.target.value)}
+                  className="atelier-input min-h-24 w-full py-3"
+                />
+              </div>
+            </section>
+            <div className="flex justify-end gap-2 border-t border-zinc-900 pt-4">
+              <button
+                type="button"
+                onClick={onClose}
+                className="atelier-button-secondary"
+              >
+                انصراف
+              </button>
+              <button disabled={saving} className="atelier-button">
+                {saving ? "در حال ذخیره…" : "ذخیره قرارداد"}
+              </button>
+            </div>
+          </>
+        )}
+      </form>
+    </AtelierModal>
+  );
+}
+
+function Field({
+  label,
+  value,
+  onChange,
+  required,
+  disabled,
+  type = "text",
+  dir,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+  disabled?: boolean;
+  type?: string;
+  dir?: "ltr" | "rtl";
+}) {
+  return (
+    <label className="block">
+      <span className="atelier-label">
+        {label}
+        {required && <span className="text-red-400"> *</span>}
+      </span>
+      <input
+        required={required}
+        disabled={disabled}
+        type={type}
+        dir={dir}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="atelier-input w-full py-2.5 disabled:opacity-50"
+      />
+    </label>
+  );
+}
+
+function PrintPreview({
+  contract,
+  config,
+  onClose,
+}: {
+  contract: any;
+  config: any;
+  onClose: () => void;
+}) {
+  const identity = config?.identity || {};
+  const contractConfig = config?.contract || {};
+  return (
+    <AtelierModal title="پیش نمایش چاپ قرارداد" onClose={onClose} wide>
+      <div className="no-print mb-4 flex justify-end">
+        <button onClick={() => window.print()} className="atelier-button">
+          <Printer className="h-4 w-4" />
+          چاپ قرارداد
+        </button>
+      </div>
+      <article
+        className="print-contract mx-auto min-h-[277mm] w-full max-w-[210mm] bg-white p-8 text-right text-black shadow-2xl sm:p-12"
+        dir="rtl"
+      >
+        <header className="border-b-2 border-black pb-5 text-center">
+          {identity.logoUrl && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={identity.logoUrl}
+              alt="نشان آتلیه"
+              className="mx-auto mb-3 h-16 max-w-40 object-contain"
+            />
+          )}
+          <h1 className="text-2xl font-black">
+            {identity.name || "حکمت آتلیه"}
+          </h1>
+          <p className="mt-2 text-sm">قرارداد خدمات عکاسی و فیلمبرداری</p>
+          {(identity.phone || identity.address) && (
+            <p className="mt-1 text-xs">
+              {[identity.phone, identity.address].filter(Boolean).join(" • ")}
+            </p>
+          )}
+          <p className="mt-1 text-xs">
+            شماره قرارداد: {contract.contractNumber}
+          </p>
+        </header>
+        <section className="mt-6 grid grid-cols-2 gap-4 text-sm">
+          <p>
+            <b>نام مشتری:</b> {contract.customer.name}
+          </p>
+          <p>
+            <b>شماره تماس:</b> {contract.customer.mobile}
+          </p>
+          <p>
+            <b>نوع پروژه:</b> {contract.projectType.title}
+          </p>
+          <p>
+            <b>تاریخ ثبت:</b> {toJalaliDate(contract.contractDate)}
+          </p>
+          <p>
+            <b>تاریخ برنامه:</b> {toJalaliDate(contract.programDate)}
+          </p>
+          <p>
+            <b>محل اجرا:</b> {contract.executionLocation || "—"}
+          </p>
+        </section>
+        <table className="mt-8 w-full border-collapse text-sm">
+          <thead>
+            <tr>
+              {["ردیف", "عنوان", "تعداد", "قیمت واحد", "جمع"].map((label) => (
+                <th key={label} className="border border-black p-2">
+                  {label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {contract.items.map((item: any, index: number) => (
+              <tr key={item.id}>
+                <td className="border border-black p-2 text-center">
+                  {(index + 1).toLocaleString("fa-IR")}
+                </td>
+                <td className="border border-black p-2">{item.title}</td>
+                <td className="border border-black p-2 text-center">
+                  {Number(item.quantity).toLocaleString("fa-IR")}
+                </td>
+                <td className="border border-black p-2">
+                  {formatMoney(item.unitPrice)}
+                </td>
+                <td className="border border-black p-2">
+                  {formatMoney(Number(item.quantity) * Number(item.unitPrice))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <section className="mt-6 grid grid-cols-2 gap-3 text-sm sm:grid-cols-5">
+          <p><b>جمع آیتم‌ها:</b><br />{formatMoney(contract.itemsTotal)}</p>
+          <p><b>مبلغ تخفیف:</b><br />{formatMoney(contract.discountAmount)}</p>
+          <p>
+            <b>مبلغ نهایی قرارداد:</b>
+            <br />
+            {formatMoney(contract.totalAmount)}
+          </p>
+          <p>
+            <b>پرداخت شده:</b>
+            <br />
+            {formatMoney(contract.paidAmount)}
+          </p>
+          <p>
+            <b>مانده:</b>
+            <br />
+            {formatMoney(contract.remainingAmount)}
+          </p>
+        </section>
+        {contract.notes && <section className="mt-8 border-t border-black pt-4 text-sm"><b>توضیحات خاص مراسم:</b><p className="mt-2 whitespace-pre-wrap leading-7">{contract.notes}</p></section>}
+        {contract.termsAndConditions && <section className="mt-6 min-h-24 border-t border-black pt-4 text-sm"><b>شرایط قرارداد:</b><p className="mt-2 whitespace-pre-wrap leading-7">{contract.termsAndConditions}</p></section>}
+        {identity.printInfo && (
+          <p className="mt-5 whitespace-pre-wrap border-t border-black/30 pt-3 text-xs leading-6">
+            {identity.printInfo}
+          </p>
+        )}
+        <footer className="mt-16 grid grid-cols-2 gap-16 text-center text-sm">
+          <div className="border-t border-black pt-3">
+            امضا و اثر انگشت مشتری
+          </div>
+          <div className="border-t border-black pt-3">مهر و امضای آتلیه</div>
+        </footer>
+        {contractConfig.footer && (
+          <p className="mt-8 whitespace-pre-wrap text-center text-xs">
+            {contractConfig.footer}
+          </p>
+        )}
+      </article>
+    </AtelierModal>
+  );
+}

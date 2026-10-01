@@ -2,6 +2,7 @@ import {
   pgTable,
   text,
   integer,
+  bigint,
   numeric,
   timestamp,
   boolean,
@@ -9,7 +10,9 @@ import {
   uuid,
   primaryKey,
   uniqueIndex,
-  index
+  index,
+  foreignKey,
+  check
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
@@ -50,13 +53,13 @@ export const customers = pgTable("customers", {
   phone: text("phone"),
   email: text("email"),
   address: text("address"),
-  city: text("city").default("تهران"),
+  city: text("city"),
   region: text("region"),
   postalCode: text("postal_code"),
   latitude: numeric("latitude", { precision: 10, scale: 6 }),
   longitude: numeric("longitude", { precision: 10, scale: 6 }),
-  paymentTermsDays: integer("payment_terms_days").default(30),
-  creditLimit: numeric("credit_limit", { precision: 15, scale: 2 }).default("0"),
+  paymentTermsDays: integer("payment_terms_days"),
+  creditLimit: numeric("credit_limit", { precision: 15, scale: 2 }),
   assignedEmployeeId: uuid("assigned_employee_id"),
   status: text("status").default("active").notNull(), // active, inactive, churned
   healthScore: integer("health_score").default(85).notNull(), // 0..100
@@ -162,7 +165,24 @@ export const employeeAccounts = pgTable("employee_accounts", {
   roleId: uuid("role_id").references(() => roles.id),
   status: text("status").default("active").notNull(),
   lastLoginAt: timestamp("last_login_at"),
+  sessionInvalidBefore: timestamp("session_invalid_before"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const employeePermissions = pgTable("employee_permissions", {
+  employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  permissionId: uuid("permission_id").notNull().references(() => permissions.id, { onDelete: "cascade" }),
+  granted: boolean("granted").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [primaryKey({ columns: [t.employeeId, t.permissionId] })]);
+
+export const authLoginAttempts = pgTable("auth_login_attempts", {
+  key: text("key").primaryKey(),
+  attempts: integer("attempts").default(0).notNull(),
+  windowStartedAt: timestamp("window_started_at").defaultNow().notNull(),
+  blockedUntil: timestamp("blocked_until"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -213,6 +233,7 @@ export const suppliers = pgTable("suppliers", {
   email: text("email"),
   address: text("address"),
   city: text("city").default("تهران"),
+  partnerCategory: text("partner_category"),
   notes: text("notes"),
   payableBalance: numeric("payable_balance", { precision: 15, scale: 2 }).default("0"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -514,7 +535,25 @@ export const accounts = pgTable("accounts", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
+export const accountBalanceAdjustments = pgTable("account_balance_adjustments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  accountId: uuid("account_id").notNull().references(() => accounts.id, { onDelete: "restrict" }),
+  oldBalance: numeric("old_balance", { precision: 15, scale: 2 }).notNull(),
+  newBalance: numeric("new_balance", { precision: 15, scale: 2 }).notNull(),
+  delta: numeric("delta", { precision: 15, scale: 2 }).notNull(),
+  reason: text("reason").notNull(),
+  adjustedAt: timestamp("adjusted_at").notNull(),
+  createdById: uuid("created_by_id").references(() => employees.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [index("idx_account_adjustments_account_date").on(t.accountId, t.adjustedAt)]);
+
 export const payments = pgTable("payments", {
+  sourceType: text("source_type"),
+  sourceId: uuid("source_id"),
+  originalPaymentId: uuid("original_payment_id").unique(),
+  title: text("title"),
+  counterparty: text("counterparty"),
   requestKey: text("request_key").unique(),
   requestHash: text("request_hash"),
   id: uuid("id").defaultRandom().primaryKey(),
@@ -532,7 +571,9 @@ export const payments = pgTable("payments", {
   status: text("status").default("completed").notNull(), // pending, completed, bounced, cancelled
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [
+  foreignKey({ columns: [t.originalPaymentId], foreignColumns: [t.id], name: "payments_original_payment_id_fkey" }),
+]);
 
 export const paymentAllocations = pgTable("payment_allocations", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -605,20 +646,77 @@ export const payrollRecords = pgTable("payroll_records", {
 });
 
 // 13. Expenses
+export const atelierExpenseCategories = pgTable("atelier_expense_categories", {
+  code: text("code").primaryKey(),
+  title: text("title").notNull(),
+  active: boolean("active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const atelierAiActions = pgTable("atelier_ai_actions", {
+  id: uuid("id").primaryKey(),
+  actorId: uuid("actor_id").notNull().references(() => employees.id),
+  operation: text("operation").notNull(),
+  targetId: text("target_id"),
+  parameters: jsonb("parameters").notNull(),
+  status: text("status").default("pending").notNull(),
+  result: jsonb("result"),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [index("idx_atelier_ai_actions_actor_status_expiry").on(t.actorId, t.status, t.expiresAt)]);
+
 export const expenses = pgTable("expenses", {
+  sourceType: text("source_type"),
+  counterparty: text("counterparty"),
   id: uuid("id").defaultRandom().primaryKey(),
+  requestKey: text("request_key"),
+  requestHash: text("request_hash"),
   expenseNumber: text("expense_number").notNull().unique(),
   category: text("category").default("عمومی").notNull(), // rent, utilities, marketing, transport, salary, commission, raw_materials, general
   amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
   projectId: uuid("project_id").references(() => projects.id),
   employeeId: uuid("employee_id").references(() => employees.id),
   accountId: uuid("account_id").references(() => accounts.id),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
   expenseDate: timestamp("expense_date").defaultNow().notNull(),
+  dueDate: timestamp("due_date"),
+  paidAmount: numeric("paid_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  paymentStatus: text("payment_status").default("unpaid").notNull(), // unpaid, partial, paid, reversed
   title: text("title").notNull(),
   description: text("description"),
   receiptImageUrl: text("receipt_image_url"),
+  status: text("status").default("posted").notNull(),
+  reversalOfExpenseId: uuid("reversal_of_expense_id"),
+  reversalReason: text("reversal_reason"),
+  reversedAt: timestamp("reversed_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_expenses_request_key").on(t.requestKey)]);
+
+// Allocation metadata only: the money movement remains the canonical payment.
+export const expensePaymentAllocations = pgTable("expense_payment_allocations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  expenseId: uuid("expense_id").notNull().references(() => expenses.id, { onDelete: "restrict" }),
+  paymentId: uuid("payment_id").notNull().references(() => payments.id, { onDelete: "restrict" }),
+  allocatedAmount: numeric("allocated_amount", { precision: 15, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("uq_expense_payment_allocation").on(t.expenseId, t.paymentId),
+  index("idx_expense_payment_allocation_expense").on(t.expenseId),
+  index("idx_expense_payment_allocation_payment").on(t.paymentId),
+]);
+
+// Connects Atelier operational obligations to one canonical expense without
+// creating another ledger or duplicating the financial amount.
+export const atelierExpenseSources = pgTable("atelier_expense_sources", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  expenseId: uuid("expense_id").notNull().unique().references(() => expenses.id, { onDelete: "restrict" }),
+  sourceType: text("source_type").notNull(), // personnel_wage, rental, direct_expense, general_expense
+  sourceId: uuid("source_id").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_atelier_expense_source").on(t.sourceType, t.sourceId), index("idx_atelier_expense_source_lookup").on(t.sourceType, t.sourceId)]);
 
 // 14. Consignments (امانی)
 export const consignments = pgTable("consignments", {
@@ -688,6 +786,7 @@ export const auditLogs = pgTable("audit_logs", {
   projectId: uuid("project_id").references(() => projects.id),
   parentLogId: uuid("parent_log_id"),
   userId: text("user_id").default("system_user"),
+  actorEmployeeId: uuid("actor_employee_id").references(() => employees.id, { onDelete: "set null" }),
   userName: text("user_name").default("کاربر سیستم"),
   details: jsonb("details"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -700,12 +799,25 @@ export const backups = pgTable("backups", {
   checksum: text("checksum").notNull(),
   status: text("status").default("completed").notNull(), // completed, failed, restored
   backupData: jsonb("backup_data"), // Complete serialized system snapshot
+  storageDriver: text("storage_driver").default("legacy").notNull(),
+  storageKey: text("storage_key"),
+  format: text("format").default("legacy_json").notNull(),
+  formatVersion: integer("format_version").default(1).notNull(),
+  sizeBytesBigint: bigint("size_bytes_bigint", { mode: "number" }),
+  schemaVersion: text("schema_version"),
+  gitSha: text("git_sha"),
+  databaseDriver: text("database_driver"),
+  createdById: uuid("created_by_id").references(() => employees.id, { onDelete: "set null" }),
+  notes: text("notes"),
+  failureReason: text("failure_reason"),
+  verifiedAt: timestamp("verified_at"),
+  metadata: jsonb("metadata"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const systemSettings = pgTable("system_settings", {
   id: text("id").primaryKey().default("main_config"),
-  businessName: text("business_name").default("سازمان و کسب‌وکار حکمت آکما"),
+  businessName: text("business_name").default("حکمت آتلیه"),
   taxNumber: text("tax_number"),
   economicCode: text("economic_code"),
   nationalId: text("national_id"),
@@ -728,6 +840,7 @@ export const systemSettings = pgTable("system_settings", {
   aiEnabled: boolean("ai_enabled").default(true),
   neshanApiKey: text("neshan_api_key"),
   autoBackupIntervalHours: integer("auto_backup_interval_hours").default(24),
+  atelierConfig: jsonb("atelier_config").default({}),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
@@ -842,6 +955,8 @@ export const studioCustomers = pgTable("studio_customers", {
 // 16.2. Studio Projects
 export const studioProjects = pgTable("studio_projects", {
   id: uuid("id").defaultRandom().primaryKey(),
+  catalogItemId: uuid("catalog_item_id"),
+  archivedAt: timestamp("archived_at"),
   projectNumber: text("project_number").notNull().unique(), // e.g. STU-1403-0001
   studioCustomerId: uuid("studio_customer_id").notNull().references(() => studioCustomers.id, { onDelete: "cascade" }),
   projectId: uuid("project_id").references(() => projects.id),
@@ -858,14 +973,32 @@ export const studioProjects = pgTable("studio_projects", {
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_studio_projects_core_project").on(t.projectId)]);
+
+export const studioProjectTypes = pgTable("studio_project_types", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  code: text("code").notNull().unique(),
+  title: text("title").notNull(),
+  active: boolean("active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  fieldSchema: jsonb("field_schema").default([]).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
 // 16.3. Studio Contracts
 export const studioContracts = pgTable("studio_contracts", {
+  cancelledAt: timestamp("cancelled_at"),
+  cancellationReason: text("cancellation_reason"),
+  cancellationSnapshot: jsonb("cancellation_snapshot"),
   id: uuid("id").defaultRandom().primaryKey(),
+  packageSnapshot: jsonb("package_snapshot"),
   contractNumber: text("contract_number").notNull().unique(), // e.g. CTR-1403-0001
   studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id, { onDelete: "cascade" }),
   invoiceId: uuid("invoice_id").references(() => invoices.id),
+  idempotencyKey: text("idempotency_key"),
+  financialStatus: text("financial_status").default("draft").notNull(),
+  discountAmount: numeric("discount_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   totalAmount: numeric("total_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   depositAmount: numeric("deposit_amount", { precision: 15, scale: 2 }).default("0").notNull(),
   installmentsCount: integer("installments_count").default(1).notNull(),
@@ -874,15 +1007,37 @@ export const studioContracts = pgTable("studio_contracts", {
   termsAndConditions: text("terms_and_conditions"),
   status: text("status").default("draft").notNull(), // draft, signed, in_progress, completed, cancelled
   signedDocumentUrl: text("signed_document_url"),
+  projectTypeId: uuid("project_type_id").references(() => studioProjectTypes.id, { onDelete: "set null" }),
+  typeMetadata: jsonb("type_metadata").default({}),
+  programDate: timestamp("program_date"),
+  programEndDate: timestamp("program_end_date"),
+  executionLocation: text("execution_location"),
+  notes: text("notes"),
+  financialNotes: text("financial_notes"),
+  approvedAt: timestamp("approved_at"),
+  approvedById: uuid("approved_by_id").references(() => employees.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_studio_contracts_invoice").on(t.invoiceId), uniqueIndex("uq_studio_contracts_idempotency").on(t.idempotencyKey)]);
+
+export const studioContractItems = pgTable("studio_contract_items", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  contractId: uuid("contract_id").notNull().references(() => studioContracts.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  quantity: numeric("quantity", { precision: 10, scale: 2 }).default("1").notNull(),
+  unitPrice: numeric("unit_price", { precision: 15, scale: 2 }).default("0").notNull(),
+  notes: text("notes"),
+  position: integer("position").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [index("idx_studio_contract_items_contract").on(t.contractId)]);
 
 // 16.4. Studio Personnel (Employee & Temporary Worker)
 export const studioPersonnel = pgTable("studio_personnel", {
   id: uuid("id").defaultRandom().primaryKey(),
   employeeId: uuid("employee_id").references(() => employees.id, { onDelete: "set null" }),
-  personnelType: text("personnel_type").default("employee").notNull(), // employee, temporary_worker
+  personnelType: text("personnel_type").default("employee").notNull(), // employee, temporary_worker, project_based
   fullName: text("full_name").notNull(),
   mobile: text("mobile").notNull(),
   primaryRole: text("primary_role").notNull(), // photographer, videographer, drone_operator, crane_operator, editor, retoucher, director, lighting_tech, sound_engineer
@@ -890,6 +1045,8 @@ export const studioPersonnel = pgTable("studio_personnel", {
   experienceYears: integer("experience_years").default(1),
   rating: numeric("rating", { precision: 3, scale: 2 }).default("5.00"),
   status: text("status").default("active").notNull(), // active, on_leave, inactive
+  fixedSalary: numeric("fixed_salary", { precision: 15, scale: 2 }).default("0").notNull(),
+  paymentCycle: text("payment_cycle").default("monthly"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
@@ -918,11 +1075,40 @@ export const personnelSalaryRecords = pgTable("personnel_salary_records", {
   totalCalculated: numeric("total_calculated", { precision: 15, scale: 2 }).default("0").notNull(),
   paymentStatus: text("payment_status").default("pending").notNull(), // pending, approved, paid
   paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
+  financialStatus: text("financial_status").default("draft").notNull(),
+  voidReason: text("void_reason"),
+  voidedAt: timestamp("voided_at"),
   settlementDate: timestamp("settlement_date"),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_studio_salary_payment").on(t.paymentId), uniqueIndex("uq_studio_salary_idempotency").on(t.idempotencyKey)]);
+
+export const studioPersonnelDefaultWages = pgTable("studio_personnel_default_wages", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  personnelId: uuid("personnel_id").notNull().references(() => studioPersonnel.id, { onDelete: "cascade" }),
+  workTitle: text("work_title").notNull(),
+  amount: numeric("amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_personnel_default_wage").on(t.personnelId, t.workTitle)]);
+
+export const studioPlanningPersonnel = pgTable("studio_planning_personnel", {
+  status: text("status").default("active").notNull(),
+  id: uuid("id").defaultRandom().primaryKey(),
+  contractItemId: uuid("contract_item_id").notNull().references(() => studioContractItems.id, { onDelete: "cascade" }),
+  personnelId: uuid("personnel_id").notNull().references(() => studioPersonnel.id, { onDelete: "restrict" }),
+  startsAt: timestamp("starts_at").notNull(),
+  endsAt: timestamp("ends_at").notNull(),
+  wageSnapshot: numeric("wage_snapshot", { precision: 15, scale: 2 }).default("0").notNull(),
+  salaryRecordId: uuid("salary_record_id").references(() => personnelSalaryRecords.id, { onDelete: "set null" }),
+  notes: text("notes"),
+  assignedById: uuid("assigned_by_id").references(() => employees.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_planning_personnel_item_person").on(t.contractItemId, t.personnelId), index("idx_planning_personnel_time").on(t.personnelId, t.startsAt, t.endsAt)]);
 
 // 16.7. Studio Equipment
 export const studioEquipment = pgTable("studio_equipment", {
@@ -949,6 +1135,7 @@ export const equipmentReservations = pgTable("equipment_reservations", {
   equipmentId: uuid("equipment_id").notNull().references(() => studioEquipment.id, { onDelete: "cascade" }),
   studioProjectId: uuid("studio_project_id").references(() => studioProjects.id, { onDelete: "cascade" }),
   assignedPersonnelId: uuid("assigned_personnel_id").references(() => studioPersonnel.id, { onDelete: "set null" }),
+  contractItemId: uuid("contract_item_id").references(() => studioContractItems.id, { onDelete: "cascade" }),
   reservedFrom: timestamp("reserved_from").notNull(),
   reservedTo: timestamp("reserved_to").notNull(),
   status: text("status").default("reserved").notNull(), // reserved, checked_out, returned_safe, damaged, cancelled
@@ -965,6 +1152,7 @@ export const equipmentReservations = pgTable("equipment_reservations", {
 export const rentalEquipment = pgTable("rental_equipment", {
   id: uuid("id").defaultRandom().primaryKey(),
   studioProjectId: uuid("studio_project_id").references(() => studioProjects.id, { onDelete: "cascade" }),
+  contractItemId: uuid("contract_item_id").references(() => studioContractItems.id, { onDelete: "cascade" }),
   supplierId: uuid("supplier_id").references(() => suppliers.id, { onDelete: "set null" }),
   itemTitle: text("item_title").notNull(),
   rentalCompany: text("rental_company").notNull(),
@@ -973,15 +1161,25 @@ export const rentalEquipment = pgTable("rental_equipment", {
   pickupDate: timestamp("pickup_date").notNull(),
   returnDate: timestamp("return_date").notNull(),
   expenseId: uuid("expense_id").references(() => expenses.id, { onDelete: "set null" }),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
+  financialStatus: text("financial_status").default("draft").notNull(),
+  voidReason: text("void_reason"),
+  voidedAt: timestamp("voided_at"),
   status: text("status").default("rented").notNull(), // planned, rented, returned, settled
+  markedRentedAt: timestamp("marked_rented_at"),
+  markedRentedById: uuid("marked_rented_by_id").references(() => employees.id, { onDelete: "set null" }),
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_rental_expense").on(t.expenseId), uniqueIndex("uq_rental_idempotency").on(t.idempotencyKey)]);
 
 // 16.10. Production Plans & Production Steps
 export const studioProductionPlans = pgTable("studio_production_plans", {
   id: uuid("id").defaultRandom().primaryKey(),
+  workflowTemplateId: uuid("workflow_template_id"),
+  workflowSnapshot: jsonb("workflow_snapshot"),
   studioProjectId: uuid("studio_project_id").notNull().unique().references(() => studioProjects.id, { onDelete: "cascade" }),
   targetDeliveryDate: timestamp("target_delivery_date").notNull(),
   currentStage: text("current_stage").default("raw_backup").notNull(), // raw_backup, selection, retouch, video_edit, teaser, album_print, final_qc, delivered
@@ -1010,7 +1208,9 @@ export const studioProductionSteps = pgTable("studio_production_steps", {
 // 16.11. Calendar Events
 export const studioCalendarEvents = pgTable("studio_calendar_events", {
   id: uuid("id").defaultRandom().primaryKey(),
+  ownerEmployeeId: uuid("owner_employee_id").references(() => employees.id, { onDelete: "set null" }),
   studioProjectId: uuid("studio_project_id").references(() => studioProjects.id, { onDelete: "cascade" }),
+  contractId: uuid("contract_id").references(() => studioContracts.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   eventType: text("event_type").default("shooting").notNull(), // shooting, consultation, selection_session, venue_visit, delivery, maintenance
   startTime: timestamp("start_time").notNull(),
@@ -1023,9 +1223,105 @@ export const studioCalendarEvents = pgTable("studio_calendar_events", {
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
 
+export const studioDailyVisits = pgTable("studio_daily_visits", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  title: text("title").notNull(),
+  itemSnapshot: jsonb("item_snapshot").$type<import("@/lib/dailyVisitItems").VisitItemSnapshot | null>(),
+  visitDate: timestamp("visit_date").notNull(),
+  price: numeric("price", { precision: 15, scale: 2 }).default("0").notNull(),
+  paidAmount: numeric("paid_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  customerName: text("customer_name").notNull(),
+  mobile: text("mobile").notNull(),
+  customerId: uuid("customer_id").references(() => customers.id, { onDelete: "restrict" }),
+  invoiceId: uuid("invoice_id").unique().references(() => invoices.id, { onDelete: "restrict" }),
+  idempotencyKey: text("idempotency_key").unique(),
+  financialStatus: text("financial_status").default("draft").notNull(),
+  status: text("status").default("active").notNull(),
+  notes: text("notes"),
+  createdById: uuid("created_by_id").references(() => employees.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [index("idx_studio_daily_visits_date").on(t.visitDate)]);
+
+export const studioDailyVisitTitles = pgTable("studio_daily_visit_titles", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  title: text("title").notNull(),
+  mode: text("mode").default("simple").notNull(),
+  defaultPrice: numeric("default_price", { precision: 15, scale: 2 }).default("0").notNull(),
+  secondaryOptions: jsonb("secondary_options").$type<import("@/lib/dailyVisitItems").DailyVisitOption[]>().default([]).notNull(),
+  active: boolean("active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_studio_daily_visit_title").on(t.title)]);
+
+export const studioDailyVisitPersonnel = pgTable("studio_daily_visit_personnel", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  dailyVisitId: uuid("daily_visit_id").notNull().references(() => studioDailyVisits.id, { onDelete: "restrict" }),
+  personnelId: uuid("personnel_id").notNull().references(() => studioPersonnel.id, { onDelete: "restrict" }),
+  personnelNameSnapshot: text("personnel_name_snapshot").notNull(),
+  workTitle: text("work_title").notNull(),
+  wageSnapshot: numeric("wage_snapshot", { precision: 15, scale: 2 }).default("0").notNull(),
+  salaryRecordId: uuid("salary_record_id").references(() => personnelSalaryRecords.id, { onDelete: "set null" }),
+  status: text("status").default("active").notNull(),
+  removedAt: timestamp("removed_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  uniqueIndex("uq_daily_visit_personnel_active").on(t.dailyVisitId, t.personnelId, t.workTitle),
+  index("idx_daily_visit_personnel_visit").on(t.dailyVisitId),
+  index("idx_daily_visit_personnel_person").on(t.personnelId),
+]);
+
+export const studioReservations = pgTable("studio_reservations", {
+  ownerEmployeeId: uuid("owner_employee_id").references(() => employees.id, { onDelete: "set null" }),
+  assignedPersonnelId: uuid("assigned_personnel_id").references(() => studioPersonnel.id, { onDelete: "set null" }),
+  viewerEmployeeIds: jsonb("viewer_employee_ids").$type<string[]>().default([]).notNull(),
+  sharedPersonnelIds: jsonb("shared_personnel_ids").$type<string[]>().default([]).notNull(),
+  id: uuid("id").defaultRandom().primaryKey(),
+  title: text("title").notNull(),
+  reservedAt: timestamp("reserved_at").notNull(),
+  price: numeric("price", { precision: 15, scale: 2 }).default("0").notNull(),
+  paidAmount: numeric("paid_amount", { precision: 15, scale: 2 }).default("0").notNull(),
+  customerName: text("customer_name").notNull(),
+  mobile: text("mobile").notNull(),
+  customerId: uuid("customer_id").references(() => customers.id, { onDelete: "restrict" }),
+  invoiceId: uuid("invoice_id").unique().references(() => invoices.id, { onDelete: "restrict" }),
+  idempotencyKey: text("idempotency_key").unique(),
+  financialStatus: text("financial_status").default("draft").notNull(),
+  notes: text("notes"),
+  status: text("status").default("pending").notNull(),
+  completedAt: timestamp("completed_at"),
+  completedById: uuid("completed_by_id").references(() => employees.id, { onDelete: "set null" }),
+  createdById: uuid("created_by_id").references(() => employees.id, { onDelete: "set null" }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [index("idx_studio_reservations_date_status").on(t.reservedAt, t.status)]);
+
 // 16.12. Studio Tasks
+export const studioCustomerTasks = pgTable("studio_customer_tasks", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  studioCustomerId: uuid("studio_customer_id").notNull().references(() => studioCustomers.id),
+  studioProjectId: uuid("studio_project_id").references(() => studioProjects.id),
+  contractId: uuid("contract_id").references(() => studioContracts.id),
+  title: text("title").notNull(),
+  notes: text("notes"),
+  dueDate: timestamp("due_date"),
+  status: text("status").default("pending").notNull(),
+  createdBy: uuid("created_by").references(() => employees.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  check("chk_customer_task_status", sql`${t.status} in ('pending', 'done', 'cancelled')`),
+  index("idx_customer_tasks_customer").on(t.studioCustomerId),
+]);
+
 export const studioTasks = pgTable("studio_tasks", {
   id: uuid("id").defaultRandom().primaryKey(),
+  productionStepId: uuid("production_step_id").references(() => studioProductionSteps.id),
+  dependencyId: uuid("dependency_id"),
+  blocker: text("blocker"),
+  position: integer("position").default(0).notNull(),
   studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id, { onDelete: "cascade" }),
   assignedPersonnelId: uuid("assigned_personnel_id").references(() => studioPersonnel.id, { onDelete: "set null" }),
   title: text("title").notNull(),
@@ -1052,9 +1348,14 @@ export const studioNotifications = pgTable("studio_notifications", {
   sentAt: timestamp("sent_at"),
   status: text("status").default("pending").notNull(), // pending, sent, failed
   providerResponse: text("provider_response"),
+  conditionKey: text("condition_key"),
+  payload: jsonb("payload").default({}),
+  archivedAt: timestamp("archived_at"),
+  archivedById: uuid("archived_by_id").references(() => employees.id, { onDelete: "set null" }),
+  resolvedAt: timestamp("resolved_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
-});
+}, (t) => [index("idx_studio_notifications_condition").on(t.conditionKey, t.archivedAt, t.resolvedAt)]);
 
 // 16.14. Studio Project Timelines & Change Logs (ثبت تمام رویدادها و تغییرات)
 export const studioProjectTimelines = pgTable("studio_project_timelines", {
@@ -1064,14 +1365,26 @@ export const studioProjectTimelines = pgTable("studio_project_timelines", {
   title: text("title").notNull(),
   description: text("description"),
   authorName: text("author_name").default("مدیر استودیو"),
+  actorEmployeeId: uuid("actor_employee_id").references(() => employees.id, { onDelete: "set null" }),
   metadata: jsonb("metadata").default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 // 16.15. Studio Project Payments (دریافتی‌ها و پیش‌پرداخت‌های پروژه)
+export const studioNotificationReads = pgTable("studio_notification_reads", {
+  notificationId: uuid("notification_id").notNull().references(() => studioNotifications.id, { onDelete: "cascade" }),
+  employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  readAt: timestamp("read_at").defaultNow().notNull(),
+}, t => [primaryKey({ columns: [t.notificationId, t.employeeId] })]);
+
 export const studioProjectPayments = pgTable("studio_project_payments", {
   id: uuid("id").defaultRandom().primaryKey(),
   studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id, { onDelete: "cascade" }),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
+  invoiceId: uuid("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
+  financialStatus: text("financial_status").default("draft").notNull(),
   amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
   paymentType: text("payment_type").default("deposit").notNull(), // deposit, installment_1, installment_2, settlement, extra
   paymentMethod: text("payment_method").default("card_transfer").notNull(), // card_transfer, pos, cash, cheque, online
@@ -1079,13 +1392,20 @@ export const studioProjectPayments = pgTable("studio_project_payments", {
   paidAt: timestamp("paid_at").defaultNow().notNull(),
   status: text("status").default("received").notNull(), // received, pending, verified
   notes: text("notes"),
+  voidReason: text("void_reason"),
+  voidedAt: timestamp("voided_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_studio_payments_core_payment").on(t.paymentId), uniqueIndex("uq_studio_payments_idempotency").on(t.idempotencyKey)]);
 
 // 16.16. Studio Project Expenses (هزینه‌های مستقیم پروژه)
 export const studioProjectExpenses = pgTable("studio_project_expenses", {
   id: uuid("id").defaultRandom().primaryKey(),
   studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id, { onDelete: "cascade" }),
+  expenseId: uuid("expense_id").references(() => expenses.id, { onDelete: "set null" }),
+  paymentId: uuid("payment_id").references(() => payments.id, { onDelete: "set null" }),
+  accountId: uuid("account_id").references(() => accounts.id, { onDelete: "set null" }),
+  idempotencyKey: text("idempotency_key"),
+  financialStatus: text("financial_status").default("draft").notNull(),
   expenseCategory: text("expense_category").default("personnel").notNull(), // personnel, rental, location, printing_album, catering, transport, retouch_edit, misc
   title: text("title").notNull(),
   amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
@@ -1093,8 +1413,10 @@ export const studioProjectExpenses = pgTable("studio_project_expenses", {
   paidAt: timestamp("paid_at").defaultNow().notNull(),
   paymentStatus: text("payment_status").default("paid").notNull(), // paid, pending
   notes: text("notes"),
+  voidReason: text("void_reason"),
+  voidedAt: timestamp("voided_at"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [uniqueIndex("uq_studio_expenses_core_expense").on(t.expenseId), uniqueIndex("uq_studio_expenses_idempotency").on(t.idempotencyKey)]);
 
 // ==========================================
 // 17. HEKMAT ATELIER RELATIONS
@@ -1281,3 +1603,81 @@ export const studioNotificationsRelations = relations(studioNotifications, ({ on
   }),
 }));
 
+// Atelier product domain. Accounting remains in invoices/payments/expenses.
+export const studioWorkflowTemplates = pgTable("studio_workflow_templates", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  jobType: text("job_type").notNull(),
+  stages: jsonb("stages").notNull(),
+  active: boolean("active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const studioCatalog = pgTable("studio_catalog", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  kind: text("kind").notNull(),
+  parentId: uuid("parent_id"),
+  name: text("name").notNull(),
+  jobType: text("job_type").notNull(),
+  description: text("description"),
+  basePrice: numeric("base_price", { precision: 15, scale: 2 }).default("0").notNull(),
+  specifications: jsonb("specifications").default({}).notNull(),
+  workflowTemplateId: uuid("workflow_template_id").references(() => studioWorkflowTemplates.id),
+  active: boolean("active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const studioLeads = pgTable("studio_leads", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  mobile: text("mobile").notNull(),
+  source: text("source"),
+  eventType: text("event_type").default("wedding").notNull(),
+  desiredDate: timestamp("desired_date"),
+  location: text("location"),
+  budget: numeric("budget", { precision: 15, scale: 2 }),
+  stage: text("stage").default("lead").notNull(),
+  assignedEmployeeId: uuid("assigned_employee_id").references(() => employees.id),
+  nextFollowUp: timestamp("next_follow_up"),
+  lastContactAt: timestamp("last_contact_at"),
+  lostReason: text("lost_reason"),
+  notes: text("notes"),
+  catalogItemId: uuid("catalog_item_id").references(() => studioCatalog.id),
+  convertedProjectId: uuid("converted_project_id").references(() => studioProjects.id),
+  consultationEventId: uuid("consultation_event_id").references(() => studioCalendarEvents.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const studioDeliverables = pgTable("studio_deliverables", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id),
+  kind: text("kind").notNull(),
+  title: text("title").notNull(),
+  url: text("url"),
+  storageLocation: text("storage_location"),
+  status: text("status").default("pending").notNull(),
+  dueDate: timestamp("due_date"),
+  deliveredAt: timestamp("delivered_at"),
+  confirmedAt: timestamp("confirmed_at"),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const studioInstallments = pgTable("studio_installments", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  contractId: uuid("contract_id").notNull().references(() => studioContracts.id),
+  title: text("title").notNull(),
+  amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+  dueDate: timestamp("due_date").notNull(),
+  position: integer("position").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+export const studioInstallmentAllocations = pgTable("studio_installment_allocations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  installmentId: uuid("installment_id").notNull().references(() => studioInstallments.id),
+  studioPaymentId: uuid("studio_payment_id").notNull().references(() => studioProjectPayments.id),
+  amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (t) => [uniqueIndex("uq_studio_installment_payment").on(t.installmentId, t.studioPaymentId)]);

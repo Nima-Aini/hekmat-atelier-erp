@@ -1,19 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import {
   listRentalEquipment,
   createRentalEquipment,
 } from "@/services/studio/equipmentService";
+import { addRentalToProject } from "@/services/studio/projectService";
+import { requireStudioGlobalAccess, requireStudioProjectAccess } from "@/services/studio/access";
 
 export async function GET(req: NextRequest) {
   try {
-    await requirePermission("studio.view");
     const { searchParams } = new URL(req.url);
 
     const search = searchParams.get("search") || undefined;
     const status = searchParams.get("status") || undefined;
     const studioProjectId = searchParams.get("studioProjectId") || undefined;
+    if (studioProjectId) await requireStudioProjectAccess(studioProjectId, "studio.finance.view");
+    else await requireStudioGlobalAccess("studio.finance.view");
     const page = searchParams.get("page") ? Number(searchParams.get("page")) : undefined;
     const pageSize = searchParams.get("pageSize") ? Number(searchParams.get("pageSize")) : undefined;
 
@@ -33,10 +35,15 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requirePermission("studio.equipment.manage");
     const body = await req.json();
-
-    const created = await createRentalEquipment(body);
+    let created;
+    if (body.studioProjectId) {
+      const { actor: context } = await requireStudioProjectAccess(body.studioProjectId, "studio.finance.manage");
+      created = await addRentalToProject(body.studioProjectId, { ...body, idempotencyKey: req.headers.get("idempotency-key") || body.idempotencyKey, actorId: context.employeeId, authorName: context.employeeName });
+    } else {
+      await requireStudioGlobalAccess("studio.equipment.manage");
+      created = await createRentalEquipment(body);
+    }
     return NextResponse.json({ success: true, rental: created }, { status: 201 });
   } catch (error) {
     return apiError(error, "ثبت تجهیز اجاره‌ای جدید");

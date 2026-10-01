@@ -1,8 +1,11 @@
 "use client";
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Calendar, ChevronLeft, ChevronRight, X } from "lucide-react";
 import {
   getJalaliMonthLength,
+  getBusinessWeekday,
+  toBusinessGregorianDateString,
   gregorianToJalali,
   getJalaliPresetRange,
   jalaliToGregorian,
@@ -20,6 +23,10 @@ interface Props {
   required?: boolean;
   disabled?: boolean;
   className?: string;
+  onValidityChange?: (valid: boolean) => void;
+  trigger?: React.ReactNode;
+  triggerLabel?: string;
+  onOpenChange?: (open: boolean) => void;
 }
 
 export const JalaliDatePicker: React.FC<Props> = ({
@@ -30,6 +37,10 @@ export const JalaliDatePicker: React.FC<Props> = ({
   required,
   disabled,
   className = "",
+  onValidityChange,
+  trigger,
+  triggerLabel,
+  onOpenChange,
 }) => {
   const toJalaliStr = (v: string | number | Date | null | undefined): string => {
     if (!v) return "";
@@ -46,6 +57,9 @@ export const JalaliDatePicker: React.FC<Props> = ({
   const initialView = value ? gregorianToJalali(new Date(value as any)) : gregorianToJalali(new Date());
   const [view, setView] = useState({ year: initialView.year, month: initialView.month });
   const rootRef = useRef<HTMLDivElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
+  const [popupStyle, setPopupStyle] = useState<React.CSSProperties>({});
+  const triggerMode = Boolean(trigger);
 
   useEffect(() => {
     setText(toJalaliStr(valueKey));
@@ -56,27 +70,60 @@ export const JalaliDatePicker: React.FC<Props> = ({
   }, [valueKey]);
 
   useEffect(() => {
-    const closeOnOutsideClick = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    const closeOnOutsideClick = (event: MouseEvent | FocusEvent) => {
+      if (!rootRef.current?.contains(event.target as Node) && !popupRef.current?.contains(event.target as Node)) setOpen(false);
     };
     document.addEventListener("mousedown", closeOnOutsideClick);
-    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("focusin", closeOnOutsideClick);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("focusin", closeOnOutsideClick);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault(); setOpen(false);
+        if (triggerMode) rootRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      }
+    };
+    const place = () => {
+      const rect = rootRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(320, window.innerWidth - 24);
+      const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.right - width));
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const height = Math.min(390, window.innerHeight - 24);
+      const top = Math.max(12, Math.min(window.innerHeight - height - 12, spaceBelow >= height ? rect.bottom + 8 : rect.top - height - 8));
+      setPopupStyle({ position: "fixed", width, left, top, maxHeight: "calc(100dvh - 24px)", overflowY: "auto" });
+    };
+    place();
+    if (triggerMode) popupRef.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.focus();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    document.addEventListener("keydown", escape);
+    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); document.removeEventListener("keydown", escape); };
+  }, [open, triggerMode]);
 
   const handleChange = (val: string) => {
     const latin = toLatinDigits(val);
     setText(latin);
     if (!latin.trim()) {
+      onValidityChange?.(false);
       setError("");
       onChange(null, "");
       return;
     }
     const parsed = parseJalaliString(latin);
     if (!parsed || isNaN(parsed.getTime())) {
+      onValidityChange?.(false);
       setError("فرمت تاریخ نامعتبر است. مثال: 1404/06/08");
       return;
     }
     setError("");
+    onValidityChange?.(true);
     onChange(parsed, latin);
   };
 
@@ -89,6 +136,7 @@ export const JalaliDatePicker: React.FC<Props> = ({
     onChange(jalaliToGregorian(j), str);
     setView({ year: j.year, month: j.month });
     setOpen(false);
+    if (trigger) rootRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
   };
 
   const selectDay = (day: number) => {
@@ -99,6 +147,7 @@ export const JalaliDatePicker: React.FC<Props> = ({
     setError("");
     setOpen(false);
     onChange(date, str);
+    if (trigger) rootRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
   };
 
   const moveMonth = (amount: number) => {
@@ -112,20 +161,20 @@ export const JalaliDatePicker: React.FC<Props> = ({
   const weekDays = ["ش", "ی", "د", "س", "چ", "پ", "ج"];
   const selected = parseJalaliString(text) ? text.split(/[/-]/).map(Number) : [];
   const firstGregorianDay = jalaliToGregorian({ ...view, day: 1 });
-  const leadingEmptyDays = (firstGregorianDay.getUTCDay() + 1) % 7;
+  const leadingEmptyDays = (getBusinessWeekday(firstGregorianDay) + 1) % 7;
   const daysInMonth = getJalaliMonthLength(view.year, view.month);
   const today = gregorianToJalali(new Date());
 
   return (
     <div ref={rootRef} className={`relative flex min-w-0 flex-col gap-1 ${className}`}>
       {label && (
-        <label className="text-xs font-medium text-slate-300">
+        <label className="text-xs font-medium text-zinc-300">
           {label} {required && <span className="text-rose-400">*</span>}
         </label>
       )}
-      <div className="relative flex min-w-0 items-center gap-1">
+      {trigger ? <button type="button" aria-label={triggerLabel} aria-haspopup="dialog" aria-expanded={open} disabled={disabled} onClick={() => { setOpen(!open); onOpenChange?.(!open); }} className="overview-secondary-surface flex h-10 max-w-full cursor-pointer items-center gap-2 rounded-xl border px-3 text-right transition hover:bg-zinc-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600/60">{trigger}</button> : <div className="relative flex min-w-0 items-center gap-1">
         <div className="relative flex-1">
-          <button type="button" onClick={() => !disabled && setOpen((current) => !current)} disabled={disabled} aria-label="باز کردن تقویم شمسی" className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-slate-400 hover:bg-slate-700 hover:text-white disabled:pointer-events-none">
+          <button type="button" onClick={() => !disabled && setOpen((current) => !current)} disabled={disabled} aria-label="باز کردن تقویم شمسی" className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-lg p-1 text-zinc-400 hover:bg-red-950 hover:text-white disabled:pointer-events-none">
             <Calendar className="h-4 w-4" />
           </button>
           <input
@@ -136,17 +185,17 @@ export const JalaliDatePicker: React.FC<Props> = ({
             onFocus={() => !disabled && setOpen(true)}
             placeholder={placeholder}
             disabled={disabled}
-            className={`w-full min-w-0 rounded-xl border bg-slate-900 py-2 pr-8 pl-8 text-base text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 sm:text-sm ${
-              error ? "border-rose-500/50" : "border-slate-700"
+            className={`w-full min-w-0 rounded-xl border bg-[#09090b] py-2 pr-8 pl-8 text-base text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-red-700/40 sm:text-sm ${
+              error ? "border-red-500/60" : "border-zinc-800"
             }`}
           />
           {text && !disabled && (
             <button
               type="button"
               onClick={() => handleChange("")}
-              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full p-0.5 hover:bg-slate-700"
+              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full p-0.5 hover:bg-red-950"
             >
-              <X className="h-3.5 w-3.5 text-slate-400" />
+              <X className="h-3.5 w-3.5 text-zinc-400" />
             </button>
           )}
         </div>
@@ -154,17 +203,17 @@ export const JalaliDatePicker: React.FC<Props> = ({
           type="button"
           onClick={handleToday}
           disabled={disabled}
-          className="shrink-0 rounded-xl border border-slate-700 bg-slate-800 px-2.5 py-2 text-xs font-medium text-slate-300 hover:bg-slate-700 disabled:opacity-50"
+          className="shrink-0 rounded-xl border border-zinc-800 bg-zinc-950 px-2.5 py-2 text-xs font-medium text-zinc-300 hover:border-red-900 hover:bg-red-950/40 disabled:opacity-50"
         >
           امروز
         </button>
-      </div>
-      {open && !disabled && (
-        <div dir="rtl" role="dialog" aria-label="انتخاب تاریخ شمسی" className="absolute right-0 top-full z-[120] mt-2 w-[min(calc(100vw-2rem),20rem)] rounded-2xl border border-slate-700 bg-slate-950 p-3 text-white shadow-2xl shadow-black/60">
+      </div>}
+      {open && !disabled && typeof document !== "undefined" && createPortal(
+        <div ref={popupRef} data-jalali-calendar dir="rtl" role="dialog" aria-label="انتخاب تاریخ شمسی" style={popupStyle} className="z-[140] rounded-2xl border border-red-950 bg-[#09090b] p-3 text-white shadow-2xl shadow-red-950/30">
           <div className="mb-3 flex items-center justify-between">
-            <button type="button" onClick={() => moveMonth(1)} aria-label="ماه بعد" className="rounded-lg p-2 hover:bg-slate-800"><ChevronRight className="h-4 w-4" /></button>
+            <button type="button" onClick={() => moveMonth(1)} aria-label="ماه بعد" className="rounded-lg p-2 hover:bg-red-950"><ChevronRight className="h-4 w-4" /></button>
             <strong className="text-sm">{monthNames[view.month - 1]} {view.year.toLocaleString("fa-IR", { useGrouping: false })}</strong>
-            <button type="button" onClick={() => moveMonth(-1)} aria-label="ماه قبل" className="rounded-lg p-2 hover:bg-slate-800"><ChevronLeft className="h-4 w-4" /></button>
+            <button type="button" onClick={() => moveMonth(-1)} aria-label="ماه قبل" className="rounded-lg p-2 hover:bg-red-950"><ChevronLeft className="h-4 w-4" /></button>
           </div>
           <div className="grid grid-cols-7 gap-1 text-center text-[11px] text-slate-500">
             {weekDays.map((day) => <span key={day} className="py-1">{day}</span>)}
@@ -172,22 +221,22 @@ export const JalaliDatePicker: React.FC<Props> = ({
             {Array.from({ length: daysInMonth }, (_, index) => index + 1).map((day) => {
               const isSelected = selected[0] === view.year && selected[1] === view.month && selected[2] === day;
               const isToday = today.year === view.year && today.month === view.month && today.day === day;
-              return <button key={day} type="button" onClick={() => selectDay(day)} aria-pressed={isSelected} className={`aspect-square rounded-lg text-xs transition ${isSelected ? "bg-blue-600 font-bold text-white" : isToday ? "border border-cyan-500/60 text-cyan-300" : "text-slate-200 hover:bg-slate-800"}`}>{day.toLocaleString("fa-IR")}</button>;
+              return <button key={day} type="button" onClick={() => selectDay(day)} aria-pressed={isSelected} className={`aspect-square rounded-lg text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 ${isSelected ? "bg-red-700 font-bold text-white" : isToday ? "border border-red-500/70 text-red-300" : "text-zinc-200 hover:bg-zinc-800"}`}>{day.toLocaleString("fa-IR")}</button>;
             })}
           </div>
           <div className="mt-3 flex items-center justify-between border-t border-slate-800 pt-2">
-            <button type="button" onClick={() => { handleChange(""); setOpen(false); }} className="rounded-lg px-2 py-1.5 text-xs text-rose-300 hover:bg-rose-950/40">پاک کردن</button>
-            <button type="button" onClick={handleToday} className="rounded-lg bg-slate-800 px-3 py-1.5 text-xs text-cyan-300 hover:bg-slate-700">امروز</button>
+            {!trigger && <button type="button" onClick={() => { handleChange(""); setOpen(false); }} className="rounded-lg px-2 py-1.5 text-xs text-rose-300 hover:bg-rose-950/40">پاک کردن</button>}
+            <button type="button" onClick={handleToday} className={`rounded-lg px-3 py-1.5 text-xs ${trigger ? "mr-auto bg-zinc-900 text-red-300 hover:bg-red-950" : "bg-slate-800 text-cyan-300 hover:bg-slate-700"}`}>امروز</button>
           </div>
-        </div>
+        </div>, document.body
       )}
-      {error ? (
+      {!trigger && (error ? (
         <span className="text-[11px] text-rose-400">{error}</span>
       ) : text ? (
         <span className="text-[11px] text-slate-500">
-          معادل میلادی: {(() => { const p = parseJalaliString(text); return p ? p.toISOString().slice(0,10) : "—"; })()}
+          معادل میلادی: {(() => { const p = parseJalaliString(text); return p ? toBusinessGregorianDateString(p) : "—"; })()}
         </span>
-      ) : null}
+      ) : null)}
     </div>
   );
 };
@@ -223,14 +272,14 @@ export const JalaliDateRangePicker: React.FC<{
   };
 
   return (
-    <div className="space-y-3 rounded-2xl border border-slate-800 bg-slate-900/40 p-4">
+    <div className="space-y-3 rounded-2xl border border-zinc-800 bg-black/30 p-4">
       <div className="flex flex-wrap gap-1.5">
         {presets.map((p) => (
           <button
             key={p.key}
             type="button"
             onClick={() => applyPreset(p.key)}
-            className="rounded-full border border-slate-700 bg-slate-800 px-3 py-1 text-xs text-slate-300 hover:bg-slate-700"
+            className="rounded-full border border-zinc-800 bg-zinc-950 px-3 py-1 text-xs text-zinc-300 hover:border-red-900 hover:bg-red-950/40"
           >
             {p.label}
           </button>
@@ -241,7 +290,7 @@ export const JalaliDateRangePicker: React.FC<{
         <JalaliDatePicker value={end as any} onChange={(d) => { setEnd(d); onChange(start, d); }} label="تا تاریخ" />
       </div>
       {start && end && (
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-zinc-400">
           بازه انتخابی: {toJalaliDate(start)} تا {toJalaliDate(end)}
         </p>
       )}

@@ -4,9 +4,9 @@ import { apiError } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { invoices, invoiceItems, customers, projects, employees, payments, accounts } from "@/db/schema";
-import { asc, count, desc, eq, and, ilike, or, sql } from "drizzle-orm";
+import { asc, count, desc, eq, and, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { createInvoice, reverseInvoice } from "@/services/invoice";
-import { getEmployeeContext, requirePermission } from "@/services/access";
+import { getEmployeeContext, getScopedProjectIds, requirePermission } from "@/services/access";
 
 export async function GET(req: Request) {
   try {
@@ -41,6 +41,8 @@ export async function GET(req: Request) {
 
     const manager = context.permissions.has("*") || ["admin", "manager"].includes(context.roleCode || "") || context.permissions.has("invoices.manage");
     const conditions = [];
+    const allowed = await getScopedProjectIds(["invoices.view"]);
+    if (allowed !== null) conditions.push(or(isNull(invoices.projectId), allowed.length ? inArray(invoices.projectId, allowed) : sql`false`)!);
     if (!manager) conditions.push(eq(invoices.employeeId, context.employeeId));
     if (projectId) conditions.push(eq(invoices.projectId, projectId));
     if (customerId) conditions.push(eq(invoices.customerId, customerId));

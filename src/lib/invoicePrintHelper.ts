@@ -72,7 +72,7 @@ export function generateInvoiceHtml(data: PrintableInvoiceData): string {
   const settlementLine = invoice.settlementDate ? `<div style="margin-top: 3px;"><span style="color: #475569;">تاریخ تسویه: </span><strong style="color: #0f172a;">${toJalaliDate(invoice.settlementDate)}</strong></div>` : "";
   const buyerName = escapeHtml(invoice.customerStore || invoice.customerName || "—");
 
-  const sellerName = escapeHtml(sellerInfo?.businessName || "سازمان و صنایع بازرگانی حکمت آکما");
+  const sellerName = escapeHtml(sellerInfo?.businessName || "حکمت آتلیه");
   const economicCode = escapeHtml(sellerInfo?.economicCode || "");
   const nationalId = escapeHtml(sellerInfo?.nationalId || "");
   const regNumber = escapeHtml(sellerInfo?.registrationNumber || "");

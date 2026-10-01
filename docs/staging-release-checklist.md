@@ -1,0 +1,21 @@
+# Staging Release Checklist
+
+- [ ] CI green
+- [ ] Migrations green
+- [ ] UTC tests green
+- [ ] Asia/Tehran tests green
+- [ ] Studio E2E flow green
+- [ ] Financial reconciliation difference is zero
+- [ ] Backup creation green
+- [ ] Backup checksum green
+- [ ] Restore drill green
+- [ ] Readiness green
+- [ ] Exact deployed SHA verified
+- [ ] Staging uses a dedicated PostgreSQL database
+- [ ] Backup directory exists with restricted permissions
+- [ ] PostgreSQL server/client compatibility check green
+- [ ] Staging backup created and listed through authenticated API
+- [ ] Staging restore into a secondary disposable database green
+- [ ] Server path, PM2 name and port are dedicated to Atelier
+- [ ] Neshan key rotated externally
+- [ ] Production/staging secrets are not committed

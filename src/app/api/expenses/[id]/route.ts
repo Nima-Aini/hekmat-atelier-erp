@@ -1,9 +1,9 @@
-import { assertUuid } from "@/lib/apiError";
+import { ApiError, assertUuid } from "@/lib/apiError";
 import { apiError } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { expenses, accounts, projects } from "@/db/schema";
-import { eq, sql } from "drizzle-orm";
+import { expenses, accounts, atelierExpenseCategories, projects } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { logAuditEvent } from "@/services/audit";
 import { requirePermission } from "@/services/access";
 
@@ -30,6 +30,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
     if (!expense) {
       return NextResponse.json({ success: false, error: "سند هزینه یافت نشد." }, { status: 404 });
     }
+    await requirePermission("expenses.view", expense.expense.projectId);
 
     return NextResponse.json({
       success: true,
@@ -51,95 +52,47 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     const { id } = await params;
     assertUuid(id);
     const body = await req.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) throw new ApiError(400, "اطلاعات هزینه نامعتبر است.");
     const context = await requirePermission("expenses.edit");
-
     const updated = await db.transaction(async (tx) => {
-      const [existing] = await tx.select().from(expenses).where(eq(expenses.id, id)).limit(1);
-      if (!existing) {
-        throw new Error("سند هزینه یافت نشد.");
+    const [record] = await tx.select().from(expenses).where(eq(expenses.id, id)).for("update").limit(1);
+    if (!record) throw new ApiError(404, "سند هزینه یافت نشد.");
+    await requirePermission("expenses.edit", record.projectId);
+    if (body.projectId !== undefined && body.projectId !== null && body.projectId !== "") { assertUuid(body.projectId); await requirePermission("expenses.edit", body.projectId); }
+    if (record.status === "posted" || Number(record.paidAmount) > 0 || record.paymentId) throw new ApiError(409, "سند هزینه ثبت‌شده قابل ویرایش مستقیم نیست؛ اصلاح باید با سند برگشتی انجام شود.");
+
+    const newAmount = body.amount !== undefined ? Number(body.amount) : Number(record.amount);
+    if (newAmount <= 0 || !Number.isFinite(newAmount)) throw new ApiError(400, "مبلغ هزینه نامعتبر است.");
+    const updatePayload: Partial<typeof expenses.$inferInsert> = {};
+      if (body.title !== undefined && (typeof body.title !== "string" || !body.title.trim())) throw new ApiError(400, "عنوان هزینه الزامی است.");
+      if (body.category !== undefined && typeof body.category !== "string") throw new ApiError(400, "دسته هزینه نامعتبر است.");
+      if (body.category !== undefined) {
+        const [category] = await tx.select().from(atelierExpenseCategories).where(eq(atelierExpenseCategories.code, body.category)).limit(1);
+        if (!category || (!category.active && category.code !== record.category)) throw new ApiError(400, "دسته هزینه فعال و معتبر انتخاب کنید.");
       }
-
-      const oldAmount = Number(existing.amount) || 0;
-      const newAmount = body.amount !== undefined ? Number(body.amount) : oldAmount;
-      if (newAmount <= 0 || !isFinite(newAmount)) {
-        throw new Error("مبلغ هزینه نامعتبر است.");
-      }
-
-      const oldAccountId = existing.accountId;
-      const newAccountId = body.accountId !== undefined ? (body.accountId || null) : oldAccountId;
-
-      if (oldAccountId === newAccountId && newAccountId) {
-        const diff = newAmount - oldAmount;
-        if (diff > 0) {
-          // Increasing expense amount: check if account has enough balance
-          const [acc] = await tx.select().from(accounts).where(eq(accounts.id, newAccountId)).for("update").limit(1);
-          if (!acc) throw new Error("حساب مالی یافت نشد.");
-          const currentBalance = Number(acc.balance) || 0;
-          if (currentBalance < diff) {
-            throw new Error(
-              `موجودی حساب «${acc.name}» کافی نیست. موجودی فعلی: ${currentBalance.toLocaleString("fa-IR")} تومان، افزایش مورد نیاز: ${diff.toLocaleString("fa-IR")} تومان.`
-            );
-          }
-        }
-        // For diff < 0 (decreasing expense), balance increases so no check needed
-        // For diff === 0, no change needed
-        if (diff !== 0) {
-          await tx
-            .update(accounts)
-            .set({ balance: sql`${accounts.balance} - ${diff}` })
-            .where(eq(accounts.id, newAccountId));
-        }
-      } else {
-        if (oldAccountId) {
-          // Use FOR UPDATE to prevent race conditions
-          const [oldAcc] = await tx.select().from(accounts).where(eq(accounts.id, oldAccountId)).for("update").limit(1);
-          if (oldAcc) {
-            await tx
-              .update(accounts)
-              .set({ balance: sql`${accounts.balance} + ${oldAmount}` })
-              .where(eq(accounts.id, oldAccountId));
-          }
-        }
-        if (newAccountId) {
-          const [newAcc] = await tx.select().from(accounts).where(eq(accounts.id, newAccountId)).for("update").limit(1);
-          if (!newAcc) throw new Error("حساب جدید یافت نشد.");
-          const newBalance = Number(newAcc.balance) || 0;
-          if (newBalance < newAmount) {
-            throw new Error(
-              `موجودی حساب جدید «${newAcc.name}» کافی نیست. موجودی فعلی: ${newBalance.toLocaleString("fa-IR")} تومان، مبلغ هزینه: ${newAmount.toLocaleString("fa-IR")} تومان.`
-            );
-          }
-          await tx
-            .update(accounts)
-            .set({ balance: sql`${accounts.balance} - ${newAmount}` })
-            .where(eq(accounts.id, newAccountId));
-        }
-      }
-
-      const updatePayload: Record<string, any> = { updatedAt: new Date() };
+      if (body.description != null && typeof body.description !== "string") throw new ApiError(400, "توضیحات هزینه نامعتبر است.");
       if (body.title !== undefined) updatePayload.title = body.title.trim();
       if (body.category !== undefined) updatePayload.category = body.category;
       if (body.amount !== undefined) updatePayload.amount = newAmount.toString();
       if (body.projectId !== undefined) updatePayload.projectId = body.projectId || null;
-      if (body.accountId !== undefined) updatePayload.accountId = newAccountId;
       if (body.description !== undefined) updatePayload.description = body.description || null;
       if (body.expenseDate !== undefined) updatePayload.expenseDate = new Date(body.expenseDate);
-
-      const [res] = await tx.update(expenses).set(updatePayload).where(eq(expenses.id, id)).returning();
-      return { updatedRecord: res, oldAmount, newAmount };
-    });
+    if (updatePayload.expenseDate && !Number.isFinite(+updatePayload.expenseDate)) throw new ApiError(400, "تاریخ هزینه نامعتبر است.");
+    if (!Object.keys(updatePayload).length) throw new ApiError(400, "تغییری برای ثبت ارسال نشده است.");
+    const [updated] = await tx.update(expenses).set(updatePayload).where(eq(expenses.id, id)).returning();
 
     await logAuditEvent("UPDATE", "expense", id, {
-      title: updated.updatedRecord.title,
-      oldAmount: updated.oldAmount,
-      newAmount: updated.newAmount,
-      accountId: updated.updatedRecord.accountId,
-    }, { userId: context.employeeId, userName: context.roleCode });
+      title: updated.title,
+      oldAmount: record.amount,
+      newAmount,
+    }, { userId: context.employeeId, employeeId: context.employeeId, userName: context.employeeName }, tx);
+    return updated;
+    });
 
     return NextResponse.json({
       success: true,
-      expense: updated.updatedRecord,
-      message: `سند هزینه «${updated.updatedRecord.title}» با موفقیت ویرایش شد.`,
+      expense: updated,
+      message: `پیش‌نویس هزینه «${updated.title}» ویرایش شد.`,
     });
   } catch (error: any) {
     const status = error.message?.includes("دسترسی") ? 403 : error.message?.includes("موجودی") ? 400 : 500;
@@ -153,34 +106,16 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     assertUuid(id);
     const context = await requirePermission("expenses.delete");
 
-    const deleted = await db.transaction(async (tx) => {
-      const [existing] = await tx.select().from(expenses).where(eq(expenses.id, id)).limit(1);
-      if (!existing) {
-        throw new Error("سند هزینه یافت نشد.");
-      }
-
-      if (existing.accountId) {
-        const amt = Number(existing.amount) || 0;
-        await tx
-          .update(accounts)
-          .set({ balance: sql`${accounts.balance} + ${amt}` })
-          .where(eq(accounts.id, existing.accountId));
-      }
-
-      await tx.delete(expenses).where(eq(expenses.id, id));
-      return existing;
+    const existing = await db.transaction(async (tx) => {
+    const [existing] = await tx.select().from(expenses).where(eq(expenses.id, id)).for("update").limit(1);
+    if (!existing) throw new ApiError(404, "سند هزینه یافت نشد.");
+    await requirePermission("expenses.delete", existing.projectId);
+    if (existing.status === "posted" || Number(existing.paidAmount) > 0 || existing.paymentId) throw new ApiError(409, "سند هزینه ثبت‌شده قابل حذف نیست؛ برای اصلاح، سند برگشتی ثبت کنید.");
+    await tx.delete(expenses).where(eq(expenses.id, id));
+    await logAuditEvent("DELETE", "expense", id, { title: existing.title, amount: existing.amount }, { userId: context.employeeId, employeeId: context.employeeId, userName: context.employeeName }, tx);
+    return existing;
     });
-
-    await logAuditEvent("DELETE", "expense", id, {
-      title: deleted.title,
-      amount: deleted.amount,
-      accountId: deleted.accountId,
-    }, { userId: context.employeeId, userName: context.roleCode });
-
-    return NextResponse.json({
-      success: true,
-      message: `سند هزینه «${deleted.title}» با موفقیت ابطال شد و مبلغ آن به موجودی حساب بازگردانده گردید.`,
-    });
+    return NextResponse.json({ success: true, message: `پیش‌نویس هزینه «${existing.title}» حذف شد.` });
   } catch (error: any) {
     const status = error.message?.includes("دسترسی") ? 403 : 500;
     return apiError(error);

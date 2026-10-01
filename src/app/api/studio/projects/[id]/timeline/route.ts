@@ -1,18 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import {
   getProjectTimeline,
   logProjectTimeline,
 } from "@/services/studio/projectService";
+import { requireStudioProjectAccess } from "@/services/studio/access";
+import { logAuditEvent } from "@/services/audit";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requirePermission("studio.view");
     const { id } = await params;
+    await requireStudioProjectAccess(id, "studio.view");
 
     const timeline = await getProjectTimeline(id);
     return NextResponse.json({ success: true, timeline });
@@ -26,17 +27,19 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requirePermission("studio.projects.manage");
     const { id } = await params;
+    const { actor: context } = await requireStudioProjectAccess(id, "studio.projects.manage");
     const body = await req.json();
 
     const log = await logProjectTimeline(id, {
       actionType: body.actionType || "NOTE_ADDED",
       title: body.title || "یادداشت جدید در تایم‌لاین",
       description: body.description,
-      authorName: body.authorName || "مدیر استودیو",
+      authorName: context.employeeName,
+      actorEmployeeId: context.employeeId,
       metadata: body.metadata,
     });
+    await logAuditEvent("STUDIO_TIMELINE_ADDED", "studio_project", id, { timelineId: log.id, actionType: log.actionType }, { userId: context.employeeId, employeeId: context.employeeId, userName: context.employeeName });
 
     return NextResponse.json({ success: true, log }, { status: 201 });
   } catch (error) {

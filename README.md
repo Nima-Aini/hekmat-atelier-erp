@@ -1,47 +1,67 @@
-# سیستم مدیریت یکپارچه حکمت آکما
+# Hekmat Atelier ERP
 
-## راه‌اندازی روی Render.com (رایگان)
+ERP آتلیه حکمت بر پایه هسته مالی حکمت. صورتحساب، دریافت، هزینه و مانده حساب در هسته ERP ثبت می‌شوند و رکوردهای Studio فقط اطلاعات دامنه و پیوند مالی را نگه می‌دارند.
 
-### مرحله ۱: دیتابیس رایگان بساز
+## راه‌اندازی توسعه
 
-۱. به **neon.tech** برو → Sign Up → Create Project (اسم: akmamath)
-۲. بعد از ساخت، روی **Connection string** کلیک کن
-۳. حالت **Pooled connection** رو انتخاب کن → کپی کن
+```bash
+npm ci
+cp .env.example .env
+npm run dev
+```
 
-### مرحله ۲: کد رو آپلود کن
+برای PostgreSQL، `DB_DRIVER=postgres` و `DATABASE_URL` را تنظیم کنید. PGlite فقط در توسعه/تست و تنها با `DB_DRIVER=pglite` فعال می‌شود. در production فقط PostgreSQL مجاز است و نبودن یا نامعتبر بودن `DATABASE_URL` باعث توقف startup/readiness می‌شود.
 
-۱. به **github.com** برو → New Repository → اسم: akmamath
-۲. فایل‌های داخل این ZIP رو آپلود کن (Drag & Drop)
-۳. Commit changes رو بزن
+## ایجاد مدیر اولیه
 
-### مرحله ۳: روی Render.com Deploy کن
+در production، اگر هیچ مدیر اولیه‌ای وجود ندارد، هر دو متغیر زیر الزامی‌اند:
 
-۱. به **render.com** برو → Sign Up → New Web Service
-۲. Connect to GitHub → Repo: akmamath رو انتخاب کن
-۳. تنظیمات:
-   - **Environment:** Node
-   - **Build Command:** `npm install && npm run build`
-   - **Start Command:** `npm run start`
-4. در بخش **Environment Variables** اضافه کن:
-   - Key: `DATABASE_URL` → Value: اون connection string که از Neon کپی کردی
-5. Create Web Service رو بزن
+- `INITIAL_ADMIN_USERNAME`
+- `INITIAL_ADMIN_PASSWORD` (حداقل ۱۲ نویسه)
 
-### بعد از Deploy
+هیچ نام کاربری یا رمز پیش‌فرضی وجود ندارد. bootstrap توسعه فقط خارج از production و با `ALLOW_DEV_ADMIN_BOOTSTRAP=true` مجاز است و همچنان credentials باید صریحاً تنظیم شوند.
 
-سایت بالا میاد و **به صورت خودکار** جداول دیتابیس رو می‌سازه و داده‌های نمونه اضافه می‌کنه.
+## سرویس نقشه نشان
 
-## متغیرهای محیطی
+کلید فقط از `NESHAN_API_KEY` خوانده می‌شود. کلید در frontend یا log برگردانده نمی‌شود. چون کلید قبلاً در source قرار داشته، باید کلید نشان به‌صورت دستی rotate شود.
 
-| متغیر | توضیح | اجباری |
-|-------|-------|--------|
-| `DATABASE_URL` | آدرس Neon PostgreSQL | بله |
-| `OPENAI_API_KEY` | کلید AI (اختیاری) | خیر |
+## Backup و Restore
 
+Backup با `pg_dump --format=custom`، checksum نوع SHA-256 و metadata مستقل ایجاد می‌شود. فایل داخل public قرار نمی‌گیرد. Restore قدیمی مبتنی بر JSON/TRUNCATE کاملاً حذف شده است. Restore برنامه فقط به دیتابیس PostgreSQL خالی و مجزا انجام می‌شود و پس از بررسی migration و integrity، مقصد را برای switch دستی آماده می‌کند.
 
-## Admin login (first deploy)
+```bash
+npm run backup:create
+npm run integrity:check
+```
 
-Set `INITIAL_ADMIN_USERNAME` and `INITIAL_ADMIN_PASSWORD` in `.env`. Defaults for a test environment are `akmaadmin` / `AkmaAdmin@2026`; change them before production.
+راهنمای عملیاتی کامل در `docs/operations-backup-restore.md` قرار دارد.
 
-## Google Maps
+## Quality gates
 
-Set `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`. Enable Maps JavaScript API and Places API/Places Library in Google Cloud.
+```bash
+npm run typecheck
+npm run lint
+npm test
+npm run build
+```
+
+## GitHub Actions deployment
+
+Workflow فقط SHA دقیق تأییدشده در job آزمون را deploy می‌کند. تا وقتی تمام تنظیمات زیر در GitHub Environment/Repository تعریف نشده باشند، deploy با پیام واضح متوقف می‌شود و مقدار production حدس زده نمی‌شود.
+
+Repository variables:
+
+- `DEPLOY_PATH`
+- `PM2_APP_NAME`
+- `APP_PORT`
+- `READINESS_URL` (must target `/api/readiness`, not the liveness endpoint)
+- `DEPLOY_REPOSITORY_URL` — باید دقیقاً `https://github.com/Nima-Aini/hekmat-atelier-erp.git` باشد
+
+Environment secrets:
+
+- `SSH_HOST`
+- `SSH_USER`
+- `SSH_PRIVATE_KEY`
+- `SSH_PORT` (اختیاری؛ پیش‌فرض 22)
+
+زنجیره اجباری workflow: install → typecheck → tests → lint → production build → deploy exact SHA → health check.

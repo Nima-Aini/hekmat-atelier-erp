@@ -32,6 +32,7 @@ import {
   Radio,
 } from "lucide-react";
 import { formatMoney, toJalaliDate } from "@/lib/dateUtils";
+import { EquipmentReservationsPanel } from "@/components/studio/equipment/EquipmentReservationsPanel";
 
 const CATEGORIES = [
   { id: "all", label: "همه تجهیزات", icon: Layers },
@@ -53,7 +54,7 @@ const STATUSES = [
 
 export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string) => void }) {
   // Main Tab: "studio_equipment" vs "rental_equipment"
-  const [activeMainTab, setActiveMainTab] = useState<"inventory" | "rentals">("inventory");
+  const [activeMainTab, setActiveMainTab] = useState<"inventory" | "reservations" | "rentals">("inventory");
 
   // Equipment List State
   const [equipmentList, setEquipmentList] = useState<any[]>([]);
@@ -91,6 +92,7 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
   const [showCreateRentalModal, setShowCreateRentalModal] = useState(false);
   const [editingRental, setEditingRental] = useState<any | null>(null);
   const [rentalForm, setRentalForm] = useState(() => ({
+    accountId: "",
     itemTitle: "",
     rentalCompany: "",
     rentalCost: "",
@@ -102,6 +104,7 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
     notes: "",
   }));
   const [savingRental, setSavingRental] = useState(false);
+  const [financialAccounts, setFinancialAccounts] = useState<any[]>([]);
 
   // Selected Equipment Detail modal
   const [selectedEquipDetail, setSelectedEquipDetail] = useState<any | null>(null);
@@ -155,6 +158,10 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
         if (d.success) setProjects(d.projects || []);
       })
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/accounts").then((r) => r.json()).then((d) => { if (d.success) setFinancialAccounts(d.accounts || []); }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -263,6 +270,7 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
         pickupDate: rentalForm.pickupDate,
         returnDate: rentalForm.returnDate,
         studioProjectId: rentalForm.studioProjectId || undefined,
+        accountId: rentalForm.accountId || undefined,
         status: rentalForm.status,
         notes: rentalForm.notes.trim() || undefined,
       };
@@ -274,7 +282,7 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
 
       const res = await fetch(url, {
         method,
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(payload),
       });
 
@@ -284,6 +292,7 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
         setEditingRental(null);
         setRentalForm({
           itemTitle: "",
+          accountId: "",
           rentalCompany: "",
           rentalCost: "",
           depositGuarantee: "چک ضمانت صیادی و کارت ملی",
@@ -405,11 +414,12 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
               <Plus className="w-4 h-4" />
               <span>ثبت تجهیز جدید</span>
             </button>
-          ) : (
+          ) : activeMainTab === "rentals" ? (
             <button
               onClick={() => {
                 setEditingRental(null);
                 setRentalForm({
+                  accountId: "",
                   itemTitle: "",
                   rentalCompany: "",
                   rentalCost: "",
@@ -427,7 +437,7 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
               <Plus className="w-4 h-4" />
               <span>ثبت تجهیز اجاره‌ای جدید (Rental)</span>
             </button>
-          )}
+          ) : null}
         </div>
       </div>
 
@@ -446,6 +456,14 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
           <span className="text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300">
             {equipmentList.length}
           </span>
+        </button>
+
+        <button
+          onClick={() => setActiveMainTab("reservations")}
+          className={`pb-3 text-sm font-bold border-b-2 flex items-center gap-2 transition ${activeMainTab === "reservations" ? "border-emerald-500 text-emerald-400" : "border-transparent text-slate-400 hover:text-slate-200"}`}
+        >
+          <CheckCircle2 className="w-4 h-4" />
+          <span>تحویل و عودت</span>
         </button>
 
         <button
@@ -679,6 +697,8 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
         </div>
       )}
 
+      {activeMainTab === "reservations" && <EquipmentReservationsPanel />}
+
       {/* ========================================================================= */}
       {/* SECTION 2: RENTAL EQUIPMENT (تجهیزات اجاره‌ای) */}
       {/* ========================================================================= */}
@@ -855,6 +875,7 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
                         onClick={() => {
                           setEditingRental(rent);
                           setRentalForm({
+                            accountId: rent.accountId || "",
                             itemTitle: rent.itemTitle,
                             rentalCompany: rent.rentalCompany,
                             rentalCost: String(rent.rentalCost),
@@ -922,6 +943,13 @@ export function StudioEquipmentView({ onNavigate }: { onNavigate?: (tab: string)
               </div>
 
               <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1 font-medium">حساب پرداخت (اختیاری)</label>
+                  <select value={rentalForm.accountId} onChange={(e) => setRentalForm({ ...rentalForm, accountId: e.target.value })} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white">
+                    <option value="">فقط ثبت هزینه تعهدی</option>
+                    {financialAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}
+                  </select>
+                </div>
                 <div>
                   <label className="block text-xs text-slate-400 mb-1 font-medium">دسته‌بندی تجهیز *</label>
                   <select

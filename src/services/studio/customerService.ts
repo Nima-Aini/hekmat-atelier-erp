@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import type { Transaction } from "@/services/product";
 import { db } from "@/db";
 import {
   studioCustomers,
@@ -5,7 +7,7 @@ import {
   studioProjects,
   studioContracts,
 } from "@/db/schema";
-import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
+import { and, desc, eq, exists, ilike, inArray, or, sql } from "drizzle-orm";
 import { ApiError, assertUuid, pageNumber } from "@/lib/apiError";
 
 export interface CreateStudioCustomerInput {
@@ -16,7 +18,7 @@ export interface CreateStudioCustomerInput {
   address?: string | null;
   socialMedia?: string | null;
   referrer?: string | null;
-  customerType?: "wedding" | "portrait" | "commercial" | "family" | "industrial" | "event" | "child" | "modeling";
+  customerType?: string;
   groomName?: string | null;
   brideName?: string | null;
   contactPersonRole?: "groom" | "bride" | "father" | "mother" | "manager" | "self" | "other";
@@ -51,6 +53,7 @@ export interface ListStudioCustomerFilter {
   vipLevel?: string;
   page?: number;
   pageSize?: number;
+  allowedCoreProjectIds?: string[] | null;
 }
 
 export async function listStudioCustomers(filter: ListStudioCustomerFilter) {
@@ -59,6 +62,11 @@ export async function listStudioCustomers(filter: ListStudioCustomerFilter) {
   const offset = (page - 1) * pageSize;
 
   const conditions = [];
+  if (filter.allowedCoreProjectIds !== undefined && filter.allowedCoreProjectIds !== null) {
+    conditions.push(filter.allowedCoreProjectIds.length
+      ? exists(db.select({ value: sql`1` }).from(studioProjects).where(and(eq(studioProjects.studioCustomerId, studioCustomers.id), inArray(studioProjects.projectId, filter.allowedCoreProjectIds))))
+      : sql`false`);
+  }
 
   if (filter.customerType && filter.customerType !== "all") {
     conditions.push(eq(studioCustomers.customerType, filter.customerType));
@@ -172,6 +180,7 @@ export async function getStudioCustomerById(id: string) {
   const projects = await db
     .select({
       id: studioProjects.id,
+      projectId: studioProjects.projectId,
       projectNumber: studioProjects.projectNumber,
       title: studioProjects.title,
       eventType: studioProjects.eventType,
@@ -190,7 +199,7 @@ export async function getStudioCustomerById(id: string) {
   };
 }
 
-export async function createStudioCustomer(input: CreateStudioCustomerInput) {
+export async function createStudioCustomer(input: CreateStudioCustomerInput, transaction?: Transaction, reuseExisting = false) {
   if (!input.name || !input.name.trim()) {
     throw new ApiError(400, "نام مشتری الزامی است.");
   }
@@ -203,7 +212,8 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput) {
     throw new ApiError(400, "فرمت شماره همراه معتبر نیست (مثال: 09121234567).");
   }
 
-  return db.transaction(async (tx) => {
+  const create = async (tx: Transaction) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${"atelier-client:" + cleanMobile}, 0))`);
     let baseCustomerId = input.customerId;
 
     if (baseCustomerId) {
@@ -222,7 +232,7 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput) {
         baseCustomerId = existingByMobile.id;
       } else {
         // Create new base customer
-        const code = `CUST-${Date.now().toString().slice(-6)}`;
+        const code = `CL-${crypto.randomUUID()}`;
         const [newCust] = await tx
           .insert(customers)
           .values({
@@ -232,6 +242,9 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput) {
             phone: input.phone?.trim() || null,
             address: input.address?.trim() || null,
             notes: input.notes?.trim() || null,
+            city: null,
+            paymentTermsDays: null,
+            creditLimit: null,
           })
           .returning();
         baseCustomerId = newCust.id;
@@ -240,12 +253,13 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput) {
 
     // Check if studio customer profile already exists for this customerId
     const [existingStudioCust] = await tx
-      .select({ id: studioCustomers.id })
+      .select()
       .from(studioCustomers)
       .where(eq(studioCustomers.customerId, baseCustomerId!))
       .limit(1);
 
     if (existingStudioCust) {
+      if (reuseExisting) return { ...existingStudioCust, name: input.name.trim(), mobile: cleanMobile };
       throw new ApiError(409, "پروفایل آتلیه برای این مشتری قبلاً ایجاد شده است.");
     }
 
@@ -258,9 +272,9 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput) {
         customerType: input.customerType || "wedding",
         groomName: input.groomName?.trim() || null,
         brideName: input.brideName?.trim() || null,
-        contactPersonRole: input.contactPersonRole || "groom",
+        contactPersonRole: input.contactPersonRole || null,
         anniversaryDate: annDate,
-        specialPreferences: input.specialPreferences || {},
+        specialPreferences: typeof input.specialPreferences === "string" ? input.specialPreferences.trim() || null : null,
         socialConsent: input.socialConsent !== undefined ? Boolean(input.socialConsent) : false,
         socialMedia: input.socialMedia?.trim() || null,
         referrer: input.referrer?.trim() || null,
@@ -276,7 +290,8 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput) {
       socialMedia: input.socialMedia?.trim() || null,
       referrer: input.referrer?.trim() || null,
     };
-  });
+  };
+  return transaction ? create(transaction) : db.transaction(create);
 }
 
 export async function updateStudioCustomer(id: string, input: UpdateStudioCustomerInput) {

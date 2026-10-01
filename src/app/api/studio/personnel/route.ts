@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/services/access";
+import { requireAnyPermission, requirePermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import {
   listStudioPersonnel,
@@ -8,7 +8,7 @@ import {
 
 export async function GET(req: NextRequest) {
   try {
-    await requirePermission("studio.view");
+    await requireAnyPermission(["studio.personnel.view", "studio.personnel.manage", "studio.planning.view", "studio.planning.manage", "studio.daily_visits.view", "studio.daily_visits.manage", "studio.view"]);
     const { searchParams } = new URL(req.url);
 
     const search = searchParams.get("search") || undefined;

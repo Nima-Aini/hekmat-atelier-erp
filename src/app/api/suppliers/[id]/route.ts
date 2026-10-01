@@ -18,7 +18,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     if (!body.name || !body.mobile) return NextResponse.json({ success: false, error: "نام و موبایل الزامی است." }, { status: 400 });
     const [updated] = await db.update(suppliers).set({
       code: body.code ?? before.code, name: body.name, contactPerson: body.contactPerson ?? null, mobile: body.mobile,
-      phone: body.phone ?? null, email: body.email ?? null, address: body.address ?? null, city: body.city ?? null, notes: body.notes ?? null, updatedAt: new Date(),
+      phone: body.phone ?? null, email: body.email ?? null, address: body.address ?? null, city: body.city ?? null,
+      partnerCategory: body.partnerCategory ?? null, notes: body.notes ?? null, updatedAt: new Date(),
     }).where(eq(suppliers.id, id)).returning();
     await logAuditEvent("UPDATE", "supplier", id, { before, after: updated });
     return NextResponse.json({ success: true, supplier: updated });
