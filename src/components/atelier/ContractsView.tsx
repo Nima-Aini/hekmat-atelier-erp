@@ -11,6 +11,7 @@ import {
   toJalaliDate,
 } from "@/lib/dateUtils";
 import { AtelierModal } from "./AtelierModal";
+import { ContractCancellationDialog } from "./ContractCancellationDialog";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 import { atelierConfirm, atelierToast } from "@/lib/atelierFeedback";
 
@@ -62,6 +63,15 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
   const [error, setError] = useState("");
   const [editing, setEditing] = useState<any | "new" | null>(null);
   const [printing, setPrinting] = useState<any | null>(null);
+  const [cancelling, setCancelling] = useState<any | null>(null);
+  const [permissions, setPermissions] = useState<string[]>([]);
+  useEffect(() => { fetch("/api/auth/employee-me").then(response => response.json()).then(body => setPermissions(body.navigationPermissions || body.permissions || [])).catch(() => undefined); }, []);
+  const hasPermission = (permission: string) => permissions.includes("*") || permissions.includes(permission);
+  const canCreate = hasPermission("studio.contract.create") || hasPermission("studio.contract.manage");
+  const canEdit = hasPermission("studio.contract.edit") || hasPermission("studio.contract.manage");
+  const canApprove = hasPermission("studio.contract.approve") || hasPermission("studio.contract.manage");
+  const canCancel = hasPermission("studio.contract.cancel") && hasPermission("studio.finance.view") && hasPermission("studio.finance.refund");
+  const canDeleteDraft = permissions.includes("*") || permissions.includes("studio.contract.delete_draft") || permissions.includes("studio.contract.manage");
   const [saving, setSaving] = useState(false);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState("date_desc");
@@ -141,10 +151,10 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
               ثبت، تأیید، ویرایش و چاپ قرارداد با اتصال مالی امن
             </p>
           </div>
-          <button onClick={() => setEditing("new")} className="atelier-button">
+          {canCreate && <button onClick={() => setEditing("new")} className="atelier-button">
             <FilePlus2 className="h-4 w-4" />
             قرارداد جدید
-          </button>
+          </button>}
         </div>
         <div className="inline-flex rounded-2xl border border-zinc-800 bg-zinc-950 p-1">
           <button
@@ -157,7 +167,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
             onClick={() => setStatus("pending")}
             className={`rounded-xl px-4 py-2 text-xs font-bold ${status === "pending" ? "bg-red-700 text-white" : "text-zinc-500"}`}
           >
-            قرارداد های در انتظار
+            پیش‌قراردادها
           </button>
         </div>
         <div className="atelier-panel grid gap-3 p-3 sm:grid-cols-[1fr_auto]">
@@ -172,7 +182,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
           <EmptyState
             text={
               status === "pending"
-                ? "قرارداد در انتظاری ثبت نشده است."
+                ? "پیش‌قراردادی ثبت نشده است."
                 : "قرارداد تاییدشده‌ای ثبت نشده است."
             }
           />
@@ -198,7 +208,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
                   <span
                     className={`rounded-full border px-2.5 py-1 text-[10px] ${contract.status === "signed" ? "border-emerald-900 bg-emerald-950/30 text-emerald-400" : "border-orange-900 bg-orange-950/30 text-orange-400"}`}
                   >
-                    {contract.status === "signed" ? "تایید شده" : "در انتظار"}
+                    {contract.status === "signed" ? "تایید شده" : "پیش‌قرارداد"}
                   </span>
                 </div>
                 <div className="mt-4 grid grid-cols-2 gap-3 rounded-xl bg-black/30 p-3 text-xs">
@@ -230,14 +240,15 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
                   </span>
                 </div>
                 <div className="mt-4 flex flex-wrap gap-2">
-                  <button
+                  {((contract.status === "draft" && canDeleteDraft) || (contract.status === "signed" && canCancel)) && <button type="button" onClick={() => setCancelling(contract)} className="atelier-button-secondary text-red-400">{contract.status === "draft" ? "حذف پیش‌قرارداد" : "ابطال قرارداد"}</button>}
+                  {canEdit && <button
                     onClick={() => void openContract(contract.id)}
                     className="atelier-button-secondary flex-1"
                   >
                     <Edit3 className="h-4 w-4" />
                     ویرایش
-                  </button>
-                  {contract.status === "draft" ? (
+                  </button>}
+                  {contract.status === "draft" ? (canApprove &&
                     <button
                       onClick={() => void approve(contract)}
                       className="atelier-button flex-1"
@@ -260,6 +271,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
             ))}
           </div>
         )}
+        {cancelling && <ContractCancellationDialog contract={cancelling} onClose={() => setCancelling(null)} onSaved={() => { setCancelling(null); void load(); }} />}
         {editing && (
           <ContractForm
             initial={editing === "new" ? null : editing}

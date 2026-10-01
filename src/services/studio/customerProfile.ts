@@ -3,15 +3,17 @@ import { db } from "@/db";
 import {
   accounts, customers, employeeProjectAssignments, employees, equipmentReservations, invoices, studioDailyVisitPersonnel,
   paymentAllocations, payments, rentalEquipment, studioCalendarEvents, studioContractItems, studioContracts,
-  studioCustomers, studioDailyVisits, studioDeliverables, studioInstallments, studioPersonnel,
+  studioCustomers, studioCustomerTasks, studioDailyVisits, studioDeliverables, studioInstallments, studioPersonnel,
   studioPlanningPersonnel, studioProductionPlans, studioProductionSteps,
   studioProjects, studioProjectTimelines, studioProjectTypes, studioReservations, studioTasks, studioEquipment,
 } from "@/db/schema";
 import { ApiError, assertUuid } from "@/lib/apiError";
 import { atelierInstallmentState } from "@/lib/atelierInstallment";
 import { getStartOfDayJalali } from "@/lib/dateUtils";
+import { hasAtelierPermission, hasScopedAtelierPermission } from "@/lib/atelierPermissions";
 import type { EmployeeContext } from "@/services/access";
 import { readPostedInstallmentAllocations } from "./installmentReadModel";
+import { reservationScope } from "./reservationAccess";
 
 const n = (value: unknown) => Number(value || 0);
 const oneOf = (column: AnyColumn, ids: string[]) => ids.length ? inArray(column, ids) : sql`false`;
@@ -40,12 +42,12 @@ export async function getAtelierCustomerProfile(actor: EmployeeContext, id: stri
     const assignments = actor.permissions.has("*") ? [] : await tx.select({ projectId: employeeProjectAssignments.projectId, permissionSet: employeeProjectAssignments.permissionSet })
       .from(employeeProjectAssignments).where(and(eq(employeeProjectAssignments.employeeId, actor.employeeId), eq(employeeProjectAssignments.status, "active"), oneOf(employeeProjectAssignments.projectId, coreIds)));
     const grants = new Map(assignments.map(a => [a.projectId, (a.permissionSet || {}) as Record<string, unknown>]));
-    const globalAllows = (...codes: string[]) => actor.permissions.has("*") || codes.some(code => actor.permissions.has(code));
+    const globalAllows = (...codes: string[]) => codes.some(code => hasAtelierPermission(actor.permissions, code));
     const allows = (coreId: string | null, ...codes: string[]) => {
       if (actor.permissions.has("*")) return true;
       if (!coreId) return false; // Legacy projects without an owner remain admin-only.
       const grant = grants.get(coreId);
-      return Boolean(grant && codes.some(code => grant[code] !== false && (grant[code] === true || actor.permissions.has(code))));
+      return Boolean(grant && codes.some(code => hasScopedAtelierPermission(actor.permissions, code, grant)));
     };
     const visibleProjects = rawProjects.filter(p => allows(p.projectId, "studio.customers.view", "studio.view"));
     if (rawProjects.length && !visibleProjects.length) throw new ApiError(403, "دسترسی به مشتری خارج از محدوده پروژه مجاز نیست.", "PROJECT_SCOPE_FORBIDDEN");
@@ -75,9 +77,8 @@ export async function getAtelierCustomerProfile(actor: EmployeeContext, id: stri
         .innerJoin(studioProductionPlans, eq(studioProductionPlans.id, studioProductionSteps.planId))
         .leftJoin(studioPersonnel, eq(studioPersonnel.id, studioProductionSteps.assignedPersonnelId)).where(oneOf(studioProductionPlans.studioProjectId, planningProjectIds)),
       globalAllows("studio.daily_visits.view", "studio.view") ? tx.select().from(studioDailyVisits).where(eq(studioDailyVisits.customerId, identity.customer.id)).orderBy(desc(studioDailyVisits.visitDate)) : [],
-      // Older reservation records lack a customer FK. Exact current phone matches are labelled, never used as financial truth.
       globalAllows("studio.reservations.view", "studio.view") ? tx.select().from(studioReservations)
-        .where(or(eq(studioReservations.customerId, identity.customer.id), and(isNull(studioReservations.customerId), eq(studioReservations.mobile, identity.customer.mobile)))).orderBy(asc(studioReservations.reservedAt)) : [],
+        .where(and(eq(studioReservations.customerId, identity.customer.id), await reservationScope(actor))).orderBy(asc(studioReservations.reservedAt)) : [],
       tx.select().from(studioProjectTimelines).where(oneOf(studioProjectTimelines.studioProjectId, visibleProjects.map(p => p.id))).orderBy(desc(studioProjectTimelines.createdAt)),
       tx.select().from(studioDeliverables).where(oneOf(studioDeliverables.studioProjectId, planningProjectIds)),
       tx.select().from(studioProductionPlans).where(oneOf(studioProductionPlans.studioProjectId, planningProjectIds)),
@@ -142,6 +143,8 @@ export async function getAtelierCustomerProfile(actor: EmployeeContext, id: stri
     }, 0);
     const schedule: CustomerSchedule[] = [];
     const add = (entry: Omit<CustomerSchedule, "overdue">, warnPast = true) => schedule.push({ ...entry, overdue: Boolean(warnPast && entry.date && entry.date < now && !entry.completed && !entry.cancelled) });
+    const manualTasks = await tx.select().from(studioCustomerTasks).where(and(eq(studioCustomerTasks.studioCustomerId, id), or(isNull(studioCustomerTasks.studioProjectId), oneOf(studioCustomerTasks.studioProjectId, planningProjectIds))));
+    for (const task of manualTasks) add({ id: `manual:${task.id}`, title: task.title, kind: "کار / خدمت دستی", date: task.dueDate, endDate: null, status: task.status, completed: task.status === "done", cancelled: task.status === "cancelled", projectTitle: task.studioProjectId ? projectMap.get(task.studioProjectId)?.title || null : null, location: null, notes: task.notes, personnel: [], equipment: [], target: null });
     for (const { item, contract } of itemRows) {
       const assigned = people.filter(p => p.assignment.contractItemId === item.id);
       const gear = equipment.filter(e => e.assignment.contractItemId === item.id);
@@ -175,11 +178,11 @@ export async function getAtelierCustomerProfile(actor: EmployeeContext, id: stri
       status: reservation.status, completed: reservation.status === "completed", cancelled: reservation.status === "cancelled", projectTitle: null, location: null,
       notes: reservation.notes, personnel: [], equipment: [], target: null });
     schedule.sort((a, b) => (a.date ? +a.date : Infinity) - (b.date ? +b.date : Infinity));
-    const canEdit = rawProjects.length ? rawProjects.every(p => allows(p.projectId, "studio.projects.manage")) : globalAllows("studio.projects.manage");
+    const canEdit = rawProjects.length ? rawProjects.some(p => allows(p.projectId, "studio.customers.edit")) : globalAllows("studio.customers.edit");
     return {
       customer: { ...identity.customer, creditLimit: financeVisible ? identity.customer.creditLimit : null, paymentTermsDays: financeVisible ? identity.customer.paymentTermsDays : null,
         assignedEmployeeName: identity.employeeName, studio: identity.studio },
-      access: { canEdit, finance: financeVisible, planning: planningProjectIds.length > 0 || calendarProjectIds.length > 0 || globalAllows("studio.planning.view", "studio.calendar.view", "studio.view"), contracts: contractProjectIds.length > 0 },
+      access: { canEdit, canManageTasks: globalAllows("studio.planning.manage") || visibleProjects.some(p => allows(p.projectId, "studio.planning.manage")), finance: financeVisible, planning: planningProjectIds.length > 0 || calendarProjectIds.length > 0 || globalAllows("studio.planning.view", "studio.calendar.view", "studio.view"), contracts: contractProjectIds.length > 0 },
       summary: { projects: visibleProjects.length, upcoming: schedule.filter(s => s.date && s.date >= now && !s.completed && !s.cancelled).length },
       projects: visibleProjects.map(p => ({ id: p.id, number: p.projectNumber, title: p.title, date: p.eventDate, status: p.status, location: p.mainLocation, archived: Boolean(p.archivedAt),
         contracts: contractRows.filter(r => r.contract.studioProjectId === p.id && contractProjectIds.includes(p.id)).map(({ contract: c, typeTitle }) => {
@@ -187,7 +190,7 @@ export async function getAtelierCustomerProfile(actor: EmployeeContext, id: stri
           return { id: c.id, number: c.contractNumber, date: c.contractDate, programDate: c.programDate, deliveryDate: c.deliveryCommitmentDate, status: c.status, typeTitle,
             amount: financialCoreVisible(p.projectId) ? n(inv?.grandTotal ?? c.totalAmount) : null, paid: inv ? n(inv.paidAmount) : null, remaining: inv ? n(inv.balanceDue) : null };
         }) })),
-      schedule,
+      schedule: schedule.map(row => ({ ...row, sourceType: row.id.split(":")[0], sourceId: row.id.split(":")[1] })),
       financial: financeVisible ? { summary: { total: sumInvoices("grandTotal"), paid: sumInvoices("paidAmount"), remaining: sumInvoices("balanceDue"), discount: sumInvoices("invoiceDiscount"), remainingInstallments, overdue,
         received: receipts.filter(r => r.status === "completed" && r.type === "customer_receipt").reduce((s, r) => s + r.amount, 0),
         unapplied: receipts.filter(r => r.status === "completed" && r.type === "customer_receipt").reduce((s, r) => s + r.unappliedAmount, 0) },

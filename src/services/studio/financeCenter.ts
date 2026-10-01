@@ -2,14 +2,14 @@ import crypto from "node:crypto";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { db } from "@/db";
 import {
-  accountBalanceAdjustments, accounts, atelierExpenseSources, auditLogs, customers, expensePaymentAllocations, expenses, invoices, payments,
+  accountBalanceAdjustments, accounts, atelierExpenseCategories, atelierExpenseSources, auditLogs, customers, expensePaymentAllocations, expenses, invoices, payments,
   personnelSalaryRecords, rentalEquipment, studioContracts, studioDailyVisits, studioInstallmentAllocations,
   studioInstallments, studioPersonnel, studioProjects, studioProjectTypes, studioReservations, studioDailyVisitPersonnel, studioContractItems,
 } from "@/db/schema";
 import { ApiError, assertUuid, decimal } from "@/lib/apiError";
 import { canAccessPermission, type EmployeeContext } from "@/services/access";
 import { logAuditEvent } from "@/services/audit";
-import { postCanonicalExpense, postCanonicalExpensePayment, postCanonicalReceipt } from "@/services/financial";
+import { postCanonicalExpense, postCanonicalExpensePayment, postCanonicalManualReceipt, postCanonicalReceipt } from "@/services/financial";
 import { createStudioExpense, createStudioPayment } from "@/services/studio/projectService";
 import { buildOverviewAnalytics } from "./overviewAnalytics";
 import { getJalaliPresetRange, getStartOfDayJalali } from "@/lib/dateUtils";
@@ -23,7 +23,7 @@ async function assertFinanceScope(actor: EmployeeContext, projectId: string | nu
 }
 
 export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | null = null, includeUnassigned = true) {
-  const [accountRows, rawPaymentRows, rawExpenseRows, rawContracts, visits, reservations, rawSalaries, rawRentals, rawInstallmentRows] = await Promise.all([
+  const [accountRows, rawPaymentRows, rawExpenseRows, rawContracts, visits, reservations, rawSalaries, rawRentals, rawInstallmentRows, categoryRows] = await Promise.all([
     db.select().from(accounts).where(eq(accounts.status, "active")).orderBy(desc(accounts.isDefault), asc(accounts.name)),
     db.select({ payment: payments, accountName: accounts.name }).from(payments).innerJoin(accounts, eq(accounts.id, payments.accountId)).where(eq(payments.status, "completed")).orderBy(desc(payments.paymentDate)),
     db.select({ expense: expenses, accountName: accounts.name }).from(expenses).leftJoin(accounts, eq(accounts.id, expenses.accountId)).where(eq(expenses.status, "posted")).orderBy(desc(expenses.expenseDate)),
@@ -37,6 +37,7 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
       .from(personnelSalaryRecords).innerJoin(studioPersonnel, eq(studioPersonnel.id, personnelSalaryRecords.personnelId)).leftJoin(studioProjects, eq(studioProjects.id, personnelSalaryRecords.studioProjectId)),
     db.select({ rental: rentalEquipment, projectTitle: studioProjects.title, coreProjectId: studioProjects.projectId }).from(rentalEquipment).leftJoin(studioProjects, eq(studioProjects.id, rentalEquipment.studioProjectId)),
     db.select().from(studioInstallments).orderBy(asc(studioInstallments.dueDate)),
+    db.select().from(atelierExpenseCategories).orderBy(asc(atelierExpenseCategories.sortOrder), asc(atelierExpenseCategories.title)),
   ]);
   const allowed = allowedCoreProjectIds === null ? null : new Set(allowedCoreProjectIds);
   const visible = (projectId: string | null | undefined) => allowed === null || (projectId ? allowed.has(projectId) : includeUnassigned);
@@ -46,7 +47,10 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   const rentals = rawRentals.filter((row) => visible(row.coreProjectId));
   const paymentRows = rawPaymentRows.filter((row) => visible(row.payment.projectId));
   const visibleContractIds = new Set(contracts.map((row) => row.contract.id));
-  const installmentRows = rawInstallmentRows.filter((row) => visibleContractIds.has(row.contractId));
+  // A cancelled contract keeps its historical installment rows for audit, but
+  // they are no longer collectible and must not feed reminders or forecasts.
+  const cancelledContractIds = new Set(contracts.filter((row) => row.contract.status === "cancelled").map((row) => row.contract.id));
+  const installmentRows = rawInstallmentRows.filter((row) => visibleContractIds.has(row.contractId) && !cancelledContractIds.has(row.contractId));
   const allocations = await db.select().from(expensePaymentAllocations);
   const dailySalarySources = rawSalaries.length ? await db.select({ salaryRecordId: studioDailyVisitPersonnel.salaryRecordId, visitTitle: studioDailyVisits.title }).from(studioDailyVisitPersonnel).innerJoin(studioDailyVisits, eq(studioDailyVisits.id, studioDailyVisitPersonnel.dailyVisitId)).where(inArray(studioDailyVisitPersonnel.salaryRecordId, rawSalaries.map((row) => row.salary.id))) : [];
   const expenseSources = await db.select().from(atelierExpenseSources);
@@ -56,8 +60,9 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   const adjustmentRows = accountRows.length ? await db.select().from(accountBalanceAdjustments).where(inArray(accountBalanceAdjustments.accountId, accountRows.map((row) => row.id))).orderBy(desc(accountBalanceAdjustments.adjustedAt)) : [];
   const paidByExpense = new Map<string, number>();
   for (const row of allocations) paidByExpense.set(row.expenseId, (paidByExpense.get(row.expenseId) || 0) + n(row.allocatedAmount));
-  const income = paymentRows.filter(({ payment }) => payment.paymentType === "customer_receipt").reduce((sum, row) => sum + n(row.payment.amount), 0);
-  const outcome = paymentRows.filter(({ payment }) => payment.paymentType !== "customer_receipt").reduce((sum, row) => sum + n(row.payment.amount), 0);
+  const incomeTypes = new Set(["customer_receipt", "manual_receipt"]);
+  const income = paymentRows.filter(({ payment }) => incomeTypes.has(payment.paymentType)).reduce((sum, row) => sum + n(row.payment.amount), 0);
+  const outcome = paymentRows.filter(({ payment }) => !incomeTypes.has(payment.paymentType)).reduce((sum, row) => sum + n(row.payment.amount), 0);
   const payable = expenseRows.reduce((sum, row) => sum + Math.max(0, n(row.expense.amount) - n(row.expense.paidAmount)), 0);
   const projectCosts = new Map<string, number>();
   for (const { expense } of expenseRows) if (expense.projectId) projectCosts.set(expense.projectId, (projectCosts.get(expense.projectId) || 0) + n(expense.amount));
@@ -70,9 +75,9 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   const sourceByInvoice = new Map<string, { type: string; id: string; title: string }>();
   for (const { contract, projectTitle } of contracts) if (contract.invoiceId) sourceByInvoice.set(contract.invoiceId, { type: "contract", id: contract.id, title: `${contract.contractNumber} — ${projectTitle}` });
   for (const row of visits) if (row.invoiceId) sourceByInvoice.set(row.invoiceId, { type: "daily_visit", id: row.id, title: row.title });
-  const receipts = paymentRows.filter(({ payment }) => payment.paymentType === "customer_receipt").map(({ payment, accountName }) => ({ ...payment, amount: n(payment.amount), accountName, source: payment.invoiceId ? sourceByInvoice.get(payment.invoiceId) || null : null }));
-  const outgoings = paymentRows.filter(({ payment }) => payment.paymentType !== "customer_receipt").map(({ payment, accountName }) => ({ ...payment, amount: n(payment.amount), accountName }));
-  const expenseList = expenseRows.map(({ expense, accountName }) => { const source = expenseSources.find((row) => row.expenseId === expense.id); return { ...expense, amount: n(expense.amount), paidAmount: n(expense.paidAmount), remainingAmount: Math.max(0, n(expense.amount) - n(expense.paidAmount)), accountName, sourceType: source?.sourceType || null, sourceId: source?.sourceId || null }; });
+  const receipts = paymentRows.filter(({ payment }) => incomeTypes.has(payment.paymentType)).map(({ payment, accountName }) => ({ ...payment, amount: n(payment.amount), accountName, source: payment.invoiceId ? sourceByInvoice.get(payment.invoiceId) || null : payment.sourceType === "manual" ? { type: "manual", id: payment.id, title: payment.title || "دریافت آزاد" } : null }));
+  const outgoings = paymentRows.filter(({ payment }) => !incomeTypes.has(payment.paymentType)).map(({ payment, accountName }) => ({ ...payment, amount: n(payment.amount), accountName }));
+  const expenseList = expenseRows.map(({ expense, accountName }) => { const source = expenseSources.find((row) => row.expenseId === expense.id); return { ...expense, amount: n(expense.amount), paidAmount: n(expense.paidAmount), remainingAmount: Math.max(0, n(expense.amount) - n(expense.paidAmount)), accountName, sourceType: source?.sourceType || expense.sourceType || null, sourceId: source?.sourceId || null }; });
   const expenseById = new Map(expenseList.map((row) => [row.id, row]));
   const personnelDebt = expenseSources.filter((row) => row.sourceType === "personnel_wage").reduce((sum, row) => sum + (expenseById.get(row.expenseId)?.remainingAmount || 0), 0);
   const rentalDebt = expenseSources.filter((row) => row.sourceType === "rental").reduce((sum, row) => sum + (expenseById.get(row.expenseId)?.remainingAmount || 0), 0);
@@ -116,14 +121,15 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
     return { days, incoming, outgoing, net: incoming - outgoing };
   });
   const byKey = (rows: Array<{ key: string; amount: number }>) => [...rows.reduce((map, row) => map.set(row.key, (map.get(row.key) || 0) + row.amount), new Map<string, number>())].map(([label, amount]) => ({ label, amount }));
+  const categoryTitleByCode = new Map(categoryRows.map((row) => [row.code, row.title]));
   const reports = {
     incomeBySource: byKey(receipts.map((row) => ({ key: row.source?.type === "contract" ? "قرارداد" : row.source?.type === "daily_visit" ? "مراجعه روزانه" : row.source?.type === "reservation" ? "رزرو" : "سایر", amount: row.amount }))),
-    expensesByCategory: byKey(expenseList.map((row) => ({ key: row.category || "سایر", amount: row.amount }))),
+    expensesByCategory: byKey(expenseList.map((row) => ({ key: categoryTitleByCode.get(row.category) || row.category || "سایر", amount: row.amount }))),
     profitByProjectType: byKey(profitRows.map((row) => ({ key: row.projectType || "سایر", amount: row.profit }))),
   };
   return {
     summary: { liquidity: accountRows.reduce((sum, row) => sum + n(row.balance), 0), received: income, paid: outcome, receivable, payable, personnelDebt, rentalDebt, netCashflow: income - outcome, receivedThisMonth, paidThisMonth, expensesThisMonth, contractedThisMonth, estimatedProfitThisMonth },
-    accounts: accountRows.map((row) => ({ ...row, balance: n(row.balance), adjustments: adjustmentRows.filter((item) => item.accountId === row.id) })), receipts, payments: outgoings, expenses: expenseList,
+    accounts: accountRows.map((row) => ({ ...row, balance: n(row.balance), adjustments: adjustmentRows.filter((item) => item.accountId === row.id) })), expenseCategories: categoryRows, receipts, payments: outgoings, expenses: expenseList,
     receivables: contracts.filter((row) => row.invoice && n(row.invoice.balanceDue) > 0).map((row) => ({ contractId: row.contract.id, contractNumber: row.contract.contractNumber, projectTitle: row.projectTitle, customerName: row.customerName, dueDate: row.invoice!.dueDate, amount: n(row.invoice!.balanceDue) })), receivableSources,
     payables: expenseList.filter((row) => row.remainingAmount > 0 && row.sourceType !== "personnel_wage"), salaries: salaryList, rentals: rentalList, profitability: profitRows, installments, contractFinance,
     cashflow: buildCashflow(receipts, outgoings, installments, expenseList), forecast, reports,
@@ -146,12 +152,20 @@ function buildCashflow(receipts: Array<any>, outgoings: Array<any>, installments
 }
 
 export async function recordAtelierReceipt(actor: EmployeeContext, input: Record<string, unknown>) {
+  if (!(await canAccessPermission(actor, "studio.finance.create_receipt", input.projectId ? String(input.projectId) : null))) throw new ApiError(403, "دسترسی ثبت دریافت وجود ندارد.", "PERMISSION_REQUIRED");
   const sourceType = String(input.sourceType || ""), sourceId = String(input.sourceId || ""), accountId = String(input.accountId || "");
-  assertUuid(sourceId); assertUuid(accountId);
+  assertUuid(accountId);
   const amount = Number(decimal(input.amount, "مبلغ دریافت", 2, true));
   const paidAt = input.paidAt ? new Date(String(input.paidAt)) : new Date();
   if (Number.isNaN(paidAt.getTime())) throw new ApiError(400, "تاریخ دریافت نامعتبر است.");
   const key = String(input.idempotencyKey || crypto.randomUUID());
+  if (sourceType === "manual") {
+    if (!(await canAccessPermission(actor, "studio.finance.create_receipt", input.projectId ? String(input.projectId) : null))) throw new ApiError(403, "دسترسی ثبت دریافت آزاد وجود ندارد.");
+    const projectId = input.projectId ? String(input.projectId) : null;
+    const customerId = input.customerId ? String(input.customerId) : null;
+    return db.transaction(tx => postCanonicalManualReceipt(tx, { requestKey: `atelier-manual-receipt:${key}`, requestHash: hash({ ...input, idempotencyKey: undefined }), accountId, amount, paymentDate: paidAt, paymentMethod: String(input.paymentMethod || "card_transfer"), title: String(input.title || ""), projectId, customerId, counterparty: String(input.counterparty || "") || null, referenceNumber: String(input.referenceNumber || "") || null, notes: String(input.notes || "") || null }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }));
+  }
+  assertUuid(sourceId);
   if (sourceType === "contract") {
     const [contract] = await db.select({ contract: studioContracts, coreProjectId: studioProjects.projectId }).from(studioContracts).innerJoin(studioProjects, eq(studioProjects.id, studioContracts.studioProjectId)).where(eq(studioContracts.id, sourceId)).limit(1);
     if (!contract || contract.contract.status !== "signed") throw new ApiError(404, "قرارداد تأییدشده یافت نشد.");
@@ -242,7 +256,7 @@ export async function updateContractFinance(actor: EmployeeContext, contractId: 
 export async function payAtelierInstallment(actor: EmployeeContext, installmentId: string, input: Record<string, unknown>) {
   assertUuid(installmentId);
   const [record] = await db.select({ installment: studioInstallments, contract: studioContracts, coreProjectId: studioProjects.projectId }).from(studioInstallments).innerJoin(studioContracts, eq(studioContracts.id, studioInstallments.contractId)).innerJoin(studioProjects, eq(studioProjects.id, studioContracts.studioProjectId)).where(eq(studioInstallments.id, installmentId)).limit(1);
-  if (!record || !record.contract.invoiceId) throw new ApiError(404, "قسط قرارداد یافت نشد.");
+  if (!record || !record.contract.invoiceId || record.contract.status !== "signed") throw new ApiError(404, "قسط فعال قرارداد یافت نشد.");
   await assertFinanceScope(actor, record.coreProjectId);
   return createStudioPayment(record.contract.studioProjectId, {
     amount: input.amount as number | string, accountId: String(input.accountId || ""), invoiceId: record.contract.invoiceId,
@@ -278,14 +292,30 @@ export async function adjustAtelierAccountBalance(actor: EmployeeContext, accoun
 }
 
 export async function createAtelierExpense(actor: EmployeeContext, input: Record<string, unknown>) {
+  if (!(await canAccessPermission(actor, "studio.finance.create_expense", input.projectId ? String(input.projectId) : null))) throw new ApiError(403, "دسترسی ثبت هزینه وجود ندارد.");
+  const category = String(input.category || "");
+  const [configured] = await db.select().from(atelierExpenseCategories).where(and(eq(atelierExpenseCategories.code, category), eq(atelierExpenseCategories.active, true))).limit(1);
+  if (!configured) throw new ApiError(400, "دسته هزینه فعال و معتبر انتخاب کنید.");
   const studioProjectId = input.studioProjectId ? String(input.studioProjectId) : null;
   if (studioProjectId) {
     const [project] = await db.select({ coreProjectId: studioProjects.projectId }).from(studioProjects).where(eq(studioProjects.id, studioProjectId)).limit(1);
     if (!project) throw new ApiError(404, "پروژه مالی یافت نشد.");
     await assertFinanceScope(actor, project.coreProjectId);
-    return createStudioExpense(studioProjectId, { title: String(input.title || ""), expenseCategory: String(input.category || "misc") as any, amount: input.amount as any, recipientName: String(input.recipientName || "") || undefined, paymentStatus: input.paid ? "paid" : "pending", accountId: input.accountId ? String(input.accountId) : undefined, paidAt: input.expenseDate ? new Date(String(input.expenseDate)) : new Date(), notes: String(input.notes || "") || undefined, idempotencyKey: String(input.idempotencyKey || crypto.randomUUID()), actorId: actor.employeeId, authorName: actor.employeeName });
+    return createStudioExpense(studioProjectId, { title: String(input.title || ""), expenseCategory: category as any, amount: input.amount as any, recipientName: String(input.counterparty || input.recipientName || "") || undefined, paymentStatus: input.paid ? "paid" : "pending", accountId: input.accountId ? String(input.accountId) : undefined, paidAt: input.expenseDate ? new Date(String(input.expenseDate)) : new Date(), notes: String(input.notes || "") || undefined, idempotencyKey: String(input.idempotencyKey || crypto.randomUUID()), actorId: actor.employeeId, authorName: actor.employeeName });
   }
-  return db.transaction((tx) => postCanonicalExpense(tx, { requestKey: `atelier-general-expense:${String(input.idempotencyKey || crypto.randomUUID())}`, requestHash: hash(input), title: String(input.title || ""), category: String(input.category || "general"), amount: input.amount as any, accountId: input.accountId ? String(input.accountId) : null, expenseDate: input.expenseDate ? new Date(String(input.expenseDate)) : new Date(), dueDate: input.dueDate ? new Date(String(input.dueDate)) : null, description: String(input.notes || "") || null, paid: Boolean(input.paid) }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }));
+  const expenseDate = input.expenseDate ? new Date(String(input.expenseDate)) : new Date();
+  const dueDate = input.dueDate ? new Date(String(input.dueDate)) : null;
+  const counterparty = String(input.counterparty || "").trim() || null;
+  const notes = String(input.notes || "").trim() || null;
+  const requestHash = hash({
+    title: String(input.title || "").trim(), category, amount: String(input.amount ?? ""),
+    projectId: input.projectId ? String(input.projectId) : null,
+    accountId: input.accountId ? String(input.accountId) : null,
+    expenseDate: input.expenseDate ? expenseDate.toISOString() : null,
+    dueDate: dueDate?.toISOString() || null, counterparty, notes,
+    paid: Boolean(input.paid), paymentMethod: String(input.paymentMethod || "bank_transfer"),
+  });
+  return db.transaction((tx) => postCanonicalExpense(tx, { requestKey: `atelier-general-expense:${String(input.idempotencyKey || crypto.randomUUID())}`, requestHash, title: String(input.title || ""), category, amount: input.amount as any, projectId: input.projectId ? String(input.projectId) : null, accountId: input.accountId ? String(input.accountId) : null, expenseDate, dueDate, description: [counterparty, notes].filter(Boolean).join(" — ") || null, counterparty, paymentMethod: String(input.paymentMethod || "bank_transfer"), paid: Boolean(input.paid), sourceType: "general_expense" }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName }));
 }
 
 export async function settleAtelierExpense(actor: EmployeeContext, expenseId: string, input: Record<string, unknown>) {
@@ -305,6 +335,7 @@ export async function settleAtelierObligation(actor: EmployeeContext, sourceType
     if (sourceType === "personnel_wage") {
       const [salary] = await tx.select().from(personnelSalaryRecords).where(eq(personnelSalaryRecords.id, sourceId)).for("update").limit(1);
       if (!salary) throw new ApiError(404, "دستمزد یافت نشد.");
+      if (salary.voidedAt || salary.voidReason) throw new ApiError(409, "دستمزد باطل‌شده قابل پرداخت نیست.");
       const [person] = await tx.select({ name: studioPersonnel.fullName }).from(studioPersonnel).where(eq(studioPersonnel.id, salary.personnelId)).limit(1);
       const [project] = salary.studioProjectId ? await tx.select({ coreProjectId: studioProjects.projectId }).from(studioProjects).where(eq(studioProjects.id, salary.studioProjectId)).limit(1) : [];
       total = n(salary.totalCalculated); projectId = project?.coreProjectId || null; title = `دستمزد ${person?.name || "پرسنل"}`; paymentType = "salary_payout";
@@ -314,12 +345,13 @@ export async function settleAtelierObligation(actor: EmployeeContext, sourceType
       const [project] = rental.studioProjectId ? await tx.select({ coreProjectId: studioProjects.projectId }).from(studioProjects).where(eq(studioProjects.id, rental.studioProjectId)).limit(1) : [];
       total = n(rental.rentalCost); projectId = project?.coreProjectId || null; title = `اجاره ${rental.itemTitle}`;
     }
-    await assertFinanceScope(actor, projectId);
+    const permission = sourceType === "personnel_wage" ? "studio.personnel.finance.pay" : "studio.finance.create_expense";
+    if (!(await canAccessPermission(actor, permission, projectId))) throw new ApiError(403, "دسترسی پرداخت این تعهد وجود ندارد.");
     if (!link) {
       const canonical = await postCanonicalExpense(tx, { requestKey: `atelier-obligation-expense:${sourceType}:${sourceId}`, requestHash: hash({ sourceType, sourceId, total }), projectId, title, category: sourceType === "personnel_wage" ? "salary" : "rental", amount: total, expenseDate: new Date(), dueDate: input.dueDate ? new Date(String(input.dueDate)) : null, paid: false, sourceType, sourceId }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName });
       [link] = await tx.select().from(atelierExpenseSources).where(eq(atelierExpenseSources.expenseId, canonical.expense.id)).limit(1);
     }
-    const payment = await postCanonicalExpensePayment(tx, { requestKey: `atelier-obligation-payment:${String(input.idempotencyKey || crypto.randomUUID())}`, requestHash: hash({ sourceType, sourceId, ...input }), expenseId: link.expenseId, accountId: String(input.accountId || ""), amount: input.amount as any, paymentDate: input.paymentDate ? new Date(String(input.paymentDate)) : new Date(), paymentMethod: String(input.paymentMethod || "bank_transfer"), paymentType }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName });
+    const payment = await postCanonicalExpensePayment(tx, { requestKey: `atelier-obligation-payment:${String(input.idempotencyKey || crypto.randomUUID())}`, requestHash: hash({ sourceType, sourceId, ...input }), expenseId: link.expenseId, accountId: String(input.accountId || ""), amount: input.amount as any, paymentDate: input.paymentDate ? new Date(String(input.paymentDate)) : new Date(), paymentMethod: String(input.paymentMethod || "bank_transfer"), referenceNumber: String(input.referenceNumber || "") || null, notes: String(input.notes || "") || null, paymentType }, { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName });
     const [expense] = await tx.select().from(expenses).where(eq(expenses.id, link.expenseId)).limit(1);
     if (sourceType === "personnel_wage") await tx.update(personnelSalaryRecords).set({ paymentStatus: expense?.paymentStatus === "paid" ? "paid" : "partial", paymentId: payment.id, accountId: String(input.accountId), financialStatus: "posted", settlementDate: expense?.paymentStatus === "paid" ? new Date() : null, updatedAt: new Date() }).where(eq(personnelSalaryRecords.id, sourceId));
     else await tx.update(rentalEquipment).set({ expenseId: link.expenseId, paymentId: payment.id, accountId: String(input.accountId), financialStatus: "posted", status: expense?.paymentStatus === "paid" ? "settled" : "rented", updatedAt: new Date() }).where(eq(rentalEquipment.id, sourceId));

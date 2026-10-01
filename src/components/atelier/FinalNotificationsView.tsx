@@ -5,12 +5,15 @@ import { AlertTriangle, Archive, Bell, ChevronLeft, RotateCcw, Siren } from "luc
 import { toJalaliDate } from "@/lib/dateUtils";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 import { atelierToast } from "@/lib/atelierFeedback";
+import { filterNotifications, NOTIFICATION_CATEGORIES, type NotificationCategory } from "@/lib/atelierNotifications";
 
 export function FinalNotificationsView({
   onNavigate,
 }: {
   onNavigate: (tab: string) => void;
 }) {
+  const [category, setCategory] = useState("all");
+  const [state, setState] = useState("all");
   const [items, setItems] = useState<any[]>([]),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
@@ -30,6 +33,16 @@ export function FinalNotificationsView({
   };
   useEffect(load, [archived]);
   const toggleArchive = async (item: any) => { const data = await fetch("/api/atelier/notifications", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: item.id, archived: !archived }) }).then((response) => response.json()); if (!data.success) return atelierToast(data.error || "تغییر آرشیو انجام نشد.", "error"); atelierToast(archived ? "اعلان بازگردانی شد." : "اعلان آرشیو شد.", "success"); load(); };
+  const visible = filterNotifications(items, category, state);
+  const openItem = async (item: any) => {
+    try {
+      const response = await fetch("/api/atelier/notifications", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: item.id, read: true, ...(archived ? { archived: false } : {}) }) });
+      const body = await response.json();
+      if (!body.success) throw new Error(body.error || "ثبت خوانده‌شدن اعلان ممکن نشد.");
+      setItems(previous => previous.map(row => row.id === item.id ? { ...row, readAt: new Date().toISOString() } : row));
+      if (item.tab) { if (["planning", "equipment"].includes(item.tab)) sessionStorage.setItem(`akma:${item.tab}-target`, item.entityId); onNavigate(item.tab); setTimeout(() => window.dispatchEvent(new CustomEvent("akma:navigate-item", { detail: { id: item.entityId } })), 50); }
+    } catch (reason) { atelierToast(reason instanceof Error ? reason.message : "خطای ارتباط", "error"); }
+  };
   return (
     <div className="space-y-5">
       <div>
@@ -41,17 +54,18 @@ export function FinalNotificationsView({
         </p>
       </div>
       <div className="inline-flex rounded-2xl border border-zinc-800 bg-zinc-950 p-1"><button onClick={() => setArchived(false)} className={`rounded-xl px-4 py-2 text-xs font-bold ${!archived ? "bg-red-700 text-white" : "text-zinc-500"}`}>اعلان‌های فعال</button><button onClick={() => setArchived(true)} className={`rounded-xl px-4 py-2 text-xs font-bold ${archived ? "bg-red-700 text-white" : "text-zinc-500"}`}>اعلان های آرشیو شده</button></div>
+      <div className="flex flex-wrap gap-2"><select aria-label="دسته اعلان" className="atelier-input max-w-xs" value={category} onChange={event => setCategory(event.target.value)}><option value="all">همه دسته‌ها</option>{Object.entries(NOTIFICATION_CATEGORIES).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><select aria-label="وضعیت اعلان" className="atelier-input max-w-xs" value={state} onChange={event => setState(event.target.value)}><option value="all">همه</option><option value="unread">خوانده نشده</option><option value="important">مهم</option></select></div>
       {loading ? (
         <LoadingState />
       ) : error ? (
         <ErrorState text={error} retry={load} />
-      ) : !items.length ? (
+      ) : !visible.length ? (
         <EmptyState text="اعلان نیازمند اقدامی وجود ندارد." />
       ) : (
         <div className="space-y-3">
-          {items.map((item) => {
-            const critical = item.priority === "critical",
-              warning = item.priority === "warning";
+          {visible.map((item) => {
+            const critical = (item.severity || item.priority) === "critical",
+              warning = (item.severity || item.priority) === "warning";
             return (
               <div
                 key={item.id}
@@ -69,6 +83,7 @@ export function FinalNotificationsView({
                   )}
                 </span>
                 <span className="min-w-0 flex-1">
+                  <span className="mb-1 block text-[10px] text-zinc-400">{NOTIFICATION_CATEGORIES[item.category as NotificationCategory] || "سیستم"} · {item.readAt ? "خوانده شده" : "خوانده نشده"}</span>
                   <strong
                     className={critical ? "text-red-200" : "text-zinc-100"}
                   >
@@ -83,7 +98,7 @@ export function FinalNotificationsView({
                     </span>
                   )}
                 </span>
-                <button onClick={() => { if (!archived) { if (item.tab === "planning") sessionStorage.setItem("akma:planning-target", item.entityId); onNavigate(item.tab); setTimeout(() => window.dispatchEvent(new CustomEvent("akma:navigate-item", { detail: { id: item.entityId } })), 50); } }} className="atelier-icon-button" aria-label="رفتن به رکورد"><ChevronLeft className="h-4 w-4" /></button>
+                <button onClick={() => void openItem(item)} className="atelier-icon-button" aria-label="خواندن و رفتن به رکورد"><ChevronLeft className="h-4 w-4" /></button>
                 <button onClick={() => void toggleArchive(item)} className="atelier-button-secondary text-xs">{archived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}{archived ? "بازگردانی" : "آرشیو هشدار"}</button>
               </div>
             );

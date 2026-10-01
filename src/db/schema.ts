@@ -10,7 +10,9 @@ import {
   uuid,
   primaryKey,
   uniqueIndex,
-  index
+  index,
+  foreignKey,
+  check
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 
@@ -547,6 +549,11 @@ export const accountBalanceAdjustments = pgTable("account_balance_adjustments", 
 }, (t) => [index("idx_account_adjustments_account_date").on(t.accountId, t.adjustedAt)]);
 
 export const payments = pgTable("payments", {
+  sourceType: text("source_type"),
+  sourceId: uuid("source_id"),
+  originalPaymentId: uuid("original_payment_id").unique(),
+  title: text("title"),
+  counterparty: text("counterparty"),
   requestKey: text("request_key").unique(),
   requestHash: text("request_hash"),
   id: uuid("id").defaultRandom().primaryKey(),
@@ -564,7 +571,9 @@ export const payments = pgTable("payments", {
   status: text("status").default("completed").notNull(), // pending, completed, bounced, cancelled
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (t) => [
+  foreignKey({ columns: [t.originalPaymentId], foreignColumns: [t.id], name: "payments_original_payment_id_fkey" }),
+]);
 
 export const paymentAllocations = pgTable("payment_allocations", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -637,7 +646,31 @@ export const payrollRecords = pgTable("payroll_records", {
 });
 
 // 13. Expenses
+export const atelierExpenseCategories = pgTable("atelier_expense_categories", {
+  code: text("code").primaryKey(),
+  title: text("title").notNull(),
+  active: boolean("active").default(true).notNull(),
+  sortOrder: integer("sort_order").default(0).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const atelierAiActions = pgTable("atelier_ai_actions", {
+  id: uuid("id").primaryKey(),
+  actorId: uuid("actor_id").notNull().references(() => employees.id),
+  operation: text("operation").notNull(),
+  targetId: text("target_id"),
+  parameters: jsonb("parameters").notNull(),
+  status: text("status").default("pending").notNull(),
+  result: jsonb("result"),
+  expiresAt: timestamp("expires_at").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [index("idx_atelier_ai_actions_actor_status_expiry").on(t.actorId, t.status, t.expiresAt)]);
+
 export const expenses = pgTable("expenses", {
+  sourceType: text("source_type"),
+  counterparty: text("counterparty"),
   id: uuid("id").defaultRandom().primaryKey(),
   requestKey: text("request_key"),
   requestHash: text("request_hash"),
@@ -955,6 +988,9 @@ export const studioProjectTypes = pgTable("studio_project_types", {
 
 // 16.3. Studio Contracts
 export const studioContracts = pgTable("studio_contracts", {
+  cancelledAt: timestamp("cancelled_at"),
+  cancellationReason: text("cancellation_reason"),
+  cancellationSnapshot: jsonb("cancellation_snapshot"),
   id: uuid("id").defaultRandom().primaryKey(),
   packageSnapshot: jsonb("package_snapshot"),
   contractNumber: text("contract_number").notNull().unique(), // e.g. CTR-1403-0001
@@ -1060,6 +1096,7 @@ export const studioPersonnelDefaultWages = pgTable("studio_personnel_default_wag
 }, (t) => [uniqueIndex("uq_personnel_default_wage").on(t.personnelId, t.workTitle)]);
 
 export const studioPlanningPersonnel = pgTable("studio_planning_personnel", {
+  status: text("status").default("active").notNull(),
   id: uuid("id").defaultRandom().primaryKey(),
   contractItemId: uuid("contract_item_id").notNull().references(() => studioContractItems.id, { onDelete: "cascade" }),
   personnelId: uuid("personnel_id").notNull().references(() => studioPersonnel.id, { onDelete: "restrict" }),
@@ -1189,6 +1226,7 @@ export const studioCalendarEvents = pgTable("studio_calendar_events", {
 export const studioDailyVisits = pgTable("studio_daily_visits", {
   id: uuid("id").defaultRandom().primaryKey(),
   title: text("title").notNull(),
+  itemSnapshot: jsonb("item_snapshot").$type<import("@/lib/dailyVisitItems").VisitItemSnapshot | null>(),
   visitDate: timestamp("visit_date").notNull(),
   price: numeric("price", { precision: 15, scale: 2 }).default("0").notNull(),
   paidAmount: numeric("paid_amount", { precision: 15, scale: 2 }).default("0").notNull(),
@@ -1208,6 +1246,9 @@ export const studioDailyVisits = pgTable("studio_daily_visits", {
 export const studioDailyVisitTitles = pgTable("studio_daily_visit_titles", {
   id: uuid("id").defaultRandom().primaryKey(),
   title: text("title").notNull(),
+  mode: text("mode").default("simple").notNull(),
+  defaultPrice: numeric("default_price", { precision: 15, scale: 2 }).default("0").notNull(),
+  secondaryOptions: jsonb("secondary_options").$type<import("@/lib/dailyVisitItems").DailyVisitOption[]>().default([]).notNull(),
   active: boolean("active").default(true).notNull(),
   sortOrder: integer("sort_order").default(0).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1233,6 +1274,10 @@ export const studioDailyVisitPersonnel = pgTable("studio_daily_visit_personnel",
 ]);
 
 export const studioReservations = pgTable("studio_reservations", {
+  ownerEmployeeId: uuid("owner_employee_id").references(() => employees.id, { onDelete: "set null" }),
+  assignedPersonnelId: uuid("assigned_personnel_id").references(() => studioPersonnel.id, { onDelete: "set null" }),
+  viewerEmployeeIds: jsonb("viewer_employee_ids").$type<string[]>().default([]).notNull(),
+  sharedPersonnelIds: jsonb("shared_personnel_ids").$type<string[]>().default([]).notNull(),
   id: uuid("id").defaultRandom().primaryKey(),
   title: text("title").notNull(),
   reservedAt: timestamp("reserved_at").notNull(),
@@ -1254,6 +1299,23 @@ export const studioReservations = pgTable("studio_reservations", {
 }, (t) => [index("idx_studio_reservations_date_status").on(t.reservedAt, t.status)]);
 
 // 16.12. Studio Tasks
+export const studioCustomerTasks = pgTable("studio_customer_tasks", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  studioCustomerId: uuid("studio_customer_id").notNull().references(() => studioCustomers.id),
+  studioProjectId: uuid("studio_project_id").references(() => studioProjects.id),
+  contractId: uuid("contract_id").references(() => studioContracts.id),
+  title: text("title").notNull(),
+  notes: text("notes"),
+  dueDate: timestamp("due_date"),
+  status: text("status").default("pending").notNull(),
+  createdBy: uuid("created_by").references(() => employees.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+}, (t) => [
+  check("chk_customer_task_status", sql`${t.status} in ('pending', 'done', 'cancelled')`),
+  index("idx_customer_tasks_customer").on(t.studioCustomerId),
+]);
+
 export const studioTasks = pgTable("studio_tasks", {
   id: uuid("id").defaultRandom().primaryKey(),
   productionStepId: uuid("production_step_id").references(() => studioProductionSteps.id),
@@ -1309,6 +1371,12 @@ export const studioProjectTimelines = pgTable("studio_project_timelines", {
 });
 
 // 16.15. Studio Project Payments (دریافتی‌ها و پیش‌پرداخت‌های پروژه)
+export const studioNotificationReads = pgTable("studio_notification_reads", {
+  notificationId: uuid("notification_id").notNull().references(() => studioNotifications.id, { onDelete: "cascade" }),
+  employeeId: uuid("employee_id").notNull().references(() => employees.id, { onDelete: "cascade" }),
+  readAt: timestamp("read_at").defaultNow().notNull(),
+}, t => [primaryKey({ columns: [t.notificationId, t.employeeId] })]);
+
 export const studioProjectPayments = pgTable("studio_project_payments", {
   id: uuid("id").defaultRandom().primaryKey(),
   studioProjectId: uuid("studio_project_id").notNull().references(() => studioProjects.id, { onDelete: "cascade" }),

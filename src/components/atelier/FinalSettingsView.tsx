@@ -51,6 +51,7 @@ export function FinalSettingsView() {
     [types, setTypes] = useState<any[]>([]),
     [catalog, setCatalog] = useState<any[]>([]),
     [dailyVisitTitles, setDailyVisitTitles] = useState<any[]>([]),
+    [expenseCategories, setExpenseCategories] = useState<any[]>([]),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
     [saving, setSaving] = useState(false),
@@ -66,6 +67,7 @@ export function FinalSettingsView() {
         setTypes(data.projectTypes || []);
         setCatalog(data.catalog || []);
         setDailyVisitTitles(data.dailyVisitTitles || []);
+        setExpenseCategories(data.expenseCategories || []);
         setError("");
       })
       .catch((reason) => setError(reason.message))
@@ -225,11 +227,10 @@ export function FinalSettingsView() {
           />
         )}
         {tab === "تنظیمات مالی" && (
-          <Grid>
+          <div className="space-y-5"><Grid>
             <NumberField label="یادآوری مطالبات (روز قبل)" value={section("finance").receivableReminderDays || 3} set={(value) => patch("finance", { receivableReminderDays: value })} />
             <NumberField label="یادآوری بدهی‌ها (روز قبل)" value={section("finance").payableReminderDays || 3} set={(value) => patch("finance", { payableReminderDays: value })} />
-            <Area label="دسته‌بندی‌های هزینه (هر مورد در یک خط)" value={(section("finance").expenseCategories || ["پرسنل", "اجاره تجهیزات", "حمل و نقل", "لوکیشن", "چاپ و آلبوم", "تدوین و رتوش", "عمومی"]).join("\n")} set={(value) => patch("finance", { expenseCategories: value.split("\n").map((item) => item.trim()).filter(Boolean) })} />
-          </Grid>
+          </Grid><ExpenseCategoryEditor rows={expenseCategories} reload={load} /></div>
         )}
         {tab === "مدیریت سیستم" && (
           <div className="space-y-5">
@@ -602,42 +603,72 @@ function CatalogEditor({
 }
 
 function DailyVisitTitleEditor({ rows, reload }: { rows: any[]; reload: () => void }) {
-  const [title, setTitle] = useState("");
-  const save = async (value: any, id?: string) => {
-    const data = await fetch("/api/atelier/settings", {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action: "daily_visit_title", id, value }),
-    }).then((response) => response.json());
-    if (!data.success) return atelierToast(data.error || "ثبت انجام نشد.", "error");
-    setTitle("");
-    reload();
+  type Option = { key: string; title: string; defaultPrice: number; active: boolean; sortOrder: number };
+  const empty = { id: "", title: "", active: true, sortOrder: 0, defaultPrice: 0, mode: "simple", secondaryOptions: [] as Option[] };
+  const [form, setForm] = useState(empty);
+  const [saving, setSaving] = useState(false);
+  const patchOption = (key: string, patch: Partial<Option>) => setForm(current => ({ ...current, secondaryOptions: current.secondaryOptions.map(option => option.key === key ? { ...option, ...patch } : option) }));
+  const save = async () => {
+    setSaving(true);
+    try {
+      const data = await fetch("/api/atelier/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "daily_visit_title", id: form.id || undefined, value: form }) }).then(response => response.json());
+      if (!data.success) throw new Error(data.error || "ثبت انجام نشد.");
+      setForm(empty); reload();
+    } catch (reason) { atelierToast(reason instanceof Error ? reason.message : "ثبت انجام نشد.", "error"); }
+    finally { setSaving(false); }
   };
-  const move = async (index: number, direction: -1 | 1) => {
-    const current = rows[index], target = rows[index + direction];
-    if (!current || !target) return;
-    await Promise.all([
-      save({ title: current.title, active: current.active, sortOrder: target.sortOrder }, current.id),
-      save({ title: target.title, active: target.active, sortOrder: current.sortOrder }, target.id),
-    ]);
+  return <div className="space-y-4">
+    <p className="text-xs text-zinc-400">قیمت‌ها پیشنهاد اولیه‌اند؛ قیمت و عنوان ثبت‌شدهٔ مراجعات قبلی تغییر نمی‌کند. گزینه‌های قدیمی را غیرفعال کنید.</p>
+    <div className="grid gap-2 sm:grid-cols-2">{rows.map(row => <button type="button" key={row.id} onClick={() => setForm({ id: row.id, title: row.title, active: row.active, sortOrder: row.sortOrder, defaultPrice: Number(row.defaultPrice || 0), mode: row.mode || "simple", secondaryOptions: (row.secondaryOptions || []).map((option: Option) => ({ ...option, defaultPrice: Number(option.defaultPrice) })) })} className="flex min-w-0 items-center justify-between gap-2 rounded-xl border border-zinc-800 p-3 text-right">
+      <span className="truncate text-sm">{row.title}<small className="mt-1 block text-zinc-500">{row.mode === "secondary_options" ? "دارای گزینه ثانویه" : "ساده"} • {row.active ? "فعال" : "غیرفعال"}</small></span><Pencil className="h-4 w-4 shrink-0" />
+    </button>)}</div>
+    <form onSubmit={event => { event.preventDefault(); void save(); }} className="space-y-4 border-t border-zinc-800 pt-4">
+      <h3 className="font-bold">{form.id ? "ویرایش آیتم" : "آیتم جدید"}</h3>
+      <Grid>
+        <Text label="عنوان" value={form.title} set={title => setForm(current => ({ ...current, title }))} />
+        <NumberField label="ترتیب نمایش" value={form.sortOrder} set={sortOrder => setForm(current => ({ ...current, sortOrder }))} />
+        <label><span className="atelier-label">نوع آیتم</span><select className="atelier-input w-full py-2.5" value={form.mode} onChange={event => setForm(current => ({ ...current, mode: event.target.value }))}><option value="simple">ساده</option><option value="secondary_options">دارای گزینه ثانویه</option></select></label>
+        <label><span className="atelier-label">قیمت پیش‌فرض</span><MoneyInput value={form.defaultPrice} onChange={defaultPrice => setForm(current => ({ ...current, defaultPrice }))} unit="تومان" /></label>
+        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active} onChange={event => setForm(current => ({ ...current, active: event.target.checked }))} />فعال</label>
+      </Grid>
+      {form.mode === "secondary_options" && <fieldset className="space-y-3 rounded-xl border border-zinc-800 p-3">
+        <legend className="text-sm">گزینه‌های ثانویه</legend>
+        {form.secondaryOptions.map(option => <div key={option.key} className="grid gap-3 rounded-xl border border-zinc-800 p-3 sm:grid-cols-2">
+          <Text label="عنوان گزینه" value={option.title} set={title => patchOption(option.key, { title })} />
+          <label><span className="atelier-label">قیمت پیش‌فرض گزینه</span><MoneyInput value={option.defaultPrice} onChange={defaultPrice => patchOption(option.key, { defaultPrice })} unit="تومان" /></label>
+          <NumberField label="ترتیب" value={option.sortOrder} set={sortOrder => patchOption(option.key, { sortOrder })} />
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={option.active} onChange={event => patchOption(option.key, { active: event.target.checked })} />فعال</label>
+        </div>)}
+        <button type="button" className="atelier-button-secondary" onClick={() => setForm(current => ({ ...current, secondaryOptions: [...current.secondaryOptions, { key: crypto.randomUUID(), title: "", defaultPrice: current.defaultPrice, active: true, sortOrder: current.secondaryOptions.length }] }))}><Plus className="h-4 w-4" />افزودن گزینه</button>
+      </fieldset>}
+      <div className="flex gap-2"><button disabled={saving || !form.title.trim()} className="atelier-button">{saving ? "در حال ذخیره…" : "ذخیره آیتم"}</button>{form.id && <button type="button" className="atelier-button-secondary" onClick={() => setForm(empty)}>انصراف</button>}</div>
+    </form>
+  </div>;
+}
+function ExpenseCategoryEditor({ rows, reload }: { rows: any[]; reload: () => void }) {
+  const [form, setForm] = useState({ code: "", title: "", active: true, sortOrder: 0 });
+  const [saving, setSaving] = useState(false);
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault(); setSaving(true);
+    try {
+      const response = await fetch("/api/atelier/settings", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "expense_category", code: form.code || undefined, value: form }) });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.error || "ذخیره دسته هزینه ناموفق بود.");
+      setForm({ code: "", title: "", active: true, sortOrder: rows.length * 10 }); reload();
+    } catch (reason) { atelierToast(reason instanceof Error ? reason.message : "ذخیره دسته هزینه ناموفق بود.", "error"); }
+    finally { setSaving(false); }
   };
-  return (
-    <div className="space-y-3">
-      {rows.map((row, index) => (
-        <div key={row.id} className="flex items-center gap-3 rounded-xl border border-zinc-800 p-3">
-          <span className="flex-1 text-sm font-bold">{row.title}</span>
-          <button type="button" disabled={index === 0} onClick={() => void move(index, -1)} className="atelier-icon-button disabled:opacity-30" aria-label="انتقال به بالا"><ArrowUp className="h-4 w-4" /></button>
-          <button type="button" disabled={index === rows.length - 1} onClick={() => void move(index, 1)} className="atelier-icon-button disabled:opacity-30" aria-label="انتقال به پایین"><ArrowDown className="h-4 w-4" /></button>
-          <button type="button" onClick={async () => { const next = await atelierPrompt("عنوان مراجعه روزانه", row.title); if (next?.trim()) void save({ title: next.trim(), active: row.active, sortOrder: row.sortOrder }, row.id); }} className="atelier-icon-button" aria-label="ویرایش"><Pencil className="h-4 w-4" /></button>
-          <button type="button" onClick={() => void save({ title: row.title, active: !row.active, sortOrder: row.sortOrder }, row.id)} className={`rounded-lg px-3 py-1.5 text-xs ${row.active ? "bg-emerald-950 text-emerald-400" : "bg-zinc-900 text-zinc-500"}`}>{row.active ? "فعال" : "غیرفعال"}</button>
-        </div>
-      ))}
-      <form onSubmit={(event) => { event.preventDefault(); if (title.trim()) void save({ title: title.trim(), active: true, sortOrder: rows.length * 10 + 10 }); }} className="flex gap-2 border-t border-zinc-900 pt-4">
-        <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="عنوان مراجعه جدید" className="atelier-input min-w-0 flex-1 py-2.5" />
-        <button className="atelier-button"><Plus className="h-4 w-4" />افزودن</button>
-      </form>
-    </div>
-  );
+  return <section className="border-t border-zinc-800 pt-5">
+    <h3 className="font-black">دسته‌بندی‌های هزینه</h3>
+    <p className="mt-1 text-xs text-zinc-500">دسته غیرفعال در سوابق قبلی حفظ می‌شود و برای هزینه جدید قابل انتخاب نیست.</p>
+    <div className="mt-3 grid gap-2 sm:grid-cols-2">{rows.map(row => <button key={row.code} type="button" onClick={() => setForm({ code: row.code, title: row.title, active: row.active, sortOrder: row.sortOrder })} className="flex justify-between rounded-xl border border-zinc-800 p-3 text-right text-sm"><span>{row.title}<small className="mt-1 block text-zinc-500">{row.code}</small></span><span className={row.active ? "text-emerald-400" : "text-zinc-500"}>{row.active ? "فعال" : "غیرفعال"}</span></button>)}</div>
+    <form onSubmit={save} className="mt-4 grid gap-3 sm:grid-cols-2">
+      <Text label="عنوان دسته" value={form.title} set={title => setForm(current => ({ ...current, title }))} />
+      <NumberField label="ترتیب نمایش" value={form.sortOrder} set={sortOrder => setForm(current => ({ ...current, sortOrder }))} />
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.active} onChange={event => setForm(current => ({ ...current, active: event.target.checked }))} />فعال برای ثبت هزینه جدید</label>
+      <div className="flex gap-2"><button disabled={saving || !form.title.trim()} className="atelier-button">{saving ? "در حال ذخیره…" : "ذخیره دسته"}</button>{form.code && <button type="button" onClick={() => setForm({ code: "", title: "", active: true, sortOrder: rows.length * 10 })} className="atelier-button-secondary">دسته جدید</button>}</div>
+    </form>
+  </section>;
 }
 function ListEditor({
   values,

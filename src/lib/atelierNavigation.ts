@@ -1,3 +1,4 @@
+import { hasAtelierPermission } from "./atelierPermissions";
 export const ATELIER_NAVIGATION_PERMISSION: Record<string, string> = {
   dashboard: "studio.dashboard.view",
   contracts: "studio.contract.view",
@@ -20,7 +21,7 @@ export function canSeeAtelierSection(
 ) {
   const permissions = new Set(permissionValues);
   if (permissions.has("*")) return true;
-  if (permissions.has(ATELIER_NAVIGATION_PERMISSION[sectionId] || "")) return true;
+  if (hasAtelierPermission(permissions, ATELIER_NAVIGATION_PERMISSION[sectionId] || "")) return true;
   return sectionId !== "ai" && sectionId !== "settings" && permissions.has("studio.view");
 }
 

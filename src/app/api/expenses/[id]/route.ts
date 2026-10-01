@@ -2,7 +2,7 @@ import { ApiError, assertUuid } from "@/lib/apiError";
 import { apiError } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { expenses, accounts, projects } from "@/db/schema";
+import { expenses, accounts, atelierExpenseCategories, projects } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { logAuditEvent } from "@/services/audit";
 import { requirePermission } from "@/services/access";
@@ -66,6 +66,10 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     const updatePayload: Partial<typeof expenses.$inferInsert> = {};
       if (body.title !== undefined && (typeof body.title !== "string" || !body.title.trim())) throw new ApiError(400, "عنوان هزینه الزامی است.");
       if (body.category !== undefined && typeof body.category !== "string") throw new ApiError(400, "دسته هزینه نامعتبر است.");
+      if (body.category !== undefined) {
+        const [category] = await tx.select().from(atelierExpenseCategories).where(eq(atelierExpenseCategories.code, body.category)).limit(1);
+        if (!category || (!category.active && category.code !== record.category)) throw new ApiError(400, "دسته هزینه فعال و معتبر انتخاب کنید.");
+      }
       if (body.description != null && typeof body.description !== "string") throw new ApiError(400, "توضیحات هزینه نامعتبر است.");
       if (body.title !== undefined) updatePayload.title = body.title.trim();
       if (body.category !== undefined) updatePayload.category = body.category;

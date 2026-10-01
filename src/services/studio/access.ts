@@ -121,7 +121,7 @@ export async function requireStudioCustomerAccess(studioCustomerId: string, perm
   if (!exists) throw notFound("مشتری آتلیه");
   if (actor.permissions.has("*")) return actor;
   const owners = await db.select({ coreProjectId: studioProjects.projectId }).from(studioProjects).where(eq(studioProjects.studioCustomerId, studioCustomerId));
-  if (!owners.length && actor.permissions.has(permission)) return actor;
+  if (!owners.length && await canAccessPermission(actor, permission)) return actor;
   for (const owner of owners) if (owner.coreProjectId && await canAccessPermission(actor, permission, owner.coreProjectId)) return actor;
   throw new ApiError(403, "دسترسی به مشتری خارج از محدوده پروژه مجاز نیست.", "PROJECT_SCOPE_FORBIDDEN");
 }

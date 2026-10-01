@@ -179,7 +179,7 @@ describe("Final Iranian atelier workflow", () => {
     expect((await db.select().from(auditLogs).where(eq(auditLogs.entityId, accountId))).some((row) => row.action === "ATELIER_ACCOUNT_BALANCE_ADJUSTED")).toBe(true);
     const center = await getAtelierFinanceCenter(null);
     expect(center.installments.find((row) => row.id === installments[0].id)).toMatchObject({ paidAmount: 5_000_000, remainingAmount: 20_000_000 });
-    expect((await getFinalNotifications(null)).some((row) => row.conditionKey === `installment-due:${installments[0].id}`)).toBe(true);
+    expect((await getFinalNotifications(null, false, actor)).some((row) => row.conditionKey === `installment-due:${installments[0].id}`)).toBe(true);
   });
 
   it("creates and resolves the critical rented-equipment reminder without deleting history", async () => {
@@ -187,17 +187,17 @@ describe("Final Iranian atelier workflow", () => {
     const rental = await addRentalRequirement(actor, drone.id, { itemTitle: "پهپاد حرفه‌ای", supplierName: "اجاره‌دهنده تست", neededAt: contract.programDate, returnAt: contract.programEndDate, estimatedCost: 4_000_000 });
     const [rentalSource] = await db.select().from(atelierExpenseSources).where(and(eq(atelierExpenseSources.sourceType, "rental"), eq(atelierExpenseSources.sourceId, rental.id)));
     expect(Number((await db.select().from(expenses).where(eq(expenses.id, rentalSource.expenseId)))[0].amount)).toBe(4_000_000);
-    const before = await getFinalNotifications(null);
+    const before = await getFinalNotifications(null, false, actor);
     const reminder = before.find((item) => item.conditionKey === `rental:${rental.id}`) as any;
     expect(reminder?.priority).toBe("critical");
     expect(String(reminder?.message)).toContain("پهپاد حرفه‌ای");
     await setNotificationArchived(actor, reminder!.id, true);
-    expect((await getFinalNotifications(null)).some((item) => item.id === reminder!.id)).toBe(false);
-    expect((await getFinalNotifications(null, true)).some((item) => item.id === reminder!.id)).toBe(true);
+    expect((await getFinalNotifications(null, false, actor)).some((item) => item.id === reminder!.id)).toBe(false);
+    expect((await getFinalNotifications(null, true, actor)).some((item) => item.id === reminder!.id)).toBe(true);
     await setNotificationArchived(actor, reminder!.id, false);
-    expect((await getFinalNotifications(null)).some((item) => item.id === reminder!.id)).toBe(true);
+    expect((await getFinalNotifications(null, false, actor)).some((item) => item.id === reminder!.id)).toBe(true);
     await markRentalAsRented(actor, rental.id, 3_500_000);
-    const after = await getFinalNotifications(null);
+    const after = await getFinalNotifications(null, false, actor);
     expect(after.some((item) => item.conditionKey === `rental:${rental.id}`)).toBe(false);
     const [stored] = await db.select().from(rentalEquipment).where(eq(rentalEquipment.id, rental.id));
     expect(stored).toMatchObject({ status: "rented", markedRentedById: actorId });
@@ -230,7 +230,7 @@ describe("Final Iranian atelier workflow", () => {
     expect(reservation.remainingAmount).toBe(0);
     expect(reservation.invoiceId).toBeNull();
     await completeReservation(actor, reservation.id);
-    expect((await listReservations()).find((row) => row.id === reservation.id)).toBeUndefined();
+    expect((await listReservations(undefined, actor)).find((row) => row.id === reservation.id)).toBeUndefined();
     expect(await db.select().from(studioReservations).where(eq(studioReservations.id, reservation.id))).toHaveLength(0);
     const convertible = await saveReservation(actor, { title: "رزرو قابل انتقال", date: tomorrow(), customerName: "انتقال تست", mobile: `0991${Date.now().toString().slice(-7)}` });
     await expect(convertReservationToDailyVisit(actor, convertible.id, { price: 100_000, paidAmount: 100_001, accountId })).rejects.toThrow();
@@ -272,8 +272,8 @@ describe("Final Iranian atelier workflow", () => {
   });
 
   it("reports real dashboard aggregates and redacts finance when access is missing", async () => {
-    const visible = await getFinalDashboard(null, true);
-    const hidden = await getFinalDashboard(null, false);
+    const visible = await getFinalDashboard(null, true, { actor });
+    const hidden = await getFinalDashboard(null, false, { actor });
     expect(visible.overview.finance?.summary.liquidity).toBe((await getAtelierFinanceCenter()).summary.liquidity);
     expect(visible.overview.finance?.analytics.months).toHaveLength(12);
     expect(visible.overview.contractCount).toBeGreaterThan(0);

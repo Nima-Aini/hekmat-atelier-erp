@@ -10,6 +10,7 @@ import {
   saveDailyVisitTitle,
 } from "@/services/studio/finalWorkflow";
 import { listAtelierCatalog, saveCatalog } from "@/services/studio/catalog";
+import { listExpenseCategories, saveExpenseCategory } from "@/services/studio/expenseCategories";
 export async function GET() {
   try {
     await requireAnyPermission([
@@ -24,6 +25,7 @@ export async function GET() {
       projectTypes: await listProjectTypes(true),
       catalog: await listAtelierCatalog(true),
       dailyVisitTitles: await listDailyVisitTitles(true),
+      expenseCategories: await listExpenseCategories(true),
     });
   } catch (error) {
     return apiError(error, "دریافت تنظیمات آتلیه");
@@ -31,7 +33,7 @@ export async function GET() {
 }
 export async function PUT(req: NextRequest) {
   try {
-    const actor = await requirePermission("admin.settings");
+    const actor = await requirePermission("settings.manage");
     const body = await req.json();
     if (body.action === "project_type")
       return NextResponse.json({
@@ -42,6 +44,8 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ success: true, catalogItem: await saveCatalog(actor, body.value, body.id) });
     if (body.action === "daily_visit_title")
       return NextResponse.json({ success: true, dailyVisitTitle: await saveDailyVisitTitle(actor, body.value, body.id) });
+    if (body.action === "expense_category")
+      return NextResponse.json({ success: true, expenseCategory: await saveExpenseCategory(actor, body.value, body.code) });
     return NextResponse.json({
       success: true,
       config: await saveAtelierConfig(actor, body.config),

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ArrowRight, CalendarDays, Edit3, FileSignature, RefreshCw, UsersRound, WalletCards } from "lucide-react";
 import { toJalaliDate } from "@/lib/dateUtils";
+import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { customerPaymentMethods, customerProfileStatus, customerProfileTabs, type CustomerProfileData } from "@/lib/customerProfile";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 import { MetricCard, OverviewCard, overviewMoney } from "./OverviewUi";
@@ -83,7 +84,7 @@ export function CustomerProfileView({ id, revision = 0, onBack, onNavigate, onEd
       </>}
       {tab === 1 && <>
         {!profile.access.planning && <EmptyState text="دسترسی نمایش برنامه‌ریزی این مشتری برای شما فعال نیست." />}
-        <Schedule profile={profile} onNavigate={onNavigate} />
+        <Schedule profile={profile} onNavigate={onNavigate} reload={load} />
         <Projects profile={profile} onNavigate={onNavigate} />
       </>}
       {tab === 2 && (finance ? <Financial finance={finance} onNavigate={onNavigate} /> : <EmptyState text="دسترسی مالی این مشتری برای شما فعال نیست." />)}
@@ -118,15 +119,16 @@ function Projects({ profile, onNavigate }: { profile: CustomerProfileData; onNav
     </article>)}</div>}
   </OverviewCard>;
 }
-function Schedule({ profile, onNavigate }: { profile: CustomerProfileData; onNavigate: Navigate }) {
+function Schedule({ profile, onNavigate, reload }: { profile: CustomerProfileData; onNavigate: Navigate; reload: () => Promise<void> }) {
+  const [title, setTitle] = useState(""), [notes, setNotes] = useState(""), [taskDate, setTaskDate] = useState<Date | null>(null), [taskProject, setTaskProject] = useState(""), [taskError, setTaskError] = useState(""), [saving, setSaving] = useState(false);
+  const save = async (body: Record<string, unknown>) => { setSaving(true); setTaskError(""); try { const response = await fetch(`/api/atelier/customers/${profile.customer.studio.id}/tasks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }); const result = await response.json(); if (!response.ok) throw new Error(result.error || "ثبت انجام نشد"); setTitle(""); setNotes(""); await reload(); } catch (error) { setTaskError(error instanceof Error ? error.message : "ثبت انجام نشد"); } finally { setSaving(false); } };
   const now = new Date(profile.generatedAt).getTime();
   const groups = [
     { title: "برنامه‌های آینده", rows: profile.schedule.filter(r => r.date && +new Date(r.date) >= now && !r.completed && !r.cancelled) },
     { title: "برنامه‌های گذشته و انجام‌شده", rows: profile.schedule.filter(r => r.date && (+new Date(r.date) < now || r.completed || r.cancelled)).reverse() },
     { title: "برنامه‌های بدون تاریخ", rows: profile.schedule.filter(r => !r.date) },
   ];
-  if (!profile.schedule.length) return <EmptyState text="برنامه یا خدمت قابل‌نمایشی برای این مشتری ثبت نشده است." />;
-  return <>{groups.filter(g => g.rows.length).map(group => <OverviewCard key={group.title} title={group.title} icon={CalendarDays}><div className="space-y-3 p-4">{group.rows.map(row => <article key={row.id} className={`min-w-0 space-y-3 rounded-xl border p-3 ${row.overdue ? "border-amber-900/70" : "border-zinc-800"}`}>
+  return <>{profile.access.canManageTasks && <form className="atelier-card grid gap-3 p-4 sm:grid-cols-2" onSubmit={event => { event.preventDefault(); void save({ title, notes, date: taskDate?.toISOString() || null, projectId: taskProject || null }); }}><h3 className="sm:col-span-2">افزودن کار / خدمت</h3><input className="atelier-input" aria-label="عنوان کار" placeholder="عنوان کار" required maxLength={180} value={title} onChange={e => setTitle(e.target.value)} /><JalaliDatePicker value={taskDate} onChange={setTaskDate} placeholder="تاریخ کار" /><textarea className="atelier-input" aria-label="توضیحات کار" placeholder="توضیحات" value={notes} onChange={e => setNotes(e.target.value)} /><select className="atelier-input" aria-label="پروژه مرتبط" value={taskProject} onChange={e => setTaskProject(e.target.value)}><option value="">بدون پروژه</option>{profile.projects.map(p => <option key={p.id} value={p.id}>{p.title}</option>)}</select><button disabled={saving} className="atelier-button" type="submit">افزودن کار / خدمت</button>{taskError && <p role="alert" className="text-red-400">{taskError}</p>}</form>}{!profile.schedule.length && <EmptyState text="برنامه یا خدمت قابل‌نمایشی برای این مشتری ثبت نشده است." />}{groups.filter(g => g.rows.length).map(group => <OverviewCard key={group.title} title={group.title} icon={CalendarDays}><div className="space-y-3 p-4">{group.rows.map(row => <article key={row.id} className={`min-w-0 space-y-3 rounded-xl border p-3 ${row.overdue ? "border-amber-900/70" : "border-zinc-800"}`}>
     <div className="flex flex-wrap justify-between gap-2"><h3 className="break-words text-sm font-bold">{row.title}</h3><div className="flex flex-wrap gap-1"><Badge>{row.completed ? "انجام‌شده" : status(row.status)}</Badge>{row.overdue && <Badge warning>نیازمند پیگیری</Badge>}</div></div>
     <p className="text-xs text-zinc-500">{row.kind}{row.projectTitle ? ` · ${row.projectTitle}` : ""}</p>
     <p className="text-sm text-zinc-200">{dateTime(row.date)}{row.endDate ? ` تا ${dateTime(row.endDate)}` : ""}</p>
@@ -134,6 +136,7 @@ function Schedule({ profile, onNavigate }: { profile: CustomerProfileData; onNav
     {row.personnel.length > 0 && <div className="space-y-2"><p className="text-xs text-zinc-500">پرسنل اختصاص‌یافته</p>{row.personnel.map((person, index) => <p key={index} className="break-words text-xs text-zinc-300">{person.name}{person.start ? ` · ${dateTime(person.start)}` : ""}{person.end ? ` تا ${dateTime(person.end)}` : ""}{person.notes ? ` · ${person.notes}` : ""}</p>)}</div>}
     {row.equipment.length > 0 && <p className="break-words text-xs text-zinc-300">تجهیزات: {row.equipment.map(v => v.split(" · ").map(part => status(part)).join(" · ")).join("، ")}</p>}
     {row.notes && <p className="whitespace-pre-wrap break-words text-xs leading-6 text-zinc-400">{row.notes}</p>}
+    {profile.access.canManageTasks && (row.id.startsWith("manual:") || row.id.startsWith("task:")) && <select disabled={saving} className="atelier-input" aria-label="وضعیت کار" value={row.status} onChange={e => { const [sourceType, sourceId] = row.id.split(":"); void save({ sourceType, sourceId, id: sourceId, status: e.target.value }); }}><option value="pending">در انتظار</option><option value="done">انجام شده</option><option value="cancelled">کنسل شده</option></select>}
     {row.target && <button type="button" className="atelier-button-secondary text-xs" onClick={() => onNavigate(row.target!.section, row.target!.id)}>مشاهده در برنامه‌ریزی</button>}
   </article>)}</div></OverviewCard>)}</>;
 }

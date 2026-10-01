@@ -17,7 +17,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const actor = await requireStudioCustomerAccess(id, "studio.view");
+    const actor = await requireStudioCustomerAccess(id, "studio.customers.view");
 
     const customer: any = await getStudioCustomerById(id);
     const projects = [];
@@ -50,7 +50,7 @@ export async function PUT(
 ) {
   try {
     const { id } = await params;
-    await requireStudioCustomerAccess(id, "studio.projects.manage");
+    await requireStudioCustomerAccess(id, "studio.customers.edit");
     const body = await req.json();
 
     const updated = await updateStudioCustomer(id, body);
@@ -66,7 +66,7 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    await requireStudioCustomerAccess(id, "studio.projects.manage");
+    await requireStudioCustomerAccess(id, "studio.customers.delete");
 
     const result = await deleteStudioCustomer(id);
     return NextResponse.json(result);

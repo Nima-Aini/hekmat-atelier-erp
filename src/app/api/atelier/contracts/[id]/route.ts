@@ -7,6 +7,15 @@ import {
 import { requireStudioResourceAccess } from "@/services/studio/access";
 import { canAccessPermission } from "@/services/access";
 import { redactContractFinance } from "@/services/studio/financialPrivacy";
+import { deletePreContract } from "@/services/studio/contractLifecycle";
+
+export async function DELETE(_: Request, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const { id } = await params;
+    const { actor } = await requireStudioResourceAccess("contract", id, "studio.contract.delete_draft");
+    return NextResponse.json({ success: true, result: await deletePreContract(actor, id) });
+  } catch (error) { return apiError(error, "حذف پیش‌قرارداد"); }
+}
 
 export async function GET(
   _: NextRequest,
@@ -33,7 +42,7 @@ export async function PUT(
     let { actor } = await requireStudioResourceAccess(
       "contract",
       id,
-      "studio.contract.manage",
+      "studio.contract.edit",
     );
     const body = await req.json();
     if (body.items !== undefined || body.paidAmount !== undefined || body.paymentAccountId !== undefined) ({ actor } = await requireStudioResourceAccess("contract", id, "studio.finance.manage"));

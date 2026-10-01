@@ -1,4 +1,5 @@
 import { ApiError } from "@/lib/apiError";
+import { hasAtelierPermission, hasScopedAtelierPermission } from "@/lib/atelierPermissions";
 import { cookies } from "next/headers";
 import { db } from "@/db";
 import { employeeAccounts, employees, employeeProjectAssignments, roles } from "@/db/schema";
@@ -10,7 +11,7 @@ export type EmployeeContext = { employeeId: string; employeeName: string; permis
 
 export async function canAccessPermission(context: EmployeeContext, permission: string, projectId?: string | null) {
   if (context.permissions.has("*")) return true;
-  const roleAllows = context.permissions.has(permission);
+  const roleAllows = hasAtelierPermission(context.permissions, permission);
   if (!projectId) return roleAllows;
   const [assignment] = await db
     .select({ permissionSet: employeeProjectAssignments.permissionSet })
@@ -19,8 +20,7 @@ export async function canAccessPermission(context: EmployeeContext, permission: 
     .limit(1);
   if (!assignment) return false;
   const scoped = (assignment.permissionSet || {}) as Record<string, unknown>;
-  if (scoped[permission] === false) return false;
-  return scoped[permission] === true || roleAllows;
+  return hasScopedAtelierPermission(context.permissions, permission, scoped);
 }
 
 export async function getEmployeeContext(): Promise<EmployeeContext | null> {
@@ -65,7 +65,7 @@ export async function getScopedProjectIds(permissions?: string[]) {
   const rows = await db.select({ projectId: employeeProjectAssignments.projectId, permissionSet: employeeProjectAssignments.permissionSet }).from(employeeProjectAssignments).where(and(eq(employeeProjectAssignments.employeeId, context.employeeId), eq(employeeProjectAssignments.status, "active")));
   return rows.filter((row) => !permissions || permissions.some((permission) => {
     const scoped = (row.permissionSet || {}) as Record<string, unknown>;
-    return scoped[permission] !== false && (scoped[permission] === true || context.permissions.has(permission));
+    return hasScopedAtelierPermission(context.permissions, permission, scoped);
   })).map((r) => r.projectId);
 }
 

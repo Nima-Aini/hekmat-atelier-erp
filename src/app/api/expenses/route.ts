@@ -2,7 +2,7 @@ import { ApiError, apiError, assertUuid } from "@/lib/apiError";
 import { pageNumber } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { expenses, accounts, projects } from "@/db/schema";
+import { expenses, accounts, atelierExpenseCategories, projects } from "@/db/schema";
 import { desc, eq, sql, and, inArray, isNull, or } from "drizzle-orm";
 import { logAuditEvent } from "@/services/audit";
 import { getScopedProjectIds, requirePermission } from "@/services/access";
@@ -78,6 +78,8 @@ export async function POST(req: Request) {
     }
 
     if (!body.accountId) throw new ApiError(400, "انتخاب حساب پرداخت الزامی است.");
+    const [category] = await db.select().from(atelierExpenseCategories).where(and(eq(atelierExpenseCategories.code, String(body.category || "")), eq(atelierExpenseCategories.active, true))).limit(1);
+    if (!category) throw new ApiError(400, "دسته هزینه فعال و معتبر انتخاب کنید.");
     const key = String(body.idempotencyKey || req.headers.get("idempotency-key") || crypto.randomUUID());
     const result = await db.transaction((tx) => postCanonicalExpense(tx, {
       requestKey: `legacy-expense:${key}`, requestHash: crypto.createHash("sha256").update(JSON.stringify({ title: body.title, amount: amt, accountId: body.accountId, projectId: body.projectId || null })).digest("hex"),

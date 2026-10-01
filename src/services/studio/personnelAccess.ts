@@ -1,5 +1,6 @@
 import { db } from "@/db";
-import { employeeAccounts, employeePermissions, employees, permissions, roles, studioPersonnel } from "@/db/schema";
+import { employeeAccounts, employeePermissions, employees, permissions, roles, studioPersonnel, studioNotifications } from "@/db/schema";
+import { GRANULAR_PERMISSION_PARENTS, hasAtelierPermission } from "@/lib/atelierPermissions";
 import { ApiError, assertUuid } from "@/lib/apiError";
 import { hashPassword } from "@/services/employeeAuth";
 import { logAuditEvent } from "@/services/audit";
@@ -11,6 +12,7 @@ export const PERSONNEL_PERMISSION_CODES = [
   "studio.reservations.view", "studio.reservations.manage", "studio.planning.view", "studio.planning.manage", "studio.calendar.view",
   "studio.customers.view", "studio.personnel.view", "studio.personnel.manage", "studio.equipment.view", "studio.equipment.manage",
   "studio.finance.view", "studio.finance.manage", "studio.notifications.view", "ai.view", "settings.view",
+  ...Object.keys(GRANULAR_PERMISSION_PARENTS),
 ] as const;
 
 export async function getPersonnelAccess(personnelId: string) {
@@ -37,6 +39,11 @@ export async function savePersonnelAccess(actor: EmployeeContext, personnelId: s
     }
     const requested = Array.isArray(value.permissions) ? value.permissions.filter((code): code is string => typeof code === "string") : [];
     if (requested.some((code) => !PERSONNEL_PERMISSION_CODES.includes(code as any))) throw new ApiError(400, "دسترسی نامعتبر است.");
+    if (requested.some(code => !hasAtelierPermission(actor.permissions, code))) throw new ApiError(403, "نمی‌توانید دسترسی بالاتر از دسترسی خودتان اعطا کنید.");
+    const previous = await tx.select({ code: permissions.code }).from(employeePermissions).innerJoin(permissions, eq(permissions.id, employeePermissions.permissionId)).where(and(eq(employeePermissions.employeeId, employeeId), eq(employeePermissions.granted, true)));
+    if (requested.some(code => code === "ai.use" || code === "ai.view") && !previous.some(row => row.code === "ai.use" || row.code === "ai.view")) {
+      await tx.insert(studioNotifications).values({ recipientType: "management", recipientMobile: "", notificationType: "security_alert", messageText: `دسترسی هوش مصنوعی برای ${person.fullName} فعال شد؛ فقط با مجوزهای همین پرسنل.`, payload: { category: "ai", severity: "warning", title: "اعطای دسترسی هوش مصنوعی", entityType: "personnel", entityId: person.id, tab: "personnel" } });
+    }
     const [role] = await tx.select().from(roles).where(eq(roles.code, "atelier_personnel")).limit(1);
     if (!role) throw new ApiError(500, "نقش پرسنل آتلیه آماده نیست.");
     const [existing] = await tx.select().from(employeeAccounts).where(eq(employeeAccounts.employeeId, employeeId)).limit(1);
@@ -46,7 +53,7 @@ export async function savePersonnelAccess(actor: EmployeeContext, personnelId: s
     if (!existing && password.length < 10) throw new ApiError(400, "رمز عبور اولیه باید حداقل ۱۰ نویسه باشد.");
     if (existing) {
       const disabling = value.status === "inactive";
-      await tx.update(employeeAccounts).set({ username, status: disabling ? "inactive" : "active", roleId: role.id, ...((password || disabling) ? { ...(password ? { passwordHash: hashPassword(password) } : {}), sessionInvalidBefore: new Date() } : {}), updatedAt: new Date() }).where(eq(employeeAccounts.id, existing.id));
+      await tx.update(employeeAccounts).set({ username, status: disabling ? "inactive" : "active", roleId: role.id, ...(password ? { passwordHash: hashPassword(password) } : {}), sessionInvalidBefore: new Date(), updatedAt: new Date() }).where(eq(employeeAccounts.id, existing.id));
     } else {
       await tx.insert(employeeAccounts).values({ employeeId, username, passwordHash: hashPassword(password), roleId: role.id, status: value.status === "inactive" ? "inactive" : "active" });
     }

@@ -14,7 +14,9 @@ import {
   AlertCircle,
   Camera,
 } from "lucide-react";
-import { getBusinessWeekday, getJalaliMonthLength, gregorianToJalali, jalaliToGregorian, toBusinessGregorianDateString, toJalaliDate } from "@/lib/dateUtils";
+import { gregorianToJalali, jalaliToGregorian, toBusinessGregorianDateString, toJalaliDate } from "@/lib/dateUtils";
+import { type CalendarDay, type CalendarThresholds } from "@/lib/atelierCalendar";
+import { CalendarMonthGrid } from "./CalendarMonthGrid";
 import { dashboardPresetSelection, type DashboardDateSelection } from "@/lib/dashboardDateSelection";
 import { DashboardRangeFilter } from "./DashboardRangeFilter";
 import { canSeeAtelierSection } from "@/lib/atelierNavigation";
@@ -47,7 +49,8 @@ export function FinalDashboard({
   const [data, setData] = useState<any>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true);
-  const [calendarDays, setCalendarDays] = useState<Array<{ date: string; count: number; contracts: Array<{ id: string; programDate: string; customer: { name: string }; projectType: { title: string } }> }>>([]);
+  const [calendarDays, setCalendarDays] = useState<CalendarDay[]>([]);
+  const [calendarThresholds, setCalendarThresholds] = useState<CalendarThresholds>();
   const [calendarError, setCalendarError] = useState("");
   const [calendarLoading, setCalendarLoading] = useState(true);
   const canSeeCalendar = canSeeAtelierSection("calendar", permissions);
@@ -56,7 +59,7 @@ export function FinalDashboard({
     const controller = new AbortController();
     fetch("/api/atelier/calendar", { cache: "no-store", signal: controller.signal })
       .then(response => response.json())
-      .then(body => { if (!controller.signal.aborted) { if (body.success) { setCalendarDays(body.calendar?.days || []); setCalendarError(""); } else setCalendarError(body.error || "دریافت تقویم ممکن نشد."); setCalendarLoading(false); } })
+      .then(body => { if (!controller.signal.aborted) { if (body.success) { setCalendarDays(body.calendar?.days || []); setCalendarThresholds(body.calendar?.thresholds); setCalendarError(""); } else setCalendarError(body.error || "دریافت تقویم ممکن نشد."); setCalendarLoading(false); } })
       .catch(() => { if (!controller.signal.aborted) { setCalendarError("دریافت تقویم ممکن نشد."); setCalendarLoading(false); } });
     return () => controller.abort();
   }, [canSeeCalendar]);
@@ -208,7 +211,7 @@ export function FinalDashboard({
               />
             )}
             <MetricCard
-              title="قراردادهای در انتظار"
+              title="پیش‌قراردادها"
               value={overview.pendingContracts.toLocaleString("fa-IR")}
               context="نیازمند بررسی و تأیید"
               icon={FileSignature}
@@ -224,7 +227,7 @@ export function FinalDashboard({
               onClick={() => navigate("customers")}
             />
           </div>
-          {canSeeCalendar && <CalendarPreview days={calendarDays} error={calendarError} loading={calendarLoading} onOpen={() => navigate("calendar")} />}
+          {canSeeCalendar && <CalendarPreview days={calendarDays} thresholds={calendarThresholds} error={calendarError} loading={calendarLoading} onOpen={() => navigate("calendar")} />}
           <div className="overview-analytics-grid grid items-stretch gap-5 lg:grid-cols-[1.7fr_1fr]">
             {finance ? (
               <CashChart
@@ -422,27 +425,23 @@ export function FinalDashboard({
   );
 }
 
-function CalendarPreview({ days, error, loading, onOpen }: { days: Array<{ date: string; count: number; contracts: Array<{ id: string; programDate: string; customer: { name: string }; projectType: { title: string } }> }>; error: string; loading: boolean; onOpen: () => void }) {
+function CalendarPreview({ days, thresholds, error, loading, onOpen }: { days: CalendarDay[]; thresholds?: CalendarThresholds; error: string; loading: boolean; onOpen: () => void }) {
   const today = gregorianToJalali(new Date());
-  const first = jalaliToGregorian({ year: today.year, month: today.month, day: 1 });
-  const leading = (getBusinessWeekday(first) + 1) % 7;
-  const counts = new Map(days.map(day => [day.date, day.count]));
-  const monthDays = getJalaliMonthLength(today.year, today.month);
-  const total = Array.from({ length: monthDays }, (_, index) => counts.get(toBusinessGregorianDateString(jalaliToGregorian({ year: today.year, month: today.month, day: index + 1 }))) || 0).reduce((sum, count) => sum + count, 0);
-  const todayKey = toBusinessGregorianDateString(new Date());
-  const upcoming = days.filter(day => day.date >= todayKey).flatMap(day => day.contracts).sort((a, b) => +new Date(a.programDate) - +new Date(b.programDate)).slice(0, 4);
-  return <OverviewCard title="تقویم و برنامه‌های پیش رو" icon={CalendarDays} action={<button type="button" className="overview-range" onClick={onOpen}>مشاهده تقویم</button>}>
-    <p className="mb-3 text-xs text-slate-400">{new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "long", timeZone: "Asia/Tehran" }).format(new Date())} · {loading ? "در حال دریافت برنامه‌ها…" : `${total.toLocaleString("fa-IR")} برنامه قراردادی تأییدشده`} · مستقل از بازهٔ آمار داشبورد</p>
-    {error && <p role="alert" className="mb-2 text-xs text-amber-300">{error}</p>}
-    <div className="grid grid-cols-7 gap-1 text-center text-[10px]">{["ش", "ی", "د", "س", "چ", "پ", "ج"].map((label, index) => <span key={index} className="py-1 text-slate-500">{label}</span>)}
-      {Array.from({ length: leading }, (_, index) => <span key={`empty-${index}`} />)}
-      {Array.from({ length: monthDays }, (_, index) => {
-        const day = index + 1, count = counts.get(toBusinessGregorianDateString(jalaliToGregorian({ year: today.year, month: today.month, day }))) || 0;
-        return <button key={day} type="button" onClick={onOpen} aria-label={`${day.toLocaleString("fa-IR")}؛ ${count.toLocaleString("fa-IR")} برنامه؛ مشاهده تقویم`} className={`relative min-h-9 rounded-lg border p-1 ${day === today.day ? "border-red-600 bg-red-950/40 text-white" : count ? "border-emerald-900 bg-emerald-950/20 text-emerald-100" : "border-slate-800 text-slate-400"}`}>
-          {day.toLocaleString("fa-IR")}{count > 0 && <span className="absolute bottom-0.5 left-0.5 h-1 w-1 rounded-full bg-red-400" />}
-        </button>;
-      })}
-    </div>
-    {!loading && <div className="mt-4 border-t border-slate-800 pt-3"><h3 className="mb-2 text-xs font-bold text-slate-200">نزدیک‌ترین برنامه‌های تأییدشده</h3>{upcoming.length ? <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">{upcoming.map(contract => <button type="button" key={contract.id} onClick={onOpen} className="min-w-0 rounded-xl border border-slate-800 bg-black/20 p-2 text-right hover:border-red-800"><span className="block truncate text-xs font-semibold text-slate-100">{contract.projectType.title}</span><span className="mt-1 block truncate text-[11px] text-slate-400">{contract.customer.name}</span><time className="mt-1 block text-[11px] text-red-300">{toJalaliDate(contract.programDate, { showTime: true })}</time></button>)}</div> : <p className="text-xs text-slate-500">برنامهٔ تأییدشدهٔ آینده‌ای ثبت نشده است.</p>}</div>}
+  const [view, setView] = useState({ year: today.year, month: today.month });
+  const [selectedDate, setSelectedDate] = useState(toBusinessGregorianDateString(new Date()));
+  const selected = days.find(day => day.date === selectedDate);
+  return <OverviewCard title="تقویم" icon={CalendarDays} action={<button type="button" className="overview-range" onClick={onOpen}>مشاهده تقویم</button>}>
+    {error ? <p role="alert" className="text-xs text-amber-300">{error}</p> : loading ? <p role="status" className="text-xs text-slate-400">در حال دریافت برنامه‌ها…</p> : <div className="grid min-w-0 gap-3 md:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+      <CalendarMonthGrid compact view={view} onViewChange={next => { setView(next); setSelectedDate(toBusinessGregorianDateString(jalaliToGregorian({ ...next, day: 1 }))); }} days={days} thresholds={thresholds} selectedDate={selectedDate} onSelect={day => setSelectedDate(day.date)} />
+      <section aria-live="polite" className="min-w-0">
+        <h3 className="mb-2 text-xs font-bold text-slate-200">برنامه‌های {toJalaliDate(new Date(`${selectedDate}T12:00:00+03:30`))}</h3>
+        <p className="mb-2 text-[10px] text-slate-500">مستقل از بازهٔ آمار داشبورد</p>
+        {selected?.contracts.length ? <div className="max-h-52 space-y-2 overflow-y-auto">{selected.contracts.map(contract => <button type="button" key={contract.id} onClick={onOpen} className="block w-full min-w-0 rounded-xl border border-slate-800 bg-black/20 p-2 text-right hover:border-red-800">
+          <span className="block truncate text-xs font-semibold text-slate-100">{contract.projectType.title}</span>
+          <span className="mt-1 block truncate text-[11px] text-slate-400">{contract.customer.name}</span>
+          <time className="mt-1 block text-[11px] text-red-300">{toJalaliDate(contract.programDate, { showTime: true })}</time>
+        </button>)}</div> : <p className="text-xs text-slate-500">برنامهٔ تأییدشده‌ای برای این روز ثبت نشده است.</p>}
+      </section>
+    </div>}
   </OverviewCard>;
 }

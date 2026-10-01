@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { db } from "@/db";
 import {
   invoices,
+  studioContracts,
   invoiceItems,
   products,
   specialProducts,
@@ -542,6 +543,8 @@ export async function createInvoice(input: CreateInvoiceInput, client?: Transact
  * Reverse an invoice safely (Audited Reversal)
  */
 export async function reverseInvoice(invoiceId: string, reason: string) {
+  const [contract] = await db.select({ id: studioContracts.id }).from(studioContracts).where(eq(studioContracts.invoiceId, invoiceId)).limit(1);
+  if (contract) throw new ApiError(409, "فاکتور قرارداد فقط از مسیر ابطال قرارداد و برگشت وجه قابل ابطال است.");
   return await db.transaction(async (tx) => {
     const [inv] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).for("update").limit(1);
     if (!inv) throw new Error("فاکتور پیدا نشد");

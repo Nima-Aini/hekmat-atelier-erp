@@ -16,6 +16,8 @@ import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { toJalaliDate } from "@/lib/dateUtils";
 import { atelierToast } from "@/lib/atelierFeedback";
 import { AtelierModal } from "./AtelierModal";
+import { PersonnelWagePayments } from "./PersonnelWagePayments";
+import { EquipmentUsageCalendar } from "./EquipmentUsageCalendar";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 
 const ROLES: Record<string, string> = {
@@ -203,9 +205,10 @@ export function PersonnelView() {
 
 function PersonnelFinanceFile({ person, onClose }: { person: any; onClose: () => void }) {
   const [from, setFrom] = useState<Date | null>(null), [to, setTo] = useState<Date | null>(null), [data, setData] = useState<any>(null), [error, setError] = useState("");
-  useEffect(() => { const query = new URLSearchParams(); if (from) query.set("from", from.toISOString()); if (to) { const end = new Date(to); end.setHours(23, 59, 59, 999); query.set("to", end.toISOString()); } fetch(`/api/atelier/personnel/${person.id}/finance?${query}`).then((response) => response.json()).then((body) => body.success ? (setData(body.file), setError("")) : setError(body.error || "دریافت پرونده مالی ممکن نشد.")).catch(() => setError("ارتباط با سرور برقرار نشد.")); }, [person.id, from, to]);
+  const [reloadTick, setReloadTick] = useState(0);
+  useEffect(() => { const query = new URLSearchParams(); if (from) query.set("from", from.toISOString()); if (to) { const end = new Date(to); end.setHours(23, 59, 59, 999); query.set("to", end.toISOString()); } fetch(`/api/atelier/personnel/${person.id}/finance?${query}`).then((response) => response.json()).then((body) => body.success ? (setData(body.file), setError("")) : setError(body.error || "دریافت پرونده مالی ممکن نشد.")).catch(() => setError("ارتباط با سرور برقرار نشد.")); }, [person.id, from, to, reloadTick]);
   const money = (value: unknown) => `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
-  return <AtelierModal title={`پرونده مالی — ${person.fullName}`} onClose={onClose} wide><div className="space-y-5"><div className="grid gap-3 sm:grid-cols-2"><JalaliDatePicker label="از تاریخ" value={from} onChange={setFrom} /><JalaliDatePicker label="تا تاریخ" value={to} onChange={setTo} /></div>{error ? <ErrorState text={error} /> : !data ? <LoadingState /> : <><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{[["کل کارکرد", data.totals.earned], ["کل پرداخت شده", data.totals.paid], ["مانده پرداخت", data.totals.remaining], ["تعداد قرارداد", data.totals.contracts], ["تعداد مراجعات روزانه", data.totals.dailyVisits]].map(([label, value], index) => <div key={String(label)} className="rounded-2xl border border-zinc-800 bg-black/30 p-4"><span className="text-xs text-zinc-500">{label}</span><b className={`mt-2 block text-lg ${index === 2 ? "text-red-400" : "text-zinc-100"}`}>{index < 3 ? money(value) : Number(value).toLocaleString("fa-IR")}</b></div>)}</div><section><h3 className="font-black">تاریخچه کارکرد</h3><div className="mt-3 space-y-2">{data.history.map((row: any) => <div key={row.salaryRecordId} className="grid gap-2 rounded-xl border border-zinc-800 p-3 text-xs sm:grid-cols-6"><span>{toJalaliDate(row.date)}</span><span>{row.sourceType === "daily_visit" ? "مراجعه روزانه" : "قرارداد"}</span><span>{row.sourceTitle}</span><span>{row.workTitle}</span><span>{money(row.wage)}</span><span className="text-red-400">مانده: {money(row.remaining)}</span></div>)}</div></section><section><h3 className="font-black">تاریخچه پرداخت</h3><div className="mt-3 space-y-2">{data.paymentHistory.map((row: any) => <div key={row.id} className="rounded-xl border border-zinc-800 p-3 text-xs">{toJalaliDate(row.date)} — {money(row.amount)} — {row.accountName} — {row.relatedWork} — {row.notes || "بدون توضیح"}</div>)}{!data.paymentHistory.length && <p className="text-xs text-zinc-600">پرداختی ثبت نشده است.</p>}</div></section></>}</div></AtelierModal>;
+  return <AtelierModal title={`پرونده مالی — ${person.fullName}`} onClose={onClose} wide><div className="space-y-5"><PersonnelWagePayments personId={person.id} onPaid={() => setReloadTick(value => value + 1)} /><div className="grid gap-3 sm:grid-cols-2"><JalaliDatePicker label="از تاریخ" value={from} onChange={setFrom} /><JalaliDatePicker label="تا تاریخ" value={to} onChange={setTo} /></div>{error ? <ErrorState text={error} /> : !data ? <LoadingState /> : <><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">{[["کل کارکرد", data.totals.earned], ["کل پرداخت شده", data.totals.paid], ["مانده پرداخت", data.totals.remaining], ["تعداد قرارداد", data.totals.contracts], ["تعداد مراجعات روزانه", data.totals.dailyVisits]].map(([label, value], index) => <div key={String(label)} className="rounded-2xl border border-zinc-800 bg-black/30 p-4"><span className="text-xs text-zinc-500">{label}</span><b className={`mt-2 block text-lg ${index === 2 ? "text-red-400" : "text-zinc-100"}`}>{index < 3 ? money(value) : Number(value).toLocaleString("fa-IR")}</b></div>)}</div><section><h3 className="font-black">تاریخچه کارکرد</h3><div className="mt-3 space-y-2">{data.history.map((row: any) => <div key={row.salaryRecordId} className="grid gap-2 rounded-xl border border-zinc-800 p-3 text-xs sm:grid-cols-6"><span>{toJalaliDate(row.date)}</span><span>{row.sourceType === "daily_visit" ? "مراجعه روزانه" : "قرارداد"}</span><span>{row.sourceTitle}</span><span>{row.workTitle}</span><span>{money(row.wage)}</span><span className="text-red-400">مانده: {money(row.remaining)}</span></div>)}</div></section><section><h3 className="font-black">تاریخچه پرداخت</h3><div className="mt-3 space-y-2">{data.paymentHistory.map((row: any) => <div key={row.id} className="rounded-xl border border-zinc-800 p-3 text-xs">{toJalaliDate(row.date)} — {money(row.amount)} — {row.accountName} — {row.relatedWork} — {row.notes || "بدون توضیح"}</div>)}{!data.paymentHistory.length && <p className="text-xs text-zinc-600">پرداختی ثبت نشده است.</p>}</div></section></>}</div></AtelierModal>;
 }
 
 export function EquipmentView() {
@@ -216,10 +219,30 @@ export function EquipmentView() {
     [editing, setEditing] = useState<any | "new" | null>(null),
     [usageItem, setUsageItem] = useState<any | null>(null),
     [configuredCategories, setConfiguredCategories] = useState<string[]>([]);
+  useEffect(() => {
+    const openTarget = () => {
+      const id = sessionStorage.getItem("akma:equipment-target");
+      const row = rows.find(item => item.id === id);
+      if (row) { setUsageItem(row); sessionStorage.removeItem("akma:equipment-target"); }
+    };
+    openTarget();
+    window.addEventListener("akma:navigate-item", openTarget);
+    return () => window.removeEventListener("akma:navigate-item", openTarget);
+  }, [rows]);
   const load = () => {
     setLoading(true);
     Promise.all([
-      fetch("/api/studio/equipment?pageSize=100").then((r) => r.json()),
+      (async () => {
+        const first = await fetch("/api/studio/equipment?pageSize=100").then(response => response.json());
+        if (!first.success) return first;
+        const equipment = [...(first.equipment || [])];
+        for (let page = 2; page <= (first.pagination?.totalPages || 1); page++) {
+          const next = await fetch(`/api/studio/equipment?pageSize=100&page=${page}`).then(response => response.json());
+          if (!next.success) throw new Error(next.error || "دریافت تجهیزات ممکن نشد.");
+          equipment.push(...(next.equipment || []));
+        }
+        return { ...first, equipment };
+      })(),
       fetch("/api/atelier/settings").then((r) => r.json()),
     ])
       .then(([data, settings]) => {
@@ -248,6 +271,7 @@ export function EquipmentView() {
         action="تجهیزات جدید"
         onAdd={() => setEditing("new")}
       />
+      <EquipmentUsageCalendar equipment={rows} />
       <SearchBox
         value={query}
         set={setQuery}
@@ -268,7 +292,7 @@ export function EquipmentView() {
                   <Camera className="h-5 w-5 text-red-400" />
                 </span>
                 <span
-                  className={`rounded-full px-2 py-1 text-[10px] ${item.currentHealthStatus === "healthy" && item.locationType === "in_studio" ? "bg-emerald-950 text-emerald-400" : item.currentHealthStatus === "damaged" ? "bg-red-950 text-red-400" : "bg-orange-950 text-orange-400"}`}
+                  className={`rounded-full px-2 py-1 text-[10px] ${item.currentHealthStatus === "healthy" && item.locationType === "in_studio" ? "bg-emerald-950 text-emerald-400" : item.currentHealthStatus !== "healthy" || item.locationType === "maintenance" ? "bg-red-950 text-red-400" : "bg-orange-950 text-orange-400"}`}
                 >
                   {STATUS[item.currentHealthStatus] ||
                     STATUS[item.locationType] ||
@@ -291,11 +315,7 @@ export function EquipmentView() {
                   ویرایش
                 </button>
                 <button
-                  onClick={async () => {
-                    const data = await fetch(`/api/studio/equipment/${item.id}`).then((response) => response.json());
-                    if (data.success) setUsageItem(data.equipment);
-                    else atelierToast(data.error || "دریافت برنامه استفاده ممکن نشد.", "error");
-                  }}
+                  onClick={() => setUsageItem(item)}
                   className="atelier-button-secondary"
                 >
                   <CalendarDays className="h-4 w-4" />
@@ -326,31 +346,8 @@ export function EquipmentView() {
 
 function EquipmentUsage({ equipment, onClose }: { equipment: any; onClose: () => void }) {
   return (
-    <AtelierModal title={`برنامه استفاده ${equipment.title}`} onClose={onClose}>
-      <div className="space-y-3">
-        {!equipment.reservations?.length ? (
-          <EmptyState text="هنوز استفاده‌ای برای این تجهیزات ثبت نشده است." />
-        ) : (
-          equipment.reservations.map((reservation: any) => (
-            <article key={reservation.id} className="rounded-xl border border-zinc-800 bg-black/30 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-bold">{reservation.projectTitle || "برنامه آتلیه"}</h3>
-                  <p className="mt-1 text-xs text-zinc-500">{reservation.personnelName || "بدون پرسنل مستقیم"}</p>
-                </div>
-                <span className="rounded-full bg-red-950/40 px-2 py-1 text-[10px] text-red-300">
-                  {reservation.status === "reserved" ? "رزرو شده" : reservation.status === "checked_out" ? "در حال استفاده" : "بازگردانده شده"}
-                </span>
-              </div>
-              <p className="mt-3 text-xs text-zinc-400">
-                {new Intl.DateTimeFormat("fa-IR-u-ca-persian", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Tehran" }).format(new Date(reservation.reservedFrom))}
-                {" تا "}
-                {new Intl.DateTimeFormat("fa-IR-u-ca-persian", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Tehran" }).format(new Date(reservation.reservedTo))}
-              </p>
-            </article>
-          ))
-        )}
-      </div>
+    <AtelierModal title={`برنامه استفاده ${equipment.title}`} onClose={onClose} wide>
+      <EquipmentUsageCalendar equipmentId={equipment.id} />
     </AtelierModal>
   );
 }
@@ -591,7 +588,7 @@ function PersonnelAccessForm({ person, onClose }: { person: any; onClose: () => 
             <Select label="وضعیت حساب" value={form.status} set={(status) => setForm((current) => ({ ...current, status }))} options={{ active: "فعال", inactive: "غیرفعال" }} />
           </div>
           <fieldset>
-            <legend className="atelier-label">بخش‌های قابل دسترسی</legend>
+            <legend className="atelier-label">دسترسی پیشرفته — عملیات مجاز</legend>
             <div className="grid gap-2 sm:grid-cols-2">
               {available.map((item) => (
                 <label key={item.permission} className="flex cursor-pointer items-center gap-2 rounded-xl border border-zinc-800 bg-black/30 p-3 text-sm">

@@ -85,9 +85,10 @@ describe("Customer complete profile on a disposable database", () => {
     expect(profile.financial!.installments.find(i => i.id === installmentId)!.payments).toHaveLength(1);
     expect(profile.customer).toMatchObject({ email: "test@example.invalid", phone: "02100000000", address: "آدرس تست" });
   });
-  it("combines actual planning, calendar, tasks, production, delivery, daily visits and explicitly-labelled legacy reservations", async () => {
+  it("combines authoritative schedules without inferring customer links from matching phones", async () => {
     const profile = await getAtelierCustomerProfile(admin, studioId);
-    for (const kind of ["خدمت قرارداد", "تقویم", "کار", "برنامه تولید", "مرحله تولید", "تحویل", "مراجعه روزانه", "رزرو با شماره تماس مشتری"]) expect(profile.schedule.some(s => s.kind === kind)).toBe(true);
+    for (const kind of ["خدمت قرارداد", "تقویم", "کار", "برنامه تولید", "مرحله تولید", "تحویل", "مراجعه روزانه"]) expect(profile.schedule.some(s => s.kind === kind)).toBe(true);
+    expect(profile.schedule.some(s => s.kind === "رزرو با شماره تماس مشتری")).toBe(false);
     const item = profile.schedule.find(s => s.kind === "خدمت قرارداد")!;
     expect(item.personnel[0].name).toBe("عکاس تست"); expect(item.equipment[0]).toContain("دوربین تست");
     expect(profile.schedule.find(s => s.title === "کار سررسیدگذشته")!.overdue).toBe(true);
