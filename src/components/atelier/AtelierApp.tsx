@@ -32,9 +32,9 @@ export default function HomePage() {
   useEffect(() => {
     fetch("/api/auth/employee-me")
       .then((r) => r.json())
-      .then((data) => {
+      .then(async (data) => {
         if (!data.success) router.replace(`/employee-login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
-        else { setMe(data); fetch("/api/me/appearance").then(r => r.json()).then(body => { if (validAppearance(body.appearance)) applyAppearance(body.appearance); }).catch(() => undefined); }
+        else { await fetch("/api/me/appearance").then(r => r.json()).then(body => { if (validAppearance(body.appearance)) applyAppearance(body.appearance); }).catch(() => undefined); setMe(data); }
         setAuthReady(true);
       })
       .catch(() => router.replace(`/employee-login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`));

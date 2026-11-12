@@ -17,8 +17,7 @@ try {
  await page.goto(`${base}/appearance`);
  await Promise.all([page.waitForResponse(response => response.url().includes("/api/me/appearance") && response.request().method() === "PUT" && response.ok()), page.getByLabel("حالت نمایش").selectOption("light")]);
  await page.waitForFunction(() => document.documentElement.dataset.theme === "light");
- await page.getByRole("button", { name: "رنگ #1d4ed8", exact: true }).click();
- await page.waitForResponse(response => response.url().includes("/api/me/appearance") && response.request().method() === "PUT" && response.ok());
+ await Promise.all([page.waitForResponse(response => response.url().includes("/api/me/appearance") && response.request().method() === "PUT" && response.ok()), page.getByRole("button", { name: "رنگ #1d4ed8", exact: true }).click()]);
  await page.reload(); await page.getByLabel("حالت نمایش").waitFor();
  assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
  assert.equal(await page.locator("html").evaluate(el => el.style.getPropertyValue("--accent")), "#1d4ed8");
@@ -43,8 +42,7 @@ try {
  assert.equal(await page.getByLabel("ساعت - ساعت", { exact: true }).isVisible(), true);
  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true);
  await page.screenshot({ path: "/tmp/atelier-mobile-verified.png", fullPage: true });
- await page.goto(`${base}/appearance`); await page.getByLabel("حالت نمایش").selectOption("dark");
- await page.waitForResponse(response => response.url().includes("/api/me/appearance") && response.request().method() === "PUT" && response.ok());
+ await page.goto(`${base}/appearance`); await Promise.all([page.waitForResponse(response => response.url().includes("/api/me/appearance") && response.request().method() === "PUT" && response.ok()), page.getByLabel("حالت نمایش").selectOption("dark")]);
  await page.reload(); assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
  assert.deepEqual(errors, []);
  console.log("UX browser smoke passed: authentication return URL, appearance persistence, contract deep links, time save/refresh, history and 390px mobile picker.");
