@@ -28,6 +28,9 @@ if (databaseConfig.driver === "postgres") {
       ssl: databaseConfig.ssl,
       options: "-c timezone=UTC",
     });
+  // A controlled restore cutover closes idle connections. pg removes these
+  // clients from its pool and reconnects to the verified database name.
+  if (!rawPool.listenerCount("error")) rawPool.on("error", (error: { code?: string }) => { console.error("database.idle_connection_closed", { code: error.code || "CONNECTION_CLOSED" }); });
   rawDb = globalForDb.__arenaDb ?? drizzleNodePg(rawPool);
   if (process.env.NODE_ENV !== "production") {
     globalForDb.__arenaPool = rawPool;

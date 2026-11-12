@@ -1,4 +1,5 @@
 "use client";
+import { useUrlState } from "@/lib/useUrlState";
 
 import { useEffect, useState } from "react";
 import { CalendarDays } from "lucide-react";
@@ -9,7 +10,7 @@ import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 
 export function FinalCalendar({ onOpenPlanning }: { onOpenPlanning?: (id: string) => void }) {
   const today = gregorianToJalali(new Date());
-  const [view, setView] = useState({ year: today.year, month: today.month });
+  const [view, setView] = useUrlState("month", { year: today.year, month: today.month }, value => Number.isInteger(value.year) && value.year >= 1200 && value.year <= 1600 && Number.isInteger(value.month) && value.month >= 1 && value.month <= 12);
   const [data, setData] = useState<{ days: CalendarDay[]; thresholds: CalendarThresholds } | null>(null);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<CalendarDay | null>(null);

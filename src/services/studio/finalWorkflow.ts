@@ -1349,14 +1349,18 @@ export async function deleteDailyVisit(actor: EmployeeContext, id: string) {
 export async function listReservations(reporting = false, actor?: EmployeeContext) {
   const { reservationScope } = await import("./reservationAccess");
   const query = db.select().from(studioReservations).where(await reservationScope(actor)).orderBy(asc(studioReservations.reservedAt));
-  return reporting ? query : query.limit(300);
+  const rows = await (reporting ? query : query.limit(300));
+  if (!rows.length) return [];
+  const managerRows = await db.execute(sql`SELECT reservation_id, personnel_id FROM reservation_managers WHERE reservation_id IN (${sql.join(rows.map(row => sql`${row.id}::uuid`), sql`, `)})`);
+  const assignments = (managerRows as unknown as { rows: { reservation_id: string; personnel_id: string }[] }).rows || [];
+  return rows.map(row => ({ ...row, managerPersonnelIds: assignments.filter(m => m.reservation_id === row.id).map(m => m.personnel_id) }));
 }
 export async function saveReservation(
   actor: EmployeeContext,
-  value: SimpleMoneyInput & { status?: unknown; ownerEmployeeId?: unknown; assignedPersonnelId?: unknown; viewerEmployeeIds?: unknown; sharedPersonnelIds?: unknown },
+  value: SimpleMoneyInput & { status?: unknown; ownerEmployeeId?: unknown; assignedPersonnelId?: unknown; viewerEmployeeIds?: unknown; sharedPersonnelIds?: unknown; managerPersonnelIds?: unknown },
   id?: string,
 ) {
-  if (id) await (await import("./reservationAccess")).assertReservationAccess(actor, id);
+  if (id) await (await import("./reservationAccess")).assertReservationManage(actor, id);
   const ownership = await (await import("./reservationAccess")).reservationOwnership(actor, value, id);
   const vals = {
     title: cleanText(value.title, "عنوان", true, 180)!,
@@ -1372,6 +1376,7 @@ export async function saveReservation(
       assertUuid(id);
       const [existing] = await tx.select().from(studioReservations).where(and(eq(studioReservations.id, id), await (await import("./reservationAccess")).reservationScope(actor))).for("update").limit(1);
       if (!existing || existing.status === "cancelled") throw new ApiError(404, "رزرو یافت نشد.");
+      await (await import("./reservationAccess")).assertReservationManage(actor, id);
       [row] = await tx
         .update(studioReservations)
         .set({ ...vals, updatedAt: new Date() })
@@ -1388,6 +1393,7 @@ export async function saveReservation(
         .returning();
     }
     if (!row) throw new ApiError(404, "رزرو یافت نشد.");
+    await (await import("./reservationAccess")).saveReservationManagers(tx, actor, row.id, value);
     await logAuditEvent(
       id ? "RESERVATION_UPDATED" : "RESERVATION_CREATED",
       "studio_reservation",
@@ -1410,6 +1416,12 @@ export async function completeReservation(actor: EmployeeContext, id: string) {
   return hardDeleteReservation(actor, id, "RESERVATION_COMPLETED_AND_DELETED");
 }
 async function hardDeleteReservation(actor: EmployeeContext, id: string, action: string) {
+  await (await import("./reservationAccess")).assertReservationManage(actor, id);
+  if (!actor.permissions.has("*")) {
+    if (!actor.permissions.has("studio.reservations.delete") && !actor.permissions.has("studio.reservations.manage")) throw new ApiError(403, "حذف رزرو مجاز نیست.");
+    const [owner] = await db.select().from(studioReservations).where(eq(studioReservations.id, id)).limit(1);
+    if (!owner || owner.ownerEmployeeId !== actor.employeeId) throw new ApiError(403, "دسترسی حذف رزرو وجود ندارد.");
+  }
   assertUuid(id);
   await (await import("./reservationAccess")).assertReservationAccess(actor, id);
   return db.transaction(async (tx) => {

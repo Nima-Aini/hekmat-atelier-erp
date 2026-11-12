@@ -84,6 +84,8 @@ export async function employeePermissionSet(employeeId: string) {
   ]);
   const merged = new Map(roleRows.map((row) => [row.code, { code: row.code, name: row.name }]));
   for (const row of directRows) row.granted ? merged.set(row.code, { code: row.code, name: row.name }) : merged.delete(row.code);
+  const delegated = await db.execute(sql`SELECT 1 FROM reservation_managers m JOIN studio_personnel p ON p.id=m.personnel_id WHERE p.employee_id=${employeeId}::uuid AND p.status='active' LIMIT 1`);
+  if ((delegated as unknown as { rows: unknown[] }).rows?.length) for (const code of ["studio.reservations.view", "studio.reservations.edit"]) merged.set(code, { code, name: "رزروهای واگذارشده" });
   return Array.from(merged.values());
 }
 

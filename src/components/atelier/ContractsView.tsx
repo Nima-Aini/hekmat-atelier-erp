@@ -1,6 +1,9 @@
 "use client";
+import { useUrlState } from "@/lib/useUrlState";
+import { usePathname, useRouter } from "next/navigation";
+import { TimePicker } from "@/components/ui/TimePicker";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useId } from "react";
 import { Banknote, CheckCircle2, Edit3, FilePlus2, PackagePlus, Printer, Search, Trash2 } from "lucide-react";
 import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
@@ -53,7 +56,7 @@ const mergeTime = (date: Date, time: string) => {
 };
 
 export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (contractId: string) => void }) {
-  const [status, setStatus] = useState<"pending" | "approved">("pending");
+  const [status, setStatus] = useUrlState<"pending" | "approved">("status", "pending");
   const [contracts, setContracts] = useState<any[]>([]);
   const [types, setTypes] = useState<any[]>([]);
   const [accounts, setAccounts] = useState<any[]>([]);
@@ -61,7 +64,15 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
   const [catalog, setCatalog] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const router = useRouter(); const pathname = usePathname();
   const [editing, setEditing] = useState<any | "new" | null>(null);
+  useEffect(() => {
+    const id = pathname.split("/")[2];
+    if (!id) { setEditing(null); return; }
+    const controller = new AbortController();
+    fetch(`/api/atelier/contracts/${id}`, { signal: controller.signal }).then(r => r.json()).then(body => { if (body.success) setEditing(body.contract); }).catch(() => undefined);
+    return () => controller.abort();
+  }, [pathname]);
   const [printing, setPrinting] = useState<any | null>(null);
   const [cancelling, setCancelling] = useState<any | null>(null);
   const [permissions, setPermissions] = useState<string[]>([]);
@@ -73,7 +84,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
   const canCancel = hasPermission("studio.contract.cancel") && hasPermission("studio.finance.view") && hasPermission("studio.finance.refund");
   const canDeleteDraft = permissions.includes("*") || permissions.includes("studio.contract.delete_draft") || permissions.includes("studio.contract.manage");
   const [saving, setSaving] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useUrlState("query", "");
   const [sort, setSort] = useState("date_desc");
   const visibleContracts = useMemo(() => contracts.filter((contract) => `${contract.contractNumber} ${contract.customer.name} ${contract.customer.mobile} ${contract.projectType.title}`.includes(query.trim())).sort((a, b) => sort === "date_asc" ? +new Date(a.programDate) - +new Date(b.programDate) : sort === "amount_desc" ? Number(b.totalAmount) - Number(a.totalAmount) : +new Date(b.programDate) - +new Date(a.programDate)), [contracts, query, sort]);
 
@@ -105,14 +116,11 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
   useEffect(() => {
     const listener = (event: Event) => {
       const id = (event as CustomEvent).detail?.id;
-      if (id)
-        fetch(`/api/atelier/contracts/${id}`)
-          .then((r) => r.json())
-          .then((data) => data.success && setEditing(data.contract));
+      if (id) router.push(`/contracts/${encodeURIComponent(id)}`);
     };
     window.addEventListener("akma:navigate-item", listener);
     return () => window.removeEventListener("akma:navigate-item", listener);
-  }, []);
+  }, [router]);
 
   const approve = async (contract: any) => {
     if (!(await atelierConfirm(`قرارداد ${contract.contractNumber} تایید و سند مالی آن ثبت شود؟`)))
@@ -134,7 +142,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
       if (print && (response.contract.totalAmount == null || response.contract.items?.some((item: any) => item.unitPrice == null)))
         throw new Error("برای چاپ قرارداد، دسترسی به اطلاعات مالی لازم است.");
       if (print) setPrinting(response.contract);
-      else setEditing(response.contract);
+      else router.push(`/contracts/${response.contract.id}`);
     } catch (reason) {
       atelierToast(reason instanceof Error ? reason.message : "دریافت قرارداد انجام نشد.", "error");
     }
@@ -280,7 +288,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
             config={config}
             catalog={catalog}
             saving={saving}
-            onClose={() => setEditing(null)}
+            onClose={() => { setEditing(null); router.push("/contracts"); }}
             onSave={async (body) => {
               setSaving(true);
               try {
@@ -300,7 +308,7 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
                 }).then((r) => r.json());
                 if (!response.success)
                   throw new Error(response.error || "ذخیره انجام نشد.");
-                setEditing(null);
+                setEditing(null); router.push("/contracts");
                 await load();
               } catch (reason) {
                 atelierToast(reason instanceof Error ? reason.message : "ذخیره انجام نشد.", "error");
@@ -778,13 +786,15 @@ function Field({
   type?: string;
   dir?: "ltr" | "rtl";
 }) {
+  const id = useId();
   return (
-    <label className="block">
-      <span className="atelier-label">
+    <div className="block">
+      <label htmlFor={type === "time" ? undefined : id} className="atelier-label">
         {label}
         {required && <span className="text-red-400"> *</span>}
-      </span>
-      <input
+      </label>
+      {type === "time" ? <TimePicker label={label} value={value} onChange={onChange} required={required} disabled={disabled} /> : <input
+        id={id}
         required={required}
         disabled={disabled}
         type={type}
@@ -792,8 +802,8 @@ function Field({
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className="atelier-input w-full py-2.5 disabled:opacity-50"
-      />
-    </label>
+      />}
+    </div>
   );
 }
 

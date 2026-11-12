@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { apiError } from "@/lib/apiError";
 import { db } from "@/db";
-import { employees, studioPersonnel } from "@/db/schema";
+import { studioPersonnel } from "@/db/schema";
 import { requireAnyPermission, requirePermission } from "@/services/access";
 import {
   listReservations,
@@ -16,8 +16,8 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       success: true,
       reservations: rows.filter(row => (!mine || row.ownerEmployeeId === actor.employeeId) && (!shared || row.ownerEmployeeId !== actor.employeeId) && (!personnel || row.assignedPersonnelId === personnel || (Array.isArray(row.sharedPersonnelIds) && row.sharedPersonnelIds.includes(personnel)))),
-      viewerOptions: await db.select({ id: employees.id, name: employees.name }).from(employees),
-      personnelOptions: await db.select({ id: studioPersonnel.id, fullName: studioPersonnel.fullName, employeeId: studioPersonnel.employeeId }).from(studioPersonnel),
+      canManagePermissions: actor.permissions.has("*"),
+      personnelOptions: await db.select({ id: studioPersonnel.id, fullName: studioPersonnel.fullName, employeeId: studioPersonnel.employeeId, status: studioPersonnel.status }).from(studioPersonnel),
     });
   } catch (error) {
     return apiError(error, "دریافت رزروها");

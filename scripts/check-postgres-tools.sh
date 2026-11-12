@@ -24,8 +24,8 @@ restore_major="$(sed -E 's/.* ([0-9]+)(\.[0-9]+)?.*/\1/' <<<"$restore_version")"
   exit 1
 }
 
-if (( dump_major < server_major )); then
-  echo "pg_dump major version $dump_major is older than PostgreSQL server major version $server_major." >&2
+if (( dump_major != server_major )); then
+  echo "pg_dump major version $dump_major must match PostgreSQL server major version $server_major for verified restoration." >&2
   exit 1
 fi
 if (( restore_major != dump_major )); then

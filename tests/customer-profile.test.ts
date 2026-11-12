@@ -85,15 +85,10 @@ describe("Customer complete profile on a disposable database", () => {
     expect(profile.financial!.installments.find(i => i.id === installmentId)!.payments).toHaveLength(1);
     expect(profile.customer).toMatchObject({ email: "test@example.invalid", phone: "02100000000", address: "آدرس تست" });
   });
-  it("combines authoritative schedules without inferring customer links from matching phones", async () => {
+  it("does not generate customer services from contracts, events or reservations", async () => {
     const profile = await getAtelierCustomerProfile(admin, studioId);
-    for (const kind of ["خدمت قرارداد", "تقویم", "کار", "برنامه تولید", "مرحله تولید", "تحویل", "مراجعه روزانه"]) expect(profile.schedule.some(s => s.kind === kind)).toBe(true);
-    expect(profile.schedule.some(s => s.kind === "رزرو با شماره تماس مشتری")).toBe(false);
-    const item = profile.schedule.find(s => s.kind === "خدمت قرارداد")!;
-    expect(item.personnel[0].name).toBe("عکاس تست"); expect(item.equipment[0]).toContain("دوربین تست");
-    expect(profile.schedule.find(s => s.title === "کار سررسیدگذشته")!.overdue).toBe(true);
-    expect(profile.schedule.find(s => s.title === "مرحله انجام‌شده")!.overdue).toBe(false);
-    expect(JSON.stringify(profile.schedule)).not.toContain("wageSnapshot");
+    expect(profile.schedule).toHaveLength(0);
+    expect(profile.projects.length).toBeGreaterThan(0);
     expect(JSON.stringify(profile.history)).not.toContain("metadata");
   });
   it("independently enforces project overrides for finance/planning and never leaks hidden project money/history", async () => {
@@ -146,9 +141,9 @@ describe("Customer complete profile on a disposable database", () => {
     const dashboard = readFileSync(new URL("../src/components/atelier/FinalDashboard.tsx", import.meta.url), "utf8");
     for (const removed of ["selectedProjectId", "onProjectChange", 'params.set("projectId"', "پروژه داشبورد"]) expect(dashboard).not.toContain(removed);
     expect(dashboard).toContain("DashboardRangeFilter");
-    const page = readFileSync(new URL("../src/app/page.tsx", import.meta.url), "utf8");
+    const page = readFileSync(new URL("../src/components/atelier/AtelierApp.tsx", import.meta.url), "utf8");
     expect(page).toContain("AiAssistantView selectedProjectId={selectedProjectId}");
-    expect(page).toContain("#customers/"); expect(page).toContain('"popstate"');
+    expect(page).toContain("/customers/"); expect(page).toContain("usePathname");
     const service = readFileSync(new URL("../src/services/studio/customerProfile.ts", import.meta.url), "utf8");
     for (const write of [".insert(", ".update(", ".delete("]) expect(service).not.toContain(write);
   });

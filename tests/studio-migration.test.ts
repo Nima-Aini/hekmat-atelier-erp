@@ -91,6 +91,7 @@ describe("Hekmat Atelier (حکمت آتلیه) Database Migration & Schema Verif
       "012_atelier_customer_defaults",
       "013_atelier_visit_items",
       "014_atelier_advanced_workflow",
+      "015_appearance_reservation_managers",
     ]);
   });
 

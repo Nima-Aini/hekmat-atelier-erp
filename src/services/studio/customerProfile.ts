@@ -182,15 +182,15 @@ export async function getAtelierCustomerProfile(actor: EmployeeContext, id: stri
     return {
       customer: { ...identity.customer, creditLimit: financeVisible ? identity.customer.creditLimit : null, paymentTermsDays: financeVisible ? identity.customer.paymentTermsDays : null,
         assignedEmployeeName: identity.employeeName, studio: identity.studio },
-      access: { canEdit, canManageTasks: globalAllows("studio.planning.manage") || visibleProjects.some(p => allows(p.projectId, "studio.planning.manage")), finance: financeVisible, planning: planningProjectIds.length > 0 || calendarProjectIds.length > 0 || globalAllows("studio.planning.view", "studio.calendar.view", "studio.view"), contracts: contractProjectIds.length > 0 },
-      summary: { projects: visibleProjects.length, upcoming: schedule.filter(s => s.date && s.date >= now && !s.completed && !s.cancelled).length },
+      access: { canEdit, canManageTasks: actor.permissions.has("*"), finance: financeVisible, planning: planningProjectIds.length > 0 || calendarProjectIds.length > 0 || globalAllows("studio.planning.view", "studio.calendar.view", "studio.view"), contracts: contractProjectIds.length > 0 },
+      summary: { projects: visibleProjects.length, upcoming: schedule.filter(s => s.id.startsWith("manual:")).filter(s => s.date && s.date >= now && !s.completed && !s.cancelled).length },
       projects: visibleProjects.map(p => ({ id: p.id, number: p.projectNumber, title: p.title, date: p.eventDate, status: p.status, location: p.mainLocation, archived: Boolean(p.archivedAt),
         contracts: contractRows.filter(r => r.contract.studioProjectId === p.id && contractProjectIds.includes(p.id)).map(({ contract: c, typeTitle }) => {
           const inv = c.invoiceId ? invoiceMap.get(c.invoiceId) : null;
           return { id: c.id, number: c.contractNumber, date: c.contractDate, programDate: c.programDate, deliveryDate: c.deliveryCommitmentDate, status: c.status, typeTitle,
             amount: financialCoreVisible(p.projectId) ? n(inv?.grandTotal ?? c.totalAmount) : null, paid: inv ? n(inv.paidAmount) : null, remaining: inv ? n(inv.balanceDue) : null };
         }) })),
-      schedule: schedule.map(row => ({ ...row, sourceType: row.id.split(":")[0], sourceId: row.id.split(":")[1] })),
+      schedule: schedule.filter(row => row.id.startsWith("manual:")).map(row => ({ ...row, sourceType: row.id.split(":")[0], sourceId: row.id.split(":")[1] })),
       financial: financeVisible ? { summary: { total: sumInvoices("grandTotal"), paid: sumInvoices("paidAmount"), remaining: sumInvoices("balanceDue"), discount: sumInvoices("invoiceDiscount"), remainingInstallments, overdue,
         received: receipts.filter(r => r.status === "completed" && r.type === "customer_receipt").reduce((s, r) => s + r.amount, 0),
         unapplied: receipts.filter(r => r.status === "completed" && r.type === "customer_receipt").reduce((s, r) => s + r.unappliedAmount, 0) },

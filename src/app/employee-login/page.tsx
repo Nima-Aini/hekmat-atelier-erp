@@ -35,7 +35,9 @@ export default function EmployeeLoginPage() {
         return;
       }
 
-      router.push("/");
+      await fetch("/api/me/appearance").catch(() => undefined);
+      const next = new URLSearchParams(window.location.search).get("next") || "/dashboard";
+      router.push(next.startsWith("/") && !next.startsWith("//") && !next.includes("\\") ? next : "/dashboard");
     } catch (err: any) {
       setError(err?.message || "خطا در ارتباط با سرور");
     } finally {

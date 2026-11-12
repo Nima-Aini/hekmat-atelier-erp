@@ -33,12 +33,9 @@ describe("Reservation SQL and direct mutation boundary", () => {
     await expect(deleteReservation(unrelated, id)).rejects.toThrow();
     await expect(saveReservation(unrelated, { title: "تغییر", date: new Date(), customerName: "مشتری", mobile: "09120000000" }, id)).rejects.toThrow();
   });
-  it("preserves omitted sharing fields during a partial ownership update", async () => {
-    await saveReservation(owner, {
-      title: "خصوصی ویرایش‌شده", date: new Date(), customerName: "مشتری", mobile: "09120000000",
-      ownerEmployeeId: owner.employeeId,
-    }, id);
-    const [updated] = await db.select().from(studioReservations).where(eq(studioReservations.id, id)).limit(1);
+  it("blocks legacy sharing mutations even for an owner", async () => {
+    await expect(saveReservation(owner, { title: "خصوصی", date: new Date(), customerName: "مشتری", mobile: "09120000000", ownerEmployeeId: owner.employeeId }, id)).rejects.toThrow();
+    const [updated] = await db.select().from(studioReservations).where(eq(studioReservations.id, id));
     expect(updated.viewerEmployeeIds).toEqual([viewer.employeeId]);
   });
 });
