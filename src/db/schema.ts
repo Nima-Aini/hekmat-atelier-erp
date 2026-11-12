@@ -1681,3 +1681,13 @@ export const studioInstallmentAllocations = pgTable("studio_installment_allocati
   amount: numeric("amount", { precision: 15, scale: 2 }).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (t) => [uniqueIndex("uq_studio_installment_payment").on(t.installmentId, t.studioPaymentId)]);
+
+// Personal appearance and administrator-selected reservation managers.
+export const userAppearance = pgTable("user_appearance", {
+  employeeId: uuid("employee_id").primaryKey().references(() => employees.id, { onDelete: "cascade" }),
+  theme: text("theme").notNull(), accent: text("accent").notNull(),
+});
+export const reservationManagers = pgTable("reservation_managers", {
+  reservationId: uuid("reservation_id").notNull().references(() => studioReservations.id, { onDelete: "cascade" }),
+  personnelId: uuid("personnel_id").notNull().references(() => studioPersonnel.id, { onDelete: "cascade" }),
+}, t => [primaryKey({ columns: [t.reservationId, t.personnelId] }), index("idx_reservation_managers_personnel").on(t.personnelId)]);

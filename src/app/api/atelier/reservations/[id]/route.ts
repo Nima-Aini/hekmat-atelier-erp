@@ -16,6 +16,7 @@ export async function PUT(
     const actor = await requirePermission("studio.reservations.edit");
     const { id } = await params;
     const body = await req.json();
+    if (["complete_delete", "convert_to_daily_visit"].includes(body.action)) await requirePermission("studio.reservations.delete");
     if (body.action === "convert_to_daily_visit") {
       await requirePermission("studio.daily_visits.manage");
       await assertDailyVisitFinancialPermissions(actor, body.dailyVisit || {}, true);

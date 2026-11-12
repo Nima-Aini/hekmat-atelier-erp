@@ -1,4 +1,5 @@
 "use client";
+import { useUrlDateSelection } from "@/lib/useUrlDateSelection";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -42,7 +43,7 @@ export function FinalDashboard({
   userName?: string;
   permissions?: string[];
 }) {
-  const [selection, setSelection] = useState<DashboardDateSelection>(() => dashboardPresetSelection("today"));
+  const [selection, setSelection] = useUrlDateSelection();
   const range = selection.range;
   const [displayedPeriod, setDisplayedPeriod] = useState("");
   const controller = useRef<AbortController | null>(null);

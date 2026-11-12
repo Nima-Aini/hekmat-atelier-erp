@@ -71,7 +71,7 @@ export function PlanningView({ onEditContract }: { onEditContract?: (id: string)
       openTarget(id);
     };
     window.addEventListener("akma:navigate-item", listener);
-    const pending = sessionStorage.getItem("akma:planning-target");
+    const pending = window.location.pathname.split("/")[2] || sessionStorage.getItem("akma:planning-target");
     if (pending) openTarget(pending);
     return () => window.removeEventListener("akma:navigate-item", listener);
   }, [planning]);

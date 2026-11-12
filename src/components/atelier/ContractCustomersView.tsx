@@ -1,4 +1,5 @@
 "use client";
+import { useUrlState } from "@/lib/useUrlState";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Edit3, Eye, Search, UsersRound } from "lucide-react";
@@ -21,7 +22,7 @@ export function ContractCustomersView({ customerId = null, onViewCustomer, onNav
   const [customers, setCustomers] = useState<any[]>([]),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
-    [query, setQuery] = useState(""),
+    [query, setQuery] = useUrlState("query", ""),
     [sort, setSort] = useState<Sort>("newest"),
     [editing, setEditing] = useState<any>(null);
   const load = useCallback(() => {

@@ -1,4 +1,6 @@
 "use client";
+import { useUrlState } from "@/lib/useUrlState";
+import { useUrlDateSelection } from "@/lib/useUrlDateSelection";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Banknote, Edit3, Eye, Plus, Search, Trash2 } from "lucide-react";
@@ -33,18 +35,18 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
     [hasMore, setHasMore] = useState(false),
     [loadedPage, setLoadedPage] = useState(1),
     [error, setError] = useState("");
-  const [query, setQuery] = useState(""),
-    [payment, setPayment] = useState("all"),
+  const [query, setQuery] = useUrlState("query", ""),
+    [payment, setPayment] = useUrlState("payment", "all"),
     [filterDate, setFilterDate] = useState<Date | null>(null),
-    [visitSelection, setVisitSelection] = useState<DashboardDateSelection>(() => dashboardPresetSelection("today")),
+    [visitSelection, setVisitSelection] = useUrlDateSelection(),
     [editing, setEditing] = useState<any | "new" | null>(null),
     [converting, setConverting] = useState<any | null>(null),
     [viewing, setViewing] = useState<any | null>(null),
     [paying, setPaying] = useState<any | null>(null),
     [saving, setSaving] = useState(false);
   const recordsController = useRef<AbortController | null>(null);
-  const [reservationFilter, setReservationFilter] = useState("all");
-  const [reservationPerson, setReservationPerson] = useState("");
+  const [reservationFilter, setReservationFilter] = useUrlState("reservationFilter", "all");
+  const [reservationPerson, setReservationPerson] = useUrlState("reservationPerson", "");
   const [permissions, setPermissions] = useState<string[]>([]);
   const hasPermission = (permission: string) => permissions.includes("*") || permissions.includes(permission);
   const canCreate = reservation ? (hasPermission("studio.reservations.create") || hasPermission("studio.reservations.manage")) : hasPermission("studio.daily_visits.manage");
@@ -87,10 +89,10 @@ export function SimpleRecordsView({ kind }: { kind: Kind }) {
       fetch("/api/atelier/settings").then((r) => r.json()),
     ]).then(([accountBody, personnelBody, settingsBody]) => {
       if (accountBody.success) setAccounts(accountBody.accounts || []);
-      if (personnelBody.success) setPersonnel((personnelBody.personnel || []).filter((person: any) => person.status === "active"));
+      if (!reservation && personnelBody.success) setPersonnel((personnelBody.personnel || []).filter((person: any) => person.status === "active"));
       if (settingsBody.success) setDailyVisitTitles((settingsBody.dailyVisitTitles || []).filter((item: any) => item.active));
     }).catch(() => undefined);
-  }, []);
+  }, [reservation]);
   useEffect(() => { fetch("/api/auth/employee-me").then(response => response.json()).then(body => setPermissions(body.navigationPermissions || body.permissions || [])).catch(() => undefined); }, []);
   useEffect(() => {
     const listener = (event: Event) => {
@@ -319,13 +321,10 @@ function RecordForm({
     ? new Date(reservation ? initial.reservedAt : initial.visitDate)
     : new Date();
   const [itemId, setItemId] = useState<string>(initial?.itemSnapshot?.itemId || "");
-  const [sharingOptions, setSharingOptions] = useState<Array<{ id: string; name: string }>>([]);
-  const [ownerEmployeeId, setOwnerEmployeeId] = useState(initial?.ownerEmployeeId || "");
-  const [assignedPersonnelId, setAssignedPersonnelId] = useState(initial?.assignedPersonnelId || "");
-  const [viewerEmployeeIds, setViewerEmployeeIds] = useState<string[]>(initial?.viewerEmployeeIds || []);
-  const [sharedPersonnelIds, setSharedPersonnelIds] = useState<string[]>(initial?.sharedPersonnelIds || []);
+  const [canManagePermissions, setCanManagePermissions] = useState(false);
+  const [managerPersonnelIds, setManagerPersonnelIds] = useState<string[]>(initial?.managerPersonnelIds || []);
   const [sharingChanged, setSharingChanged] = useState(false);
-  useEffect(() => { if (reservation) void fetch("/api/atelier/reservations").then(r => r.json()).then(body => setSharingOptions(body.viewerOptions || [])); }, [reservation]);
+  useEffect(() => { if (reservation) void fetch("/api/atelier/reservations").then(r => r.json()).then(body => setCanManagePermissions(body.canManagePermissions === true)); }, [reservation]);
   const [optionKey, setOptionKey] = useState<string>(initial?.itemSnapshot?.optionKey || "");
   const selectedItem = dailyVisitTitles.find(item => item.id === itemId);
   const historicalSelection = initial?.itemSnapshot?.itemId === itemId && (initial?.itemSnapshot?.optionKey || "") === optionKey;
@@ -364,7 +363,7 @@ function RecordForm({
     }
     await onSave({
       title,
-      ...(reservation && (!initial || sharingChanged) ? { ownerEmployeeId: ownerEmployeeId || undefined, assignedPersonnelId: assignedPersonnelId || null, viewerEmployeeIds, sharedPersonnelIds } : {}),
+      ...(reservation && canManagePermissions && (!initial || sharingChanged) ? { managerPersonnelIds } : {}),
       itemId: reservation ? undefined : itemId || null,
       optionKey: reservation ? undefined : optionKey || null,
       date: final.toISOString(),
@@ -384,8 +383,7 @@ function RecordForm({
       onClose={onClose}
     >
       <form onSubmit={(event) => void submit(event)} className="space-y-4">
-        {reservation && <label className="block">اشتراک‌گذاری با پرسنل<select multiple className="atelier-input" value={sharedPersonnelIds} onChange={e => { setSharedPersonnelIds(Array.from(e.target.selectedOptions, option => option.value)); setSharingChanged(true); }}>{personnel.map(person => <option key={person.id} value={person.id}>{person.fullName}</option>)}</select></label>}
-        {reservation && <fieldset className="grid gap-3 rounded-xl border border-zinc-800 p-3"><legend>مسئول و دسترسی رزرو</legend><label>مسئول رزرو<select className="atelier-input" value={ownerEmployeeId} onChange={e => { setOwnerEmployeeId(e.target.value); setSharingChanged(true); }}><option value="">خودم</option>{sharingOptions.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><label>پرسنل مسئول<select className="atelier-input" value={assignedPersonnelId} onChange={e => { setAssignedPersonnelId(e.target.value); setSharingChanged(true); }}><option value="">انتخاب نشده</option>{personnel.map(person => <option key={person.id} value={person.id}>{person.fullName}</option>)}</select></label><label>افراد مجاز به مشاهده<select multiple className="atelier-input" value={viewerEmployeeIds} onChange={e => { setViewerEmployeeIds(Array.from(e.target.selectedOptions, option => option.value)); setSharingChanged(true); }}>{sharingOptions.map(person => <option key={person.id} value={person.id}>{person.name}</option>)}</select></label><p className="text-xs text-zinc-500">رزرو فقط برای مسئول، پرسنل منتخب، افراد مجاز و مدیر قابل مشاهده است.</p></fieldset>}
+        {reservation && canManagePermissions && <fieldset className="space-y-2 rounded-xl border border-zinc-800 p-3"><legend>پرسنل مجاز به مدیریت رزرو</legend>{personnel.map(person => <label key={person.id} className="flex items-center gap-3"><input type="checkbox" checked={managerPersonnelIds.includes(person.id)} onChange={e => { setManagerPersonnelIds(ids => e.target.checked ? [...ids, person.id] : ids.filter(id => id !== person.id)); setSharingChanged(true); }} />{person.fullName}{person.status !== "active" && " (غیرفعال)"}{!person.employeeId && " (بدون حساب ورود)"}</label>)}{!personnel.length && <p>پرسنلی ثبت نشده است.</p>}</fieldset>}
         <div className="grid gap-4 sm:grid-cols-2">
           {!reservation && dailyVisitTitles.length ? (
             <label>

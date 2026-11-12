@@ -455,6 +455,7 @@ export async function getFinalNotifications(
     createdAt: row.createdAt,
     category: (row.payload as Record<string, unknown>)?.category || notificationCategory(row.conditionKey || ""),
   })) : active;
+  if (actor?.permissions.has("*")) selected.push(...existing.filter(row => row.notificationType === "customer_service" && !row.resolvedAt && Boolean(row.archivedAt) === includeArchived && +row.scheduledFor <= Date.now()).map(row => ({ ...((row.payload || {}) as Record<string, unknown>), id: row.id, conditionKey: row.conditionKey, message: row.messageText, date: row.scheduledFor, createdAt: row.createdAt, archivedAt: row.archivedAt, resolvedAt: row.resolvedAt })));
   selected.push(...security.map(row => ({ ...((row.payload || {}) as Record<string, unknown>), id: row.id, conditionKey: row.conditionKey, message: row.messageText, date: row.scheduledFor, createdAt: row.createdAt, archivedAt: row.archivedAt, resolvedAt: row.resolvedAt })));
   const reads = actor ? await db.select().from(studioNotificationReads).where(eq(studioNotificationReads.employeeId, actor.employeeId)) : [];
   return selected.map((row): Record<string, unknown> => ({ ...row, readAt: reads.find(read => read.notificationId === row.id)?.readAt || null }));

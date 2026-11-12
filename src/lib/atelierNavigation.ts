@@ -19,6 +19,7 @@ export function canSeeAtelierSection(
   sectionId: string,
   permissionValues: Iterable<string>,
 ) {
+  if (sectionId === "appearance") return true;
   const permissions = new Set(permissionValues);
   if (permissions.has("*")) return true;
   if (hasAtelierPermission(permissions, ATELIER_NAVIGATION_PERMISSION[sectionId] || "")) return true;

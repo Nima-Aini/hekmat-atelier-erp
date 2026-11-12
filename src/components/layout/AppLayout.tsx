@@ -44,6 +44,7 @@ const NAVIGATION = [
   { id: "finance", label: "مالی", icon: WalletCards },
   { id: "notifications", label: "اعلانات", icon: Bell },
   { id: "ai", label: "دستیار هوش مصنوعی", icon: Bot },
+  { id: "appearance", label: "ظاهر و رنگ‌بندی", icon: Settings },
   { id: "settings", label: "تنظیمات", icon: Settings },
 ] as const;
 
@@ -296,6 +297,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
             return (
               <button
                 key={id}
+                aria-current={active ? "page" : undefined}
                 onClick={() => {
                   setActiveTab(id);
                   setSidebarOpen(false);

@@ -1,4 +1,5 @@
 "use client";
+import { useUrlState } from "@/lib/useUrlState";
 
 import { useEffect, useState } from "react";
 import {
@@ -18,7 +19,10 @@ import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { atelierPrompt, atelierToast } from "@/lib/atelierFeedback";
 
+import { AppearanceSettings } from "./AppearanceSettings";
+
 const TABS = [
+  "ظاهر و رنگ‌بندی",
   "اطلاعات آتلیه",
   "نوع پروژه",
   "آیتم‌ها",
@@ -46,7 +50,7 @@ const DEFAULT_CATEGORIES = [
   "سایر",
 ];
 export function FinalSettingsView() {
-  const [tab, setTab] = useState(TABS[0]),
+  const [tab, setTab] = useUrlState("tab", TABS[0]),
     [config, setConfig] = useState<any>({}),
     [types, setTypes] = useState<any[]>([]),
     [catalog, setCatalog] = useState<any[]>([]),
@@ -105,7 +109,7 @@ export function FinalSettingsView() {
           <p className="atelier-kicker">تنظیمات اختصاصی حکمت آتلیه</p>
           <h1 className="mt-1 text-2xl font-black">تنظیمات</h1>
         </div>
-        {!['نوع پروژه','آیتم‌ها','پکیج‌ها','عناوین مراجعات روزانه','مدیریت سیستم'].includes(tab) && (
+        {!['ظاهر و رنگ‌بندی','نوع پروژه','آیتم‌ها','پکیج‌ها','عناوین مراجعات روزانه','مدیریت سیستم'].includes(tab) && (
           <button
             onClick={() => void save()}
             disabled={saving}
@@ -128,6 +132,7 @@ export function FinalSettingsView() {
         ))}
       </div>
       <section className="atelier-panel p-4 sm:p-6">
+        {tab === "ظاهر و رنگ‌بندی" && <AppearanceSettings />}
         {tab === "اطلاعات آتلیه" && (
           <Grid>
             <Text

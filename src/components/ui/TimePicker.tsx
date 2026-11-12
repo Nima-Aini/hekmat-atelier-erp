@@ -1,0 +1,9 @@
+"use client";
+import { useId, useState } from "react";
+import { Clock3 } from "lucide-react";
+export function TimePicker({ value, onChange, required, disabled, label = "ساعت" }: { value: string; onChange: (value: string) => void; required?: boolean; disabled?: boolean; label?: string }) {
+  const id = useId(); const [open, setOpen] = useState(false);
+  const valid = /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+  const [hour, minute] = valid ? value.split(":") : ["00", "00"];
+  return <div className="space-y-2" dir="ltr"><button type="button" disabled={disabled} className="atelier-input flex min-h-11 w-full items-center justify-between py-2.5" aria-label={label} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)}><span>{valid ? value : "انتخاب ساعت"}</span><Clock3 className="h-4 w-4" /></button><input aria-hidden="true" tabIndex={-1} className="sr-only" value={valid ? value : ""} required={required} onInvalid={event => { event.preventDefault(); setOpen(true); }} onChange={() => undefined} />{open && <fieldset id={id} className="flex flex-wrap items-end gap-3 rounded-xl border p-3"><legend className="sr-only">{label}</legend><label className="flex-1">ساعت<select aria-label={`${label} - ساعت`} className="atelier-input min-h-11 w-full" value={hour} onChange={e => onChange(`${e.target.value}:${minute}`)}>{Array.from({ length: 24 }, (_, i) => String(i).padStart(2, "0")).map(n => <option key={n}>{n}</option>)}</select></label><label className="flex-1">دقیقه<select aria-label={`${label} - دقیقه`} className="atelier-input min-h-11 w-full" value={minute} onChange={e => onChange(`${hour}:${e.target.value}`)}>{Array.from({ length: 60 }, (_, i) => String(i).padStart(2, "0")).map(n => <option key={n}>{n}</option>)}</select></label><button type="button" className="atelier-button" onClick={() => { if (!valid) onChange("00:00"); setOpen(false); }}>تأیید</button></fieldset>}</div>;
+}
