@@ -37,7 +37,7 @@ try {
  await page.reload(); await time.waitFor(); assert.equal((await time.textContent()).trim(), "12:34");
  await page.getByRole("button", { name: "بستن", exact: true }).first().click();
  await page.waitForURL(`${base}/contracts`);
- await page.goto(`${base}/customers`); await page.goBack(); assert.equal(new URL(page.url()).pathname, "/contracts"); await page.goForward(); assert.equal(new URL(page.url()).pathname, "/customers");
+ await page.getByRole("button", { name: /^مشتریان/ }).first().click(); await page.waitForURL(`${base}/customers`); await page.goBack(); await page.waitForURL(`${base}/contracts`); assert.equal(new URL(page.url()).pathname, "/contracts"); await page.goForward(); await page.waitForURL(`${base}/customers`); assert.equal(new URL(page.url()).pathname, "/customers");
  await page.setViewportSize({ width: 390, height: 844 });
  await page.goto(`${base}/contracts/${id}`); await time.waitFor(); await time.click();
  assert.equal(await page.getByLabel("ساعت - ساعت", { exact: true }).isVisible(), true);

@@ -172,6 +172,7 @@ export async function restoreBackupToIsolatedDatabase(id: string, confirmation: 
   const source = databaseUrl(); const target = databaseUrl("RESTORE_TARGET_DATABASE_URL");
   if (databaseIdentity(source) === databaseIdentity(target)) throw new ApiError(422, "بازیابی روی دیتابیس در حال اجرا ممنوع است.", "RESTORE_TARGET_MUST_BE_ISOLATED");
   const row = await storedBackup(id); const targetPool = new Pool({ connectionString: target.toString(), max: 1, options: "-c timezone=UTC" }); const startedAt = new Date();
+  targetPool.on("error", (error: { code?: string }) => console.error("restore.target_connection_closed", { code: error.code || "CONNECTION_CLOSED" }));
   const lock = await pool.connect();
   const acquired = await lock.query("SELECT pg_try_advisory_lock(761512, 1) AS locked");
   if (!acquired.rows[0]?.locked) { lock.release(); await targetPool.end(); throw new ApiError(409, "یک بازیابی دیگر در حال اجراست.", "RESTORE_BUSY"); }
