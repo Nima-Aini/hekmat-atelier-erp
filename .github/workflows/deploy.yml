@@ -152,7 +152,7 @@ jobs:
           EXPECTED_SCHEMA_VERSION: 015_appearance_reservation_managers
 
   restore-drill:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       postgres:

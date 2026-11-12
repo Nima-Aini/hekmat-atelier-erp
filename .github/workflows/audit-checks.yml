@@ -56,7 +56,7 @@ jobs:
           AUTH_SECRET: ci-build-only-secret
 
   restore-drill:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     services:
       postgres:
