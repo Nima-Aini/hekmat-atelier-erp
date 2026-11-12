@@ -149,7 +149,7 @@ jobs:
           SMOKE_BASE_URL: ${{ vars.READINESS_URL }}
           EXPECTED_GIT_SHA: ${{ github.sha }}
           EXPECTED_APP_ENV: production
-          EXPECTED_SCHEMA_VERSION: 014_atelier_advanced_workflow
+          EXPECTED_SCHEMA_VERSION: 015_appearance_reservation_managers
 
   restore-drill:
     runs-on: ubuntu-latest
@@ -181,6 +181,6 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y postgresql-client-16
       - name: Verify PostgreSQL server and native tool versions
         run: npm run postgres:check
-      - run: npx vitest run tests/zz-backup-postgres-drill.test.ts
+      - run: npx vitest run tests/zz-backup-postgres-drill.test.ts tests/backup-upload-native.test.ts
       - name: Validate maintenance mode through real HTTP
         run: npm run maintenance:http-drill

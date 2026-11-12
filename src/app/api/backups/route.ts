@@ -1,10 +1,11 @@
+import { activationAvailable } from "@/services/backupActivation";
 import { NextResponse } from "next/server";
 import { apiError } from "@/lib/apiError";
 import { requirePermission } from "@/services/access";
 import { createSystemBackup, getBackupsList } from "@/services/backup";
 
 export async function GET() {
-  try { await requirePermission("backup.view"); return NextResponse.json({ success: true, backups: await getBackupsList() }); }
+  try { await requirePermission("backup.view"); return NextResponse.json({ success: true, activationAvailable: activationAvailable(), backups: await getBackupsList() }); }
   catch (error) { return apiError(error, "دریافت فهرست نسخه‌های پشتیبان"); }
 }
 

@@ -1,0 +1,50 @@
+name: Atelier UX verification
+on:
+  pull_request:
+    branches: [codex/phase2-hardening]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: atelier_ux, POSTGRES_PASSWORD: atelier_ux, POSTGRES_DB: atelier_ux }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U atelier_ux" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DB_DRIVER: postgres
+      DATABASE_URL: postgresql://atelier_ux:atelier_ux@127.0.0.1:5432/atelier_ux
+      AUTH_SECRET: ci-browser-only-auth-secret
+      INITIAL_ADMIN_USERNAME: ux_admin
+      INITIAL_ADMIN_PASSWORD: ci-browser-only-admin-password
+      BACKUP_LOCAL_PATH: /tmp/atelier-browser-backups
+      APP_ENV: test
+      UX_DISPOSABLE_DATABASE: "true"
+      UX_BASE_URL: http://127.0.0.1:3310
+      UX_ADMIN_USERNAME: ux_admin
+      UX_ADMIN_PASSWORD: ci-browser-only-admin-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Install isolated browser test tools
+        run: |
+          npm install --prefix "$RUNNER_TEMP/atelier-browser" playwright@1.62.1 --no-audit --no-fund
+          node "$RUNNER_TEMP/atelier-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Verify desktop and mobile workflows on disposable data
+        shell: bash
+        run: |
+          node node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3310 > /tmp/atelier-ui.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3310/api/health >/dev/null; then break; fi
+            sleep 1
+          done
+          PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/atelier-browser/node_modules/playwright" node scripts/ux-browser-smoke.mjs
