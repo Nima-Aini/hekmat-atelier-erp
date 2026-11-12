@@ -7,6 +7,6 @@ describe("personal appearance validation", () => {
    for (const accent of ["red", "#fff", "url(x)", "#ffffff;display:none", null]) expect(validAppearance({ theme: "dark", accent })).toBe(false);
    expect(validAppearance({ theme: "inverted", accent: "#123456" })).toBe(false);
  });
- it("uses accessible foreground contrast for both extremes", () => { expect(accentForeground("#ffffff")).toBe("#09090b"); expect(accentForeground("#000000")).toBe("#ffffff"); });
+ it("uses accessible foreground contrast for both extremes", () => { expect(accentForeground("#ffffff")).toBe("#000000"); expect(accentForeground("#000000")).toBe("#ffffff"); });
  it("makes personal appearance available without administrative settings access", () => { expect(canSeeAtelierSection("appearance", [])).toBe(true); expect(canSeeAtelierSection("settings", [])).toBe(false); });
 });

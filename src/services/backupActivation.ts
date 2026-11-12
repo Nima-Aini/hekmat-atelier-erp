@@ -16,7 +16,7 @@ function operationalPool(connectionString: string) {
  const value = new Pool({ connectionString, max: 1 });
  // Cutover can close an idle backend while its socket is finishing shutdown.
  // Active queries still reject normally; idle errors must never crash the app.
- value.on("error", (error: { code?: string }) => console.error("restore.idle_connection_closed", { code: error.code || "CONNECTION_CLOSED" }));
+ value.on("error", (error: Error) => console.error("restore.idle_connection_closed", { code: (error as NodeJS.ErrnoException).code || "CONNECTION_CLOSED" }));
  return value;
 }
 
