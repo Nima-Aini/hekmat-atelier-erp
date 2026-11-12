@@ -87,12 +87,14 @@ describe("Atelier backend granular permissions", () => {
     expect((await updateVisit(request("PUT", { personnelAssignments: [] }), params)).status).toBe(200);
   });
 
-  it("requires both visit and receipt permissions for payment and reservation conversion", async () => {
+  it("requires visit, receipt and deletion permissions for reservation conversion", async () => {
     state.permissions.add("studio.daily_visits.manage");
     expect((await payVisit(request("POST", { amount: 10 }), params)).status).toBe(403);
     state.permissions = new Set(["studio.reservations.edit"]);
     expect((await updateReservation(request("PUT", { action: "convert_to_daily_visit", dailyVisit: { paidAmount: 0 } }), params)).status).toBe(403);
     state.permissions = new Set(["studio.reservations.edit", "studio.daily_visits.manage", "studio.finance.create_receipt"]);
+    expect((await updateReservation(request("PUT", { action: "convert_to_daily_visit", dailyVisit: { paidAmount: 10 } }), params)).status).toBe(403);
+    state.permissions.add("studio.reservations.delete");
     expect((await updateReservation(request("PUT", { action: "convert_to_daily_visit", dailyVisit: { paidAmount: 10 } }), params)).status).toBe(200);
   });
 

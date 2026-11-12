@@ -39,7 +39,7 @@ describe.skipIf(!enabled)("uploaded native archive and safety snapshot", () => {
    const failingDump = path.join(directory, "pg_dump_fail"); await writeFile(failingDump, "#!/bin/sh\nexit 7\n", { mode: 0o700 });
    vi.stubEnv("PG_DUMP_BIN", failingDump);
    await expect(restoreBackupToIsolatedDatabase(uploaded.id, "RESTORE", context, storage)).rejects.toMatchObject({ code: "BACKUP_CREATE_FAILED" });
-   process.env.PG_DUMP_BIN = originalDump;
+   if (originalDump === undefined) delete process.env.PG_DUMP_BIN; else process.env.PG_DUMP_BIN = originalDump;
    const lock = await pool.connect(); await lock.query("SELECT pg_advisory_lock(761512, 1)");
    try { await expect(restoreBackupToIsolatedDatabase(uploaded.id, "RESTORE", context, storage)).rejects.toMatchObject({ code: "RESTORE_BUSY" }); } finally { await lock.query("SELECT pg_advisory_unlock(761512, 1)"); lock.release(); }
    const restored = await restoreBackupToIsolatedDatabase(uploaded.id, "RESTORE", context, storage);

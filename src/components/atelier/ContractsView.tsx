@@ -116,14 +116,11 @@ export function ContractsView({ onNavigateFinance }: { onNavigateFinance?: (cont
   useEffect(() => {
     const listener = (event: Event) => {
       const id = (event as CustomEvent).detail?.id;
-      if (id)
-        fetch(`/api/atelier/contracts/${id}`)
-          .then((r) => r.json())
-          .then((data) => data.success && setEditing(data.contract));
+      if (id) router.push(`/contracts/${encodeURIComponent(id)}`);
     };
     window.addEventListener("akma:navigate-item", listener);
     return () => window.removeEventListener("akma:navigate-item", listener);
-  }, []);
+  }, [router]);
 
   const approve = async (contract: any) => {
     if (!(await atelierConfirm(`قرارداد ${contract.contractNumber} تایید و سند مالی آن ثبت شود؟`)))

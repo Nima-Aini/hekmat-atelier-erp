@@ -149,10 +149,13 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
       studio_daily_visit: "daily_visits",
       studio_reservation: "reservations",
     };
-    setActiveTab(targets[item.type] || "dashboard");
+    const target = targets[item.type] || "dashboard";
+    const hasDetailRoute = ["studio_contract", "studio_customer"].includes(item.type);
+    setActiveTab(hasDetailRoute ? `${target}/${encodeURIComponent(item.id)}` : target);
     setSearchQuery("");
     setSearchResults([]);
     setMobileSearchOpen(false);
+    if (hasDetailRoute) return;
     window.setTimeout(
       () =>
         window.dispatchEvent(

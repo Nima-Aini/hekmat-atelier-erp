@@ -22,6 +22,7 @@ jobs:
       INITIAL_ADMIN_USERNAME: ux_admin
       INITIAL_ADMIN_PASSWORD: ci-browser-only-admin-password
       BACKUP_LOCAL_PATH: /tmp/atelier-browser-backups
+      SECURE_COOKIES: "false"
       APP_ENV: test
       UX_DISPOSABLE_DATABASE: "true"
       UX_BASE_URL: http://127.0.0.1:3310
@@ -47,4 +48,4 @@ jobs:
             if curl -fsS http://127.0.0.1:3310/api/health >/dev/null; then break; fi
             sleep 1
           done
-          PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/atelier-browser/node_modules/playwright" node scripts/ux-browser-smoke.mjs
+          PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/atelier-browser/node_modules/playwright" node scripts/ux-browser-smoke.mjs || { tail -100 /tmp/atelier-ui.log; exit 1; }

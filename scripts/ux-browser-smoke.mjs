@@ -22,6 +22,7 @@ try {
  assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
  assert.equal(await page.locator("html").evaluate(el => el.style.getPropertyValue("--accent")), "#1d4ed8");
  const settings = await (await page.request.get(`${base}/api/atelier/settings`)).json();
+ assert.equal(settings.success, true, settings.error || "Settings request failed");
  const response = await page.request.post(`${base}/api/atelier/contracts`, { data: { idempotencyKey: crypto.randomUUID(), projectTypeId: settings.projectTypes[0].id, customerName: "تست مرورگر", mobile: "09120000666", programDate: "2035-06-20T20:30:00Z", items: [{ title: "تست", unitPrice: 10000 }] } });
  const body = await response.json(); assert.equal(body.success, true, JSON.stringify(body));
  const id = body.contract.id;
