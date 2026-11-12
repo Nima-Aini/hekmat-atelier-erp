@@ -1,0 +1,2 @@
+import { NextRequest,NextResponse } from "next/server";import { apiError } from "@/lib/apiError";import { requirePermission } from "@/services/access";import { saveCatalog } from "@/services/studio/catalog";
+export async function PUT(req:NextRequest,{params}:{params:Promise<{id:string}>}){try{const actor=await requirePermission("studio.catalog.manage");return NextResponse.json({success:true,item:await saveCatalog(actor,await req.json(),(await params).id)});}catch(error){return apiError(error,"ویرایش کاتالوگ");}}

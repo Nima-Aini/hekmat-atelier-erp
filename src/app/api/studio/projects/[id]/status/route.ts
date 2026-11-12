@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import { updateStudioProjectStatus } from "@/services/studio/projectService";
+import { requireStudioProjectAccess } from "@/services/studio/access";
 
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    await requirePermission("studio.projects.manage");
     const { id } = await params;
+    const { actor: context } = await requireStudioProjectAccess(id, "studio.projects.manage");
     const body = await req.json();
 
     if (!body.status) {
@@ -19,7 +19,7 @@ export async function PATCH(
       );
     }
 
-    const updated = await updateStudioProjectStatus(id, body.status);
+    const updated = await updateStudioProjectStatus(id, body.status, context.employeeName, context.employeeId);
     return NextResponse.json({ success: true, project: updated });
   } catch (error) {
     return apiError(error, "تغییر وضعیت پروژه آتلیه");

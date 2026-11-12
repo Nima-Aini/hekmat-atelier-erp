@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { employeeAccounts, employees, roles } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { verifyPassword, signSession } from "@/services/employeeAuth";
+import { assertLoginAllowed, clearLoginFailures, loginAttemptKey, recordLoginFailure, verifyPassword, signSession } from "@/services/employeeAuth";
 import { logAuditEvent } from "@/services/audit";
 
 export async function POST(req: Request) {
@@ -11,6 +11,9 @@ export async function POST(req: Request) {
     const { username, password } = await req.json();
     if (typeof username !== "string" || typeof password !== "string" || !username || !password || username.length > 200 || password.length > 1024)
       return NextResponse.json({ success: false, error: "نام کاربری و رمز عبور الزامی است." }, { status: 400 });
+    const clientAddress = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || req.headers.get("x-real-ip") || "unknown";
+    const attemptKey = loginAttemptKey(username, clientAddress);
+    await assertLoginAllowed(attemptKey);
 
     const [row] = await db
       .select({
@@ -31,14 +34,17 @@ export async function POST(req: Request) {
       row.employee.status !== "active" ||
       !verifyPassword(password, row.account.passwordHash)
     ) {
+      await recordLoginFailure(attemptKey);
       return NextResponse.json({ success: false, error: "نام کاربری یا رمز عبور نادرست است." }, { status: 401 });
     }
+
+    await clearLoginFailures(attemptKey);
 
     await db
       .update(employeeAccounts)
       .set({ lastLoginAt: new Date(), updatedAt: new Date() })
       .where(eq(employeeAccounts.id, row.account.id));
-    await logAuditEvent("LOGIN", "employee_account", row.account.id, { employeeId: row.employee.id, roleCode: row.roleCode }, { userId: row.employee.id, userName: row.employee.name });
+    await logAuditEvent("LOGIN", "employee_account", row.account.id, { employeeId: row.employee.id, roleCode: row.roleCode }, { userId: row.employee.id, employeeId: row.employee.id, userName: row.employee.name });
 
     const response = NextResponse.json({
       success: true,

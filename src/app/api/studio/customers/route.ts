@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requirePermission } from "@/services/access";
+import { getScopedProjectIds, requirePermission } from "@/services/access";
 import { apiError } from "@/lib/apiError";
 import {
   listStudioCustomers,
@@ -8,7 +8,7 @@ import {
 
 export async function GET(req: NextRequest) {
   try {
-    await requirePermission("studio.view");
+    await requirePermission("studio.customers.view");
     const { searchParams } = new URL(req.url);
 
     const search = searchParams.get("search") || undefined;
@@ -23,6 +23,7 @@ export async function GET(req: NextRequest) {
       vipLevel,
       page,
       pageSize,
+      allowedCoreProjectIds: await getScopedProjectIds(["studio.customers.view"]),
     });
 
     return NextResponse.json({ success: true, ...result });
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    await requirePermission("studio.projects.manage");
+    await requirePermission("studio.customers.create");
     const body = await req.json();
 
     const created = await createStudioCustomer(body);

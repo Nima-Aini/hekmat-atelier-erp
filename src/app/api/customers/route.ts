@@ -52,8 +52,8 @@ export async function GET(req: Request) {
       assignedEmployeeName: employeeName || "بدون ویزیتور",
       latitude: customer.latitude ? Number(customer.latitude) : null,
       longitude: customer.longitude ? Number(customer.longitude) : null,
-      creditLimit: Number(customer.creditLimit || 0),
-      paymentTermsDays: Number(customer.paymentTermsDays || 30),
+      creditLimit: customer.creditLimit === null ? null : Number(customer.creditLimit),
+      paymentTermsDays: customer.paymentTermsDays,
     }));
 
     return NextResponse.json({ success: true, customers: formatted, pagination: { page, pageSize, total, totalPages: Math.ceil(total / pageSize) } });
@@ -85,11 +85,11 @@ export async function POST(req: Request) {
         phone: body.phone || null,
         email: body.email || null,
         address: body.address || null,
-        city: body.city || "تهران",
+        city: body.city?.trim() || null,
         latitude: body.latitude ? body.latitude.toString() : null,
         longitude: body.longitude ? body.longitude.toString() : null,
-        creditLimit: body.creditLimit !== undefined ? Number(body.creditLimit).toString() : "0",
-        paymentTermsDays: body.paymentTermsDays !== undefined ? Number(body.paymentTermsDays) : (body.settlementTermDays !== undefined ? Number(body.settlementTermDays) : 30),
+        creditLimit: body.creditLimit !== undefined && body.creditLimit !== "" ? Number(body.creditLimit).toString() : null,
+        paymentTermsDays: body.paymentTermsDays !== undefined && body.paymentTermsDays !== "" ? Number(body.paymentTermsDays) : (body.settlementTermDays !== undefined && body.settlementTermDays !== "" ? Number(body.settlementTermDays) : null),
         assignedEmployeeId: null,
         notes: body.notes || null,
       })

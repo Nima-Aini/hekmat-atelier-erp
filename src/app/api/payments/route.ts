@@ -6,15 +6,19 @@ import { apiError } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { payments, paymentAllocations, accounts, customers, invoices, projects } from "@/db/schema";
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { recalculateCustomerHealth } from "@/services/customerHealth";
 import { logAuditEvent } from "@/services/audit";
-import { requirePermission } from "@/services/access";
+import { getScopedProjectIds, requirePermission } from "@/services/access";
 
 export async function GET(req: Request) {
   try {
-    await requirePermission("payments.view");
     const { searchParams } = new URL(req.url);
+    const projectId = searchParams.get("projectId");
+    if (projectId) assertUuid(projectId);
+    await requirePermission("payments.view", projectId);
+    const allowed = await getScopedProjectIds(["payments.view"]);
+    const scope = projectId ? eq(payments.projectId, projectId) : allowed === null ? undefined : or(isNull(payments.projectId), allowed.length ? inArray(payments.projectId, allowed) : sql`false`);
     const page = pageNumber(searchParams.get("page"), 1);
     const pageSize = pageNumber(searchParams.get("pageSize"), 20, 100);
     const offset = (page - 1) * pageSize;
@@ -31,9 +35,10 @@ export async function GET(req: Request) {
       .leftJoin(customers, eq(payments.customerId, customers.id))
       .leftJoin(invoices, eq(payments.invoiceId, invoices.id))
       .leftJoin(projects, eq(payments.projectId, projects.id))
+      .where(and(scope))
       .orderBy(desc(payments.createdAt))
       .limit(pageSize)
-      .offset(offset), db.select({ count: sql<number>`count(*)::int` }).from(payments)]);
+      .offset(offset), db.select({ count: sql<number>`count(*)::int` }).from(payments).where(and(scope))]);
 
     const formatted = list.map(({ payment, accountName, customerName, invoiceNumber, projectName }) => ({
       ...payment,
