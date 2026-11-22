@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Database, Download, ShieldCheck, Upload } from "lucide-react";
 import { toJalaliDate } from "@/lib/dateUtils";
@@ -159,7 +160,7 @@ export function BackupView() {
     {result && <div role="status" className="atelier-panel space-y-2 p-3 text-sm">
       <p>{result.message}</p>
       {result.safetyBackupId && !result.signedOut && <a className="underline" href={`/api/backups/${result.safetyBackupId}/download`}>دریافت نسخه ایمنی</a>}
-      {result.signedOut && <a className="atelier-button-secondary" href="/employee-login">ورود دوباره</a>}
+      {result.signedOut && <Link className="atelier-button-secondary" href="/employee-login">ورود دوباره</Link>}
     </div>}
 
     <section className="atelier-panel space-y-4 p-4" aria-labelledby="create-backup">

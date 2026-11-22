@@ -1034,7 +1034,7 @@ function ReceiptModal({
         <section className="overview-secondary-surface rounded-2xl border p-4">
           {canChooseSource && <label className="mb-3 block">
             <span className="atelier-label">نوع دریافت</span>
-            <select className={inputClass} value={sourceKind} onChange={e => setSourceKind(e.target.value)}>
+            <select aria-label="نوع دریافت" className={inputClass} value={sourceKind} onChange={e => setSourceKind(e.target.value)}>
               <option value="linked">مرتبط با قرارداد یا مراجعه</option>
               <option value="manual">دریافت آزاد</option>
             </select>
