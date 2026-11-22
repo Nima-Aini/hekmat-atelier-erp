@@ -118,6 +118,25 @@ try {
  assert.equal(await customerCity(), "شیراز");
  assert.equal((await ai("execute_action", { confirmationId: ready.id, confirmed: true })).status(), 409);
 
+ const contractProposed = await ai("prepare_operation", { operation: "contract_update", parameters: { targetId: id, input: { notes: "یادداشت تأییدشده قرارداد" } } });
+ assert.equal(contractProposed.status(), 200, await contractProposed.text());
+ const contractEdit = (await contractProposed.json()).confirmation;
+ assert.equal(contractEdit.comparison[0].after, "یادداشت تأییدشده قرارداد");
+ assert.equal((await ai("execute_action", { confirmationId: contractEdit.id, confirmed: true })).status(), 200);
+
+ const reservationResponse = await page.request.post(`${base}/api/atelier/reservations`, { data: {
+  title: "رزرو تست مرورگر", date: "2036-06-20T20:30:00.000Z", customerName: "تست مرورگر", mobile: "09120000666",
+ } });
+ assert.ok(reservationResponse.ok(), await reservationResponse.text());
+ const reservationId = (await reservationResponse.json()).reservation.id;
+ const reservationProposed = await ai("prepare_operation", { operation: "reservation_update", parameters: { targetId: reservationId, input: { title: "رزرو اصلاح‌شده" } } });
+ assert.equal(reservationProposed.status(), 200, await reservationProposed.text());
+ const reservationEdit = (await reservationProposed.json()).confirmation;
+ assert.deepEqual(reservationEdit.comparison, [{ field: "عنوان رزرو", before: "رزرو تست مرورگر", after: "رزرو اصلاح‌شده" }]);
+ assert.equal((await ai("execute_action", { confirmationId: reservationEdit.id, confirmed: true })).status(), 200);
+ const reservationRead = await (await page.request.get(`${base}/api/atelier/reservations/${reservationId}`)).json();
+ assert.equal(reservationRead.reservation.title, "رزرو اصلاح‌شده");
+
  await page.goto(`${base}/contracts`);
  await page.getByRole("button", { name: "قرارداد جدید", exact: true }).click();
  const dialog = page.locator(".app-modal");
