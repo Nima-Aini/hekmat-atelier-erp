@@ -38,6 +38,7 @@ export const AI_OPERATIONS: Record<string, Operation> = {
   customer_create: { label: "ثبت مشتری", permission: "studio.customers.create", method: "POST", load: () => import("@/app/api/studio/customers/route") },
   calendar_read: { label: "مشاهده تقویم", permission: "studio.calendar.view", method: "GET", load: () => import("@/app/api/atelier/calendar/route") },
   personnel_list: { label: "مشاهده پرسنل", permission: "studio.personnel.view", method: "GET", load: () => import("@/app/api/studio/personnel/route") },
+  personnel_update: { label: "ویرایش مشخصات پرسنل", permission: "studio.personnel.manage", method: "PUT", load: () => import("@/app/api/studio/personnel/[id]/route") },
   personnel_create: { label: "ثبت پرسنل", permission: "studio.personnel.manage", method: "POST", load: () => import("@/app/api/studio/personnel/route") },
   wage_pay: { label: "پرداخت دستمزد و کسر از حساب", permission: "studio.personnel.finance.pay", method: "POST", load: () => import("@/app/api/atelier/personnel/[id]/finance/[salaryId]/pay/route") },
   equipment_list: { label: "مشاهده تجهیزات", permission: "studio.equipment.view", method: "GET", load: () => import("@/app/api/studio/equipment/route") },
@@ -127,6 +128,38 @@ async function prepareCustomerUpdate(tool: Operation, parameters: Parameters) {
   };
 }
 
+const profileEdits: Record<string, { resultKey: string; fields: Record<string, string>; required: string[] }> = {
+  equipment_update: {
+    resultKey: "equipment",
+    fields: { title: "عنوان تجهیز", category: "دسته", brand: "برند", model: "مدل", serialNumber: "شماره سریال", notes: "یادداشت" },
+    required: ["title", "category"],
+  },
+  personnel_update: {
+    resultKey: "personnel",
+    fields: { fullName: "نام پرسنل", primaryRole: "نقش کاری", portfolioUrl: "پیوند نمونه‌کار", notes: "یادداشت" },
+    required: ["fullName", "primaryRole"],
+  },
+};
+
+async function prepareRecordUpdate(tool: Operation, parameters: Parameters, config: (typeof profileEdits)[string]) {
+  assertUuid(parameters.targetId);
+  const record = (await dispatch({ ...tool, method: "GET" }, { targetId: parameters.targetId }))[config.resultKey];
+  if (typeof record?.updatedAt !== "string") throw new ApiError(409, "نسخه رکورد برای پیش‌نمایش قابل بررسی نیست.");
+  const comparison: Array<{ field: string; before: string | null; after: string | null }> = [];
+  const input: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parameters.input || {})) {
+    if (!Object.hasOwn(config.fields, key) || (value !== null && typeof value !== "string")) throw new ApiError(400, "فیلد پیشنهادی قابل ویرایش نیست.");
+    const after = value?.trim() || null;
+    if ((!after && config.required.includes(key)) || (after && after.length > 2000)) throw new ApiError(400, "مقدار پیشنهادی معتبر نیست.");
+    const before = typeof record[key] === "string" ? record[key] : null;
+    if (before === after) continue;
+    comparison.push({ field: config.fields[key], before, after });
+    input[key] = after;
+  }
+  if (!comparison.length) throw new ApiError(400, "پیشنهاد شامل تغییری در رکورد نیست.");
+  return { comparison, input: { ...input, expectedRevision: record.updatedAt } };
+}
+
 export async function prepareAIOperation(actor: EmployeeContext, operation: string, parameters: Parameters) {
   const tool = await authorize(actor, operation);
   if (JSON.stringify(parameters).length > 30000) throw new ApiError(400, "حجم درخواست بیش از حد مجاز است.");
@@ -141,15 +174,17 @@ export async function prepareAIOperation(actor: EmployeeContext, operation: stri
   const id = randomUUID();
   // Never persist credentials or accept arbitrary external destinations.
   if (/password|secret|token|api.?key/i.test(JSON.stringify(parameters))) throw new ApiError(400, "اطلاعات محرمانه را فقط در فرم امن تنظیمات وارد کنید.");
-  const customerUpdate = operation === "customer_update" ? await prepareCustomerUpdate(tool, parameters) : null;
+  const change = operation === "customer_update"
+    ? await prepareCustomerUpdate(tool, parameters)
+    : Object.hasOwn(profileEdits, operation) ? await prepareRecordUpdate(tool, parameters, profileEdits[operation]) : null;
   let preview: Record<string, unknown> | null = null;
   if (operation === "contract_cancel") {
     const data = await dispatch({ ...tool, method: "GET" }, parameters);
     preview = data.preview;
   }
-  const stored = { ...parameters, input: { ...(customerUpdate?.input ?? parameters.input), ...(preview ? { token: preview.token, confirmed: true } : {}), idempotencyKey: `ai:${id}` } };
+  const stored = { ...parameters, input: { ...(change?.input ?? parameters.input), ...(preview ? { token: preview.token, confirmed: true } : {}), idempotencyKey: `ai:${id}` } };
   await db.execute(sql`INSERT INTO atelier_ai_actions(id, actor_id, operation, target_id, parameters, expires_at) VALUES (${id}::uuid, ${actor.employeeId}::uuid, ${operation}, ${parameters.targetId || null}, ${JSON.stringify(stored)}::jsonb, now() + interval '10 minutes')`);
-  return { confirmation: { id, label: tool.label, targetId: parameters.targetId || null, amount: preview?.received ?? parameters.input?.amount ?? null, parameters: { input: customerUpdate ? undefined : parameters.input }, preview: preview ? Object.fromEntries(Object.entries(preview).filter(([key]) => key !== "token")) : null, comparison: customerUpdate?.comparison ?? null, requiredPhrase: highRiskConsequences[operation] ? deliberateConfirmation : null, consequences: highRiskConsequences[operation] || "با تأیید، تغییر از مسیر ثبت و اعتبارسنجی برنامه اعمال می‌شود." } };
+  return { confirmation: { id, label: tool.label, targetId: parameters.targetId || null, amount: preview?.received ?? parameters.input?.amount ?? null, parameters: { input: change ? undefined : parameters.input }, preview: preview ? Object.fromEntries(Object.entries(preview).filter(([key]) => key !== "token")) : null, comparison: change?.comparison ?? null, requiredPhrase: highRiskConsequences[operation] ? deliberateConfirmation : null, consequences: highRiskConsequences[operation] || "با تأیید، تغییر از مسیر ثبت و اعتبارسنجی برنامه اعمال می‌شود." } };
 }
 export async function cancelAIOperation(actor: EmployeeContext, id: string) {
   assertAIAdministrator(actor);
@@ -175,7 +210,7 @@ export async function executeAIOperation(actor: EmployeeContext, id: string, con
   const context = { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName };
   try {
     const tool = await authorize(actor, row.operation);
-    if (row.operation === "customer_update" && !row.parameters.input?.expectedRevision) throw new ApiError(409, "برای این درخواست پیش‌نمایش تازه‌ای تهیه کنید.");
+    if ((row.operation === "customer_update" || Object.hasOwn(profileEdits, row.operation)) && !row.parameters.input?.expectedRevision) throw new ApiError(409, "برای این درخواست پیش‌نمایش تازه‌ای تهیه کنید.");
     await logAuditEvent("AI_OPERATION_STARTED", "ai_operation", id, { operation: row.operation, target: row.target_id, correlationId: id }, context);
     const result = await dispatch(tool, row.parameters);
     await db.execute(sql`UPDATE atelier_ai_actions SET status='succeeded', result=${JSON.stringify(result)}::jsonb, updated_at=now() WHERE id=${id}::uuid`);

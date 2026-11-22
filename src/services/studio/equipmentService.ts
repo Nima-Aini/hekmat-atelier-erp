@@ -55,6 +55,7 @@ export interface CreateEquipmentInput {
 }
 
 export interface UpdateEquipmentInput {
+  expectedRevision?: string;
   title?: string;
   category?: string;
   brand?: string | null;
@@ -316,6 +317,10 @@ export async function updateStudioEquipment(id: string, input: UpdateEquipmentIn
     throw new ApiError(404, "تجهیز موردنظر یافت نشد.");
   }
 
+  if (input.expectedRevision !== undefined && input.expectedRevision !== existing.updatedAt.toISOString()) {
+    throw new ApiError(409, "اطلاعات تجهیز پس از تهیه پیشنهاد تغییر کرده است.", "AI_RECORD_REVISION_CHANGED");
+  }
+  const revision = input.expectedRevision?.slice(0, -1);
   const updateData: Partial<typeof studioEquipment.$inferInsert> = {
     updatedAt: new Date(),
   };
@@ -381,8 +386,9 @@ export async function updateStudioEquipment(id: string, input: UpdateEquipmentIn
   const [updated] = await db
     .update(studioEquipment)
     .set(updateData)
-    .where(eq(studioEquipment.id, id))
+    .where(and(eq(studioEquipment.id, id), revision ? sql`date_trunc('milliseconds', ${studioEquipment.updatedAt}) = ${revision}::timestamp` : undefined))
     .returning();
+  if (!updated) throw new ApiError(409, "اطلاعات تجهیز پس از تهیه پیشنهاد تغییر کرده است.", "AI_RECORD_REVISION_CHANGED");
 
   return {
     ...updated,
