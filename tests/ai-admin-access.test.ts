@@ -30,7 +30,7 @@ describe("AI administrator boundary", () => {
     expect(canSeeAtelierSection("ai", ["*"], "admin")).toBe(true);
   });
 
-  it.each(["chat", "analysis", "operations", "prepare_operation", "execute_action"])(
+  it.each(["chat", "analysis", "operations", "prepare_operation", "execute_action", "cancel_action"])(
     "rejects a non-admin direct request for %s",
     async action => expect((await POST(request(action))).status).toBe(403),
   );

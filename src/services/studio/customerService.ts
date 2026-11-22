@@ -31,6 +31,7 @@ export interface CreateStudioCustomerInput {
 }
 
 export interface UpdateStudioCustomerInput {
+  expectedRevision?: { customer: string; studio: string };
   name?: string;
   mobile?: string;
   email?: string | null;
@@ -317,13 +318,24 @@ export async function updateStudioCustomer(id: string, input: UpdateStudioCustom
       .select({
         id: studioCustomers.id,
         customerId: studioCustomers.customerId,
+        customerUpdatedAt: customers.updatedAt,
+        studioUpdatedAt: studioCustomers.updatedAt,
       })
       .from(studioCustomers)
+      .innerJoin(customers, eq(customers.id, studioCustomers.customerId))
       .where(eq(studioCustomers.id, id))
-      .limit(1);
+      .limit(1)
+      .for("update");
 
     if (!existing) {
       throw new ApiError(404, "مشتری آتلیه یافت نشد.");
+    }
+
+    if (input.expectedRevision && (
+      input.expectedRevision.customer !== existing.customerUpdatedAt.toISOString() ||
+      input.expectedRevision.studio !== existing.studioUpdatedAt.toISOString()
+    )) {
+      throw new ApiError(409, "پرونده پس از تهیه پیشنهاد تغییر کرده است. پیش‌نمایش تازه‌ای بگیرید.", "CUSTOMER_REVISION_CHANGED");
     }
 
     // Update base customer fields if provided

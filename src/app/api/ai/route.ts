@@ -2,7 +2,7 @@ import { ApiError, apiError, assertUuid } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { assertAIAdministrator, getEmployeeContext } from "@/services/access";
 import { queryAIAssistant, chatWithAI } from "@/services/ai";
-import { availableAIOperations, prepareAIOperation, executeAIOperation } from "@/services/aiOperations";
+import { availableAIOperations, cancelAIOperation, prepareAIOperation, executeAIOperation } from "@/services/aiOperations";
 
 export async function POST(req: Request) {
   try {
@@ -14,6 +14,10 @@ export async function POST(req: Request) {
     if (body.projectId) assertUuid(body.projectId);
     if (body.action === "operations") return NextResponse.json({ success: true, operations: await availableAIOperations(actor) });
     if (body.action === "prepare_operation") return NextResponse.json({ success: true, ...await prepareAIOperation(actor, String(body.operation || ""), body.parameters || {}) });
+    if (body.action === "cancel_action") {
+      await cancelAIOperation(actor, String(body.confirmationId || ""));
+      return NextResponse.json({ success: true });
+    }
     if (body.action === "execute_action") return NextResponse.json({ success: true, result: await executeAIOperation(actor, String(body.confirmationId || ""), body.confirmed) });
     const allowedProjectIds = body.projectId ? [body.projectId] : null;
     const unscoped = allowedProjectIds === null;

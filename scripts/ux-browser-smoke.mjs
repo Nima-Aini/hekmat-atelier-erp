@@ -80,6 +80,29 @@ try {
   await page.getByText(value, { exact: true }).waitFor();
  }
 
+ const customerId = new URL(page.url()).pathname.split("/").at(-1);
+ const ai = (action, data) => page.request.post(`${base}/api/ai`, { data: { action, ...data } });
+ const propose = city => ai("prepare_operation", { operation: "customer_update", parameters: { targetId: customerId, input: { city } } });
+ const customerCity = async () => (await (await page.request.get(`${base}/api/atelier/customers/${customerId}`)).json()).profile.customer.city;
+ const beforeCity = await customerCity();
+ const abandoned = (await (await propose("تهران")).json()).confirmation;
+ assert.deepEqual(abandoned.comparison, [{ field: "شهر", before: beforeCity, after: "تهران" }]);
+ assert.equal(await customerCity(), beforeCity);
+ assert.equal((await ai("cancel_action", { confirmationId: abandoned.id })).status(), 200);
+ assert.equal((await ai("execute_action", { confirmationId: abandoned.id, confirmed: true })).status(), 409);
+ assert.equal(await customerCity(), beforeCity);
+
+ const stale = (await (await propose("تبریز")).json()).confirmation;
+ const competingChange = await page.request.put(`${base}/api/atelier/customers/${customerId}`, { data: { city: "کرج" } });
+ assert.equal(competingChange.status(), 200);
+ assert.equal((await ai("execute_action", { confirmationId: stale.id, confirmed: true })).status(), 409);
+ assert.equal(await customerCity(), "کرج");
+
+ const ready = (await (await propose("شیراز")).json()).confirmation;
+ assert.equal((await ai("execute_action", { confirmationId: ready.id, confirmed: true })).status(), 200);
+ assert.equal(await customerCity(), "شیراز");
+ assert.equal((await ai("execute_action", { confirmationId: ready.id, confirmed: true })).status(), 409);
+
  await page.setViewportSize({ width: 390, height: 844 });
  await page.goto(`${base}/contracts/${id}`); await time.waitFor(); await time.click();
  assert.equal(await page.getByLabel("ساعت - ساعت", { exact: true }).isVisible(), true);

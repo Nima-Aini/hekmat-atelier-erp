@@ -4,6 +4,7 @@ import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { ApiError, assertUuid } from "@/lib/apiError";
 import { assertAIAdministrator, canAccessPermission, type EmployeeContext } from "@/services/access";
+import type { CustomerProfileData } from "@/lib/customerProfile";
 import { logAuditEvent } from "@/services/audit";
 
 type Module = Record<string, unknown>;
@@ -68,6 +69,45 @@ async function dispatch(tool: Operation, parameters: Parameters) {
   if (!response.ok || result.success === false) throw new ApiError(response.status >= 400 ? response.status : 400, result.error || "عملیات انجام نشد.");
   return result;
 }
+const customerPreviewLabels = {
+  name: "نام مشتری",
+  mobile: "شماره همراه",
+  phone: "تلفن دوم",
+  email: "ایمیل",
+  storeName: "نام مجموعه",
+  city: "شهر",
+  region: "منطقه",
+  postalCode: "کد پستی",
+  address: "آدرس",
+} as const;
+
+async function prepareCustomerUpdate(tool: Operation, parameters: Parameters) {
+  assertUuid(parameters.targetId);
+  const { profile } = await dispatch({ ...tool, method: "GET" }, { targetId: parameters.targetId }) as { profile: CustomerProfileData };
+  const customer = profile.customer;
+  const comparison: Array<{ field: string; before: string | null; after: string | null }> = [];
+  const input: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(parameters.input || {})) {
+    if (!Object.hasOwn(customerPreviewLabels, key)) throw new ApiError(400, "این فیلد در پیش‌نمایش ویرایش مشتری پشتیبانی نمی‌شود.");
+    const field = key as keyof typeof customerPreviewLabels;
+    if (value !== null && typeof value !== "string") throw new ApiError(400, "مقدار پیشنهادی معتبر نیست.");
+    const after = value?.trim() || null;
+    if (field === "name" && (!after || after.length > 200)) throw new ApiError(400, "نام مشتری معتبر نیست.");
+    if (field === "mobile" && (!after || after.length !== 11 || !/^09[0-9]+$/.test(after))) throw new ApiError(400, "شماره همراه معتبر نیست.");
+    if (field === "email" && after && (after.length > 254 || !/^[^@ ]+@[^@ ]+[.][^@ ]+$/.test(after))) throw new ApiError(400, "ایمیل معتبر نیست.");
+    if (after && after.length > 2000) throw new ApiError(400, "مقدار پیشنهادی بیش از حد طولانی است.");
+    const before = customer[field] ?? null;
+    if (before === after) continue;
+    comparison.push({ field: customerPreviewLabels[field], before, after });
+    input[field] = after;
+  }
+  if (!comparison.length) throw new ApiError(400, "پیشنهاد شامل تغییری در پرونده مشتری نیست.");
+  return {
+    comparison,
+    input: { ...input, expectedRevision: { customer: customer.updatedAt, studio: customer.studio.updatedAt } },
+  };
+}
+
 export async function prepareAIOperation(actor: EmployeeContext, operation: string, parameters: Parameters) {
   const tool = await authorize(actor, operation);
   if (JSON.stringify(parameters).length > 30000) throw new ApiError(400, "حجم درخواست بیش از حد مجاز است.");
@@ -75,15 +115,23 @@ export async function prepareAIOperation(actor: EmployeeContext, operation: stri
   const id = randomUUID();
   // Never persist credentials or accept arbitrary external destinations.
   if (/password|secret|token|api.?key/i.test(JSON.stringify(parameters))) throw new ApiError(400, "اطلاعات محرمانه را فقط در فرم امن تنظیمات وارد کنید.");
+  const customerUpdate = operation === "customer_update" ? await prepareCustomerUpdate(tool, parameters) : null;
   let preview: Record<string, unknown> | null = null;
   if (operation === "contract_cancel") {
     const data = await dispatch({ ...tool, method: "GET" }, parameters);
     preview = data.preview;
   }
-  const stored = { ...parameters, input: { ...parameters.input, ...(preview ? { token: preview.token, confirmed: true } : {}), idempotencyKey: `ai:${id}` } };
+  const stored = { ...parameters, input: { ...(customerUpdate?.input ?? parameters.input), ...(preview ? { token: preview.token, confirmed: true } : {}), idempotencyKey: `ai:${id}` } };
   await db.execute(sql`INSERT INTO atelier_ai_actions(id, actor_id, operation, target_id, parameters, expires_at) VALUES (${id}::uuid, ${actor.employeeId}::uuid, ${operation}, ${parameters.targetId || null}, ${JSON.stringify(stored)}::jsonb, now() + interval '10 minutes')`);
-  return { confirmation: { id, label: tool.label, targetId: parameters.targetId || null, amount: preview?.received ?? parameters.input?.amount ?? null, parameters: stored, preview, consequences: "با تأیید، عملیات واقعی از مسیر معتبر برنامه انجام می‌شود. تغییر مالی فقط ثبت حسابداری است و انتقال بانکی انجام نمی‌دهد." } };
+  return { confirmation: { id, label: tool.label, targetId: parameters.targetId || null, amount: preview?.received ?? parameters.input?.amount ?? null, parameters: { input: customerUpdate ? undefined : parameters.input }, preview: preview ? Object.fromEntries(Object.entries(preview).filter(([key]) => key !== "token")) : null, comparison: customerUpdate?.comparison ?? null, consequences: "با تأیید، عملیات واقعی از مسیر معتبر برنامه انجام می‌شود. تغییر مالی فقط ثبت حسابداری است و انتقال بانکی انجام نمی‌دهد." } };
 }
+export async function cancelAIOperation(actor: EmployeeContext, id: string) {
+  assertAIAdministrator(actor);
+  assertUuid(id);
+  const cancelled = await db.execute(sql`UPDATE atelier_ai_actions SET status='cancelled', updated_at=now() WHERE id=${id}::uuid AND actor_id=${actor.employeeId}::uuid AND status='pending' AND expires_at > now() RETURNING id`);
+  if (!cancelled.rows.length) throw new ApiError(409, "این پیشنهاد دیگر قابل لغو نیست.");
+}
+
 export async function executeAIOperation(actor: EmployeeContext, id: string, confirmed: unknown) {
   assertAIAdministrator(actor);
   assertUuid(id);
@@ -94,6 +142,7 @@ export async function executeAIOperation(actor: EmployeeContext, id: string, con
   const context = { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName };
   try {
     const tool = await authorize(actor, row.operation);
+    if (row.operation === "customer_update" && !row.parameters.input?.expectedRevision) throw new ApiError(409, "برای این درخواست پیش‌نمایش تازه‌ای تهیه کنید.");
     await logAuditEvent("AI_OPERATION_STARTED", "ai_operation", id, { operation: row.operation, target: row.target_id, correlationId: id }, context);
     const result = await dispatch(tool, row.parameters);
     await db.execute(sql`UPDATE atelier_ai_actions SET status='succeeded', result=${JSON.stringify(result)}::jsonb, updated_at=now() WHERE id=${id}::uuid`);
