@@ -18,7 +18,7 @@ export async function POST(req: Request) {
       await cancelAIOperation(actor, String(body.confirmationId || ""));
       return NextResponse.json({ success: true });
     }
-    if (body.action === "execute_action") return NextResponse.json({ success: true, result: await executeAIOperation(actor, String(body.confirmationId || ""), body.confirmed) });
+    if (body.action === "execute_action") return NextResponse.json({ success: true, result: await executeAIOperation(actor, String(body.confirmationId || ""), body.confirmed, body.phrase) });
     const allowedProjectIds = body.projectId ? [body.projectId] : null;
     const unscoped = allowedProjectIds === null;
     const access = { finance: true, wages: true };

@@ -50,6 +50,16 @@ export const AI_OPERATIONS: Record<string, Operation> = {
   settings_update: { label: "ویرایش تنظیمات", permission: "settings.manage", method: "PUT", load: () => import("@/app/api/atelier/settings/route") },
 };
 
+const deliberateConfirmation = "تأیید عملیات";
+const highRiskConsequences: Record<string, string> = {
+  contract_approve: "تأیید قرارداد می‌تواند تعهد مالی و فاکتور ایجاد کند.",
+  contract_delete_draft: "پیش‌قرارداد پس از بررسی وابستگی‌های مالی حذف می‌شود.",
+  contract_cancel: "ابطال قرارداد وضعیت قرارداد، تعهدات و سندهای برگشت حسابداری را تغییر می‌دهد.",
+  wage_pay: "پرداخت دستمزد در حساب مالی ثبت می‌شود و مانده تعهد دستمزد تغییر می‌کند.",
+  receipt_create: "دریافت در حساب مالی ثبت می‌شود و ممکن است مانده فاکتور را تغییر دهد.",
+  expense_create: "هزینه ثبت می‌شود و در صورت انتخاب پرداخت، از مانده حساب مالی کسر خواهد شد.",
+};
+
 type Parameters = { targetId?: string; params?: Record<string, string>; input?: Record<string, unknown>; query?: Record<string, string> };
 export function isAIReadOperation(operation: string) {
   return Object.hasOwn(AI_OPERATIONS, operation) && AI_OPERATIONS[operation].method === "GET";
@@ -139,7 +149,7 @@ export async function prepareAIOperation(actor: EmployeeContext, operation: stri
   }
   const stored = { ...parameters, input: { ...(customerUpdate?.input ?? parameters.input), ...(preview ? { token: preview.token, confirmed: true } : {}), idempotencyKey: `ai:${id}` } };
   await db.execute(sql`INSERT INTO atelier_ai_actions(id, actor_id, operation, target_id, parameters, expires_at) VALUES (${id}::uuid, ${actor.employeeId}::uuid, ${operation}, ${parameters.targetId || null}, ${JSON.stringify(stored)}::jsonb, now() + interval '10 minutes')`);
-  return { confirmation: { id, label: tool.label, targetId: parameters.targetId || null, amount: preview?.received ?? parameters.input?.amount ?? null, parameters: { input: customerUpdate ? undefined : parameters.input }, preview: preview ? Object.fromEntries(Object.entries(preview).filter(([key]) => key !== "token")) : null, comparison: customerUpdate?.comparison ?? null, consequences: "با تأیید، عملیات واقعی از مسیر معتبر برنامه انجام می‌شود. تغییر مالی فقط ثبت حسابداری است و انتقال بانکی انجام نمی‌دهد." } };
+  return { confirmation: { id, label: tool.label, targetId: parameters.targetId || null, amount: preview?.received ?? parameters.input?.amount ?? null, parameters: { input: customerUpdate ? undefined : parameters.input }, preview: preview ? Object.fromEntries(Object.entries(preview).filter(([key]) => key !== "token")) : null, comparison: customerUpdate?.comparison ?? null, requiredPhrase: highRiskConsequences[operation] ? deliberateConfirmation : null, consequences: highRiskConsequences[operation] || "با تأیید، تغییر از مسیر ثبت و اعتبارسنجی برنامه اعمال می‌شود." } };
 }
 export async function cancelAIOperation(actor: EmployeeContext, id: string) {
   assertAIAdministrator(actor);
@@ -148,10 +158,17 @@ export async function cancelAIOperation(actor: EmployeeContext, id: string) {
   if (!cancelled.rows.length) throw new ApiError(409, "این پیشنهاد دیگر قابل لغو نیست.");
 }
 
-export async function executeAIOperation(actor: EmployeeContext, id: string, confirmed: unknown) {
+export async function executeAIOperation(actor: EmployeeContext, id: string, confirmed: unknown, phrase?: unknown) {
   assertAIAdministrator(actor);
   assertUuid(id);
   if (confirmed !== true) throw new ApiError(400, "تأیید صریح عملیات الزامی است.");
+  if (phrase !== deliberateConfirmation) {
+    const pending = await db.execute(sql`SELECT operation FROM atelier_ai_actions WHERE id=${id}::uuid AND actor_id=${actor.employeeId}::uuid AND status='pending' AND expires_at > now()`);
+    const operation = pending.rows[0]?.operation;
+    if (typeof operation === "string" && Object.hasOwn(highRiskConsequences, operation)) {
+      throw new ApiError(400, "برای این عملیات باید عبارت تأیید را وارد کنید.", "AI_DELIBERATE_CONFIRMATION_REQUIRED");
+    }
+  }
   const claimed = await db.execute(sql`UPDATE atelier_ai_actions SET status='processing', updated_at=now() WHERE id=${id}::uuid AND actor_id=${actor.employeeId}::uuid AND status='pending' AND expires_at > now() RETURNING operation, parameters, target_id`);
   const row = claimed.rows[0] as { operation: string; parameters: Parameters; target_id: string | null } | undefined;
   if (!row) throw new ApiError(409, "این درخواست منقضی شده، قبلاً اجرا شده یا متعلق به شما نیست. وضعیت رکورد را بررسی کنید.");

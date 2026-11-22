@@ -5,7 +5,7 @@ import { BarChart3, Bot, MessageSquare, RefreshCw, Send, ShieldCheck, Sparkles, 
 
 interface AiAssistantViewProps { selectedProjectId: string | null; }
 interface ChatMsg { role: "user" | "model" | "assistant"; content: string; timestamp?: string; modelUsed?: string; }
-type Confirmation = { id: string; label: string; targetId: string | null; amount: number | null; parameters: { input?: Record<string, unknown> }; consequences: string; preview?: unknown; comparison?: Array<{ field: string; before: string | null; after: string | null }> };
+type Confirmation = { id: string; label: string; targetId: string | null; amount: number | null; parameters: { input?: Record<string, unknown> }; consequences: string; preview?: unknown; requiredPhrase?: string | null; comparison?: Array<{ field: string; before: string | null; after: string | null }> };
 
 const timeLabel = () => new Date().toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" });
 const welcome = (): ChatMsg => ({
@@ -23,6 +23,7 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ selectedProjec
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [phrase, setPhrase] = useState("");
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { if (mode === "chat") chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, mode]);
@@ -42,7 +43,7 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ selectedProjec
       });
       const result = await response.json();
       if (!response.ok || !result.success) appendError(result.error || "پاسخی از دستیار دریافت نشد.");
-      else { setMessages(previous => [...previous, { role: "model", content: result.reply + (result.result ? `\n${JSON.stringify(result.result, null, 2)}` : ""), modelUsed: result.modelUsed, timestamp: timeLabel() }]); setConfirmation(result.confirmation || null); }
+      else { setMessages(previous => [...previous, { role: "model", content: result.reply + (result.result ? `\n${JSON.stringify(result.result, null, 2)}` : ""), modelUsed: result.modelUsed, timestamp: timeLabel() }]); setConfirmation(result.confirmation || null); setPhrase(""); }
     } catch (error) { appendError(error instanceof Error ? error.message : "ارتباط با سرور برقرار نشد."); }
     finally { setChatLoading(false); }
   };
@@ -71,7 +72,7 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ selectedProjec
       const response = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, confirmationId: confirmation.id, confirmed: action === "execute_action" }),
+        body: JSON.stringify({ action, confirmationId: confirmation.id, confirmed: action === "execute_action", phrase }),
       });
       const result = await response.json();
       if (!response.ok || !result.success) throw new Error(result.error || "عملیات انجام نشد.");
@@ -102,8 +103,12 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ selectedProjec
       </div> : <details open><summary>جزئیات درخواست</summary><pre dir="ltr" className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(confirmation.preview || confirmation.parameters.input, null, 2)}</pre></details>}
       <p>{confirmation.consequences}</p>
       <p className="font-bold">می‌خواهم تغییرات بالا را اعمال کنم. آیا تأیید می‌کنید؟</p>
+      {confirmation.requiredPhrase && <label className="block">
+        <span className="atelier-label">برای تأیید عبارت «{confirmation.requiredPhrase}» را وارد کنید.</span>
+        <input className="atelier-input w-full p-2.5" value={phrase} onChange={event => setPhrase(event.target.value)} />
+      </label>}
       <div className="flex flex-wrap gap-3">
-        <button disabled={chatLoading} className="atelier-button" onClick={() => void handleProposal("execute_action")}>تأیید و اعمال تغییرات</button>
+        <button disabled={chatLoading || Boolean(confirmation.requiredPhrase && confirmation.requiredPhrase !== phrase)} className="atelier-button" onClick={() => void handleProposal("execute_action")}>تأیید و اعمال تغییرات</button>
         <button disabled={chatLoading} className="atelier-button-secondary" onClick={() => void handleProposal("cancel_action")}>لغو</button>
         <button disabled={chatLoading} className="atelier-button-secondary" onClick={() => void handleProposal("cancel_action", true)}>اصلاح پیشنهاد</button>
       </div>
