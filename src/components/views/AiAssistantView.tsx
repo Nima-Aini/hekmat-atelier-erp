@@ -38,7 +38,7 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ selectedProjec
       const response = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "chat", messages: history.map(message => ({ role: message.role === "assistant" ? "model" : message.role, content: message.content })), projectId: selectedProjectId }),
+        body: JSON.stringify({ action: "chat", messages: history.slice(-12).map(message => ({ role: message.role === "assistant" ? "model" : message.role, content: message.content })), projectId: selectedProjectId }),
       });
       const result = await response.json();
       if (!response.ok || !result.success) appendError(result.error || "پاسخی از دستیار دریافت نشد.");

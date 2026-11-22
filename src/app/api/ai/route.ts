@@ -1,8 +1,8 @@
 import { ApiError, apiError, assertUuid } from "@/lib/apiError";
 import { NextResponse } from "next/server";
 import { assertAIAdministrator, getEmployeeContext } from "@/services/access";
-import { queryAIAssistant, chatWithAI } from "@/services/ai";
-import { availableAIOperations, cancelAIOperation, prepareAIOperation, executeAIOperation } from "@/services/aiOperations";
+import { queryAIAssistant, chatWithAI, explainAIReadResult } from "@/services/ai";
+import { availableAIOperations, cancelAIOperation, isAIReadOperation, prepareAIOperation, executeAIOperation } from "@/services/aiOperations";
 
 export async function POST(req: Request) {
   try {
@@ -24,16 +24,25 @@ export async function POST(req: Request) {
     const access = { finance: true, wages: true };
 
     if (body.action === "chat") {
-      if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
+      if (!Array.isArray(body.messages) || body.messages.length === 0 || body.messages.length > 50 ||
+        body.messages.some((message: unknown) => {
+          if (!message || typeof message !== "object") return true;
+          const { role, content } = message as Record<string, unknown>;
+          return !["user", "model", "assistant"].includes(String(role)) || typeof content !== "string" || content.length > 12000;
+        })) {
         return NextResponse.json({ success: false, error: "لیست پیام‌های گفتگو الزامی است." }, { status: 400 });
       }
       const chatRes = await chatWithAI(body.messages, allowedProjectIds, actor.employeeId, unscoped, access, await availableAIOperations(actor), true);
       const prepared = chatRes.actionProposal ? await prepareAIOperation(actor, chatRes.actionProposal.operation, chatRes.actionProposal.parameters) : {};
+      if (chatRes.actionProposal && isAIReadOperation(chatRes.actionProposal.operation) && "result" in prepared) {
+        const answer = await explainAIReadResult(body.messages, chatRes.actionProposal.operation, prepared.result);
+        return NextResponse.json({ success: true, ...answer });
+      }
       return NextResponse.json({ success: true, ...chatRes, ...prepared });
     }
 
     // Default: Analysis / Question
-    if (!body.question) {
+    if (typeof body.question !== "string" || !body.question.trim() || body.question.length > 12000) {
       return NextResponse.json({ success: false, error: "متن سوال الزامی است." }, { status: 400 });
     }
 

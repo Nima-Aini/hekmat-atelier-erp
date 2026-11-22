@@ -11,6 +11,11 @@ type Module = Record<string, unknown>;
 type Operation = { label: string; permission: string; method: "GET" | "POST" | "PUT" | "DELETE"; load: () => Promise<Module> };
 // Every handler performs its normal session, project-scope and business validation again.
 export const AI_OPERATIONS: Record<string, Operation> = {
+  customer_read: { label: "مشاهده پرونده مشتری، پروژه‌ها و سوابق", permission: "studio.customers.view", method: "GET", load: () => import("@/app/api/atelier/customers/[id]/route") },
+  contract_read: { label: "مشاهده جزئیات قرارداد", permission: "studio.contract.view", method: "GET", load: () => import("@/app/api/atelier/contracts/[id]/route") },
+  projects_list: { label: "مشاهده پروژه‌ها", permission: "studio.view", method: "GET", load: () => import("@/app/api/studio/projects/route") },
+  personnel_read: { label: "مشاهده پرونده پرسنل و سوابق دستمزد", permission: "studio.personnel.view", method: "GET", load: () => import("@/app/api/studio/personnel/[id]/route") },
+  equipment_read: { label: "مشاهده تجهیز و رزروهای آن", permission: "studio.equipment.view", method: "GET", load: () => import("@/app/api/studio/equipment/[id]/route") },
   customers_list: { label: "مشاهده مشتریان", permission: "studio.customers.view", method: "GET", load: () => import("@/app/api/atelier/customers/route") },
   customer_update: { label: "ویرایش مشتری", permission: "studio.customers.edit", method: "PUT", load: () => import("@/app/api/atelier/customers/[id]/route") },
   customer_task_create: { label: "افزودن کار مشتری", permission: "studio.planning.manage", method: "POST", load: () => import("@/app/api/atelier/customers/[id]/tasks/route") },
@@ -46,6 +51,10 @@ export const AI_OPERATIONS: Record<string, Operation> = {
 };
 
 type Parameters = { targetId?: string; params?: Record<string, string>; input?: Record<string, unknown>; query?: Record<string, string> };
+export function isAIReadOperation(operation: string) {
+  return Object.hasOwn(AI_OPERATIONS, operation) && AI_OPERATIONS[operation].method === "GET";
+}
+
 export async function availableAIOperations(actor: EmployeeContext) {
   assertAIAdministrator(actor);
   const allowed = await Promise.all(Object.entries(AI_OPERATIONS).map(async ([operation, item]) => await canAccessPermission(actor, item.permission) ? { operation, label: item.label, mutation: item.method !== "GET" } : null));
@@ -111,7 +120,14 @@ async function prepareCustomerUpdate(tool: Operation, parameters: Parameters) {
 export async function prepareAIOperation(actor: EmployeeContext, operation: string, parameters: Parameters) {
   const tool = await authorize(actor, operation);
   if (JSON.stringify(parameters).length > 30000) throw new ApiError(400, "حجم درخواست بیش از حد مجاز است.");
-  if (tool.method === "GET") return { result: await dispatch(tool, parameters) };
+  if (tool.method === "GET") {
+    const query = { ...parameters.query };
+    for (const field of ["limit", "pageSize"]) {
+      const requested = Number(query[field] ?? 20);
+      query[field] = String(Number.isInteger(requested) && requested > 0 ? Math.min(requested, 20) : 20);
+    }
+    return { result: await dispatch(tool, { ...parameters, query }) };
+  }
   const id = randomUUID();
   // Never persist credentials or accept arbitrary external destinations.
   if (/password|secret|token|api.?key/i.test(JSON.stringify(parameters))) throw new ApiError(400, "اطلاعات محرمانه را فقط در فرم امن تنظیمات وارد کنید.");
