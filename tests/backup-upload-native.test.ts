@@ -11,7 +11,8 @@ import { activateRestoredDatabase } from "../src/services/backupActivation";
 import { LocalBackupStorage } from "../src/services/backupStorage";
 const enabled = process.env.RUN_POSTGRES_RESTORE_DRILL === "true";
 describe.skipIf(!enabled)("uploaded native archive and safety snapshot", () => {
- let directory: string; let storage: LocalBackupStorage; let targetName: string; let admin: Pool;
+ let directory: string; let storage: LocalBackupStorage; let targetName: string; let candidateRole: string; let runtimeRole: string; let runtimeSourceUrl: URL; let admin: Pool;
+ const originalSourceUrl = process.env.DATABASE_URL;
  const context = { userId: "upload_drill", userName: "Upload Drill" };
  beforeAll(async () => {
    await migrateDatabase(); directory = await mkdtemp(path.join(tmpdir(), "atelier-upload-native-")); storage = new LocalBackupStorage(directory);
@@ -20,10 +21,28 @@ describe.skipIf(!enabled)("uploaded native archive and safety snapshot", () => {
    await pool.query("INSERT INTO employees(id,code,name,mobile) VALUES($1::uuid,$1::text,'مدیر تست','09120000009')", [employeeId]);
    await pool.query("INSERT INTO employee_accounts(employee_id,username,password_hash,role_id) SELECT $1,'restore_admin','test-hash',id FROM roles WHERE code='admin'", [employeeId]);
    targetName = `atelier_upload_${randomUUID().replaceAll("-", "")}`;
-   admin = new Pool({ connectionString: process.env.POSTGRES_ADMIN_URL }); await admin.query(`CREATE DATABASE "${targetName}"`);
-   const target = new URL(process.env.POSTGRES_ADMIN_URL!); target.pathname = `/${targetName}`; process.env.RESTORE_TARGET_DATABASE_URL = target.toString();
+   const suffix = randomUUID().replaceAll("-", "");
+   candidateRole = `restore_owner_${suffix}`;
+   runtimeRole = `restore_runtime_${suffix}`;
+   const candidatePass = randomUUID();
+   const runtimePass = randomUUID();
+   admin = new Pool({ connectionString: process.env.POSTGRES_ADMIN_URL });
+   await admin.query(`CREATE ROLE "${candidateRole}" LOGIN PASSWORD '${candidatePass}'`);
+   await admin.query(`CREATE ROLE "${runtimeRole}" LOGIN PASSWORD '${runtimePass}'`);
+   await admin.query(`CREATE DATABASE "${targetName}" OWNER "${candidateRole}"`);
+   const target = new URL(process.env.POSTGRES_ADMIN_URL!);
+   target.pathname = `/${targetName}`;
+   target.username = candidateRole;
+   target.password = candidatePass;
+   process.env.RESTORE_TARGET_DATABASE_URL = target.toString();
+   runtimeSourceUrl = new URL(originalSourceUrl!);
+   runtimeSourceUrl.username = runtimeRole;
+   runtimeSourceUrl.password = runtimePass;
+   await pool.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
+   await pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${runtimeRole}"`);
+   await pool.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${runtimeRole}"`);
  }, 60000);
- afterAll(async () => { if (admin) { await admin.query(`DROP DATABASE IF EXISTS "${targetName}" WITH (FORCE)`); await admin.end(); } if (directory) await rm(directory, { recursive: true, force: true }); });
+ afterAll(async () => { if (originalSourceUrl) process.env.DATABASE_URL = originalSourceUrl; if (admin) { await admin.query(`DROP DATABASE IF EXISTS "${targetName}" WITH (FORCE)`); await admin.end(); } if (directory) await rm(directory, { recursive: true, force: true }); });
  it("rejects invalid and damaged archives without changing the live database", async () => {
    const before = (await pool.query("SELECT COUNT(*)::int AS n FROM customers")).rows[0].n;
    for (const data of ["not a dump", "PGDMPcorrupt"]) await expect(uploadSystemBackup(new Request("http://localhost", { method: "POST", body: data }), context, storage)).rejects.toThrow();
@@ -49,11 +68,17 @@ describe.skipIf(!enabled)("uploaded native archive and safety snapshot", () => {
    expect((await pool.query("SELECT maintenance_mode FROM application_runtime_state WHERE id='global'")).rows[0].maintenance_mode).toBe(false);
    process.env.RESTORE_ALLOW_ACTIVATION = "true";
    const marker = randomUUID(); await pool.query("INSERT INTO customers(id,code,name,mobile) VALUES($1::uuid,$1::text,'پس از بکاپ','09120000008')", [marker]);
+   process.env.DATABASE_URL = runtimeSourceUrl.toString();
    const failingStorage = new Proxy(storage, { get(target, prop) { if (prop === "writeMetadata") return async (id: string, metadata: any) => { if (metadata.kind === "restore_operation" && metadata.status === "activated_verified") throw new Error("simulated verification journal failure"); return target.writeMetadata(id, metadata); }; const value = Reflect.get(target, prop); return typeof value === "function" ? value.bind(target) : value; } });
    await expect(activateRestoredDatabase(uploaded.id, "RESTORE", context, failingStorage)).rejects.toMatchObject({ code: "RESTORE_ACTIVATION_FAILED" });
    expect((await pool.query("SELECT COUNT(*)::int n FROM customers WHERE id=$1", [marker])).rows[0].n).toBe(1);
    const activated = await activateRestoredDatabase(uploaded.id, "RESTORE", context, storage);
    expect(activated).toMatchObject({ activated: true, verified: true, sessionsInvalidated: true });
+   const runtime = new Pool({ connectionString: runtimeSourceUrl.toString() });
+   try {
+     const access = await runtime.query("SELECT current_user AS role, has_table_privilege(current_user, 'customers', 'UPDATE') AS can_update, (SELECT rolsuper FROM pg_roles WHERE rolname=current_user) AS superuser");
+     expect(access.rows[0]).toEqual({ role: runtimeRole, can_update: true, superuser: false });
+   } finally { await runtime.end(); }
    expect((await pool.query("SELECT COUNT(*)::int n FROM employee_accounts WHERE session_invalid_before IS NOT NULL")).rows[0].n).toBeGreaterThan(0);
    expect((await pool.query("SELECT maintenance_mode FROM application_runtime_state WHERE id='global'")).rows[0].maintenance_mode).toBe(false);
    expect((await pool.query("SELECT COUNT(*)::int n FROM audit_logs WHERE action='RESTORE_ACTIVATED'")).rows[0].n).toBe(1);

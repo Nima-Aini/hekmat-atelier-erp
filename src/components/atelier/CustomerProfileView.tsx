@@ -18,7 +18,7 @@ type Navigate = (section: string, id: string | null) => void;
 
 export function CustomerProfileView({ id, revision = 0, onBack, onNavigate, onEdit }: {
   id: string; revision?: number; onBack: () => void; onNavigate: Navigate;
-  onEdit: (customer: { id: string; name: string; mobile: string }) => void;
+  onEdit: (customer: CustomerProfileData["customer"]) => void;
 }) {
   const [profile, setProfile] = useState<CustomerProfileData | null>(null);
   const [loading, setLoading] = useState(true), [error, setError] = useState("");
@@ -48,7 +48,7 @@ export function CustomerProfileView({ id, revision = 0, onBack, onNavigate, onEd
         <p className="mt-2 text-xs text-zinc-500">اطلاعات در محدوده دسترسی شما · آخرین دریافت اطلاعات: {dateTime(profile.generatedAt)}</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">{back}
-        {profile.access.canEdit && <button type="button" className="atelier-button-secondary inline-flex items-center gap-2" onClick={() => onEdit({ id: s.id, name: c.name, mobile: c.mobile })}><Edit3 className="h-4 w-4" />ویرایش مشتری</button>}
+        {profile.access.canEdit && <button type="button" className="atelier-button-secondary inline-flex items-center gap-2" onClick={() => onEdit(c)}><Edit3 className="h-4 w-4" />ویرایش اطلاعات مشتری</button>}
         <button type="button" aria-label="به‌روزرسانی پرونده مشتری" title="به‌روزرسانی" className="atelier-icon-button" onClick={() => void load()} disabled={loading}><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} /></button>
       </div>
     </header>
@@ -116,6 +116,9 @@ function Projects({ profile, onNavigate }: { profile: CustomerProfileData; onNav
         <div className="grid gap-3 sm:grid-cols-3"><Detail label="تاریخ قرارداد">{date(contract.date)}</Detail><Detail label="برنامه">{date(contract.programDate)}</Detail><Detail label="تعهد تحویل">{date(contract.deliveryDate)}</Detail>
           {contract.amount !== null && <><Detail label="مبلغ قرارداد">{overviewMoney(contract.amount)}</Detail><Detail label="تسویه فاکتور">{contract.paid === null ? "فاکتور ثبت نشده" : overviewMoney(contract.paid)}</Detail><Detail label="مانده فاکتور">{contract.remaining === null ? "فاکتور ثبت نشده" : overviewMoney(contract.remaining)}</Detail></>}
         </div>
+        {contract.fields.length > 0 && <div className="grid gap-3 sm:grid-cols-3">
+          {contract.fields.map(field => <Detail key={field.key} label={field.label}>{field.value}</Detail>)}
+        </div>}
         <button type="button" className="atelier-button-secondary text-xs" onClick={() => onNavigate("contracts", contract.id)}>مشاهده قرارداد</button>
       </div>)}
     </article>)}</div>}

@@ -2,7 +2,6 @@
 
 import {
   AlertCircle,
-  ArrowDownLeft,
   ArrowUpRight,
   BanknoteArrowDown,
   CalendarDays,
@@ -25,16 +24,12 @@ import { NeonStatus } from "./FinanceControls";
 export function FinanceOverview({
   data,
   onTab,
-  onReceipt,
-  onExpense,
   onAccount,
   onInstallment,
   onOutgoing,
 }: {
   data: Record<string, any>;
   onTab: (tab: string) => void;
-  onReceipt: () => void;
-  onExpense: () => void;
   onAccount: (id: string) => void;
   onInstallment: (row: any) => void;
   onOutgoing: (row: any) => void;
@@ -247,19 +242,6 @@ export function FinanceOverview({
               ))}
             </div>
           </OverviewCard>
-          <div className="grid grid-cols-2 gap-3">
-            <button
-              onClick={onReceipt}
-              className="atelier-button !border-emerald-700 !bg-emerald-800"
-            >
-              <ArrowDownLeft className="h-4 w-4" />
-              ثبت دریافت
-            </button>
-            <button onClick={onExpense} className="atelier-button">
-              <ArrowUpRight className="h-4 w-4" />
-              ثبت هزینه
-            </button>
-          </div>
         </div>
       </div>
     </div>

@@ -5,7 +5,7 @@ import { BarChart3, Bot, MessageSquare, RefreshCw, Send, ShieldCheck, Sparkles, 
 
 interface AiAssistantViewProps { selectedProjectId: string | null; }
 interface ChatMsg { role: "user" | "model" | "assistant"; content: string; timestamp?: string; modelUsed?: string; }
-type Confirmation = { id: string; label: string; targetId: string | null; amount: number | null; parameters: { input?: Record<string, unknown> }; consequences: string; preview?: unknown };
+type Confirmation = { id: string; label: string; targetId: string | null; amount: number | null; parameters: { input?: Record<string, unknown> }; consequences: string; preview?: unknown; requiredPhrase?: string | null; comparison?: Array<{ field: string; before: string | null; after: string | null }> };
 
 const timeLabel = () => new Date().toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit" });
 const welcome = (): ChatMsg => ({
@@ -23,6 +23,7 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ selectedProjec
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<any | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [phrase, setPhrase] = useState("");
   const chatBottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { if (mode === "chat") chatBottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, mode]);
@@ -38,11 +39,11 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ selectedProjec
       const response = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "chat", messages: history.map(message => ({ role: message.role === "assistant" ? "model" : message.role, content: message.content })), projectId: selectedProjectId }),
+        body: JSON.stringify({ action: "chat", messages: history.slice(-12).map(message => ({ role: message.role === "assistant" ? "model" : message.role, content: message.content })), projectId: selectedProjectId }),
       });
       const result = await response.json();
       if (!response.ok || !result.success) appendError(result.error || "پاسخی از دستیار دریافت نشد.");
-      else { setMessages(previous => [...previous, { role: "model", content: result.reply + (result.result ? `\n${JSON.stringify(result.result, null, 2)}` : ""), modelUsed: result.modelUsed, timestamp: timeLabel() }]); setConfirmation(result.confirmation || null); }
+      else { setMessages(previous => [...previous, { role: "model", content: result.reply + (result.result ? `\n${JSON.stringify(result.result, null, 2)}` : ""), modelUsed: result.modelUsed, timestamp: timeLabel() }]); setConfirmation(result.confirmation || null); setPhrase(""); }
     } catch (error) { appendError(error instanceof Error ? error.message : "ارتباط با سرور برقرار نشد."); }
     finally { setChatLoading(false); }
   };
@@ -64,10 +65,54 @@ export const AiAssistantView: React.FC<AiAssistantViewProps> = ({ selectedProjec
     finally { setAnalysisLoading(false); }
   };
 
+  const handleProposal = async (action: "execute_action" | "cancel_action", revise = false) => {
+    if (!confirmation || chatLoading) return;
+    setChatLoading(true);
+    try {
+      const response = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, confirmationId: confirmation.id, confirmed: action === "execute_action", phrase }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) throw new Error(result.error || "عملیات انجام نشد.");
+      const content = action === "execute_action" ? "تغییرات تأییدشده اعمال شد." : revise ? "پیشنهاد قبلی لغو شد. تغییرات دلخواه را بنویسید." : "پیشنهاد لغو شد.";
+      setMessages(previous => [...previous, { role: "model", content, timestamp: timeLabel() }]);
+    } catch (error) {
+      appendError(error instanceof Error ? error.message : "خطا در عملیات؛ وضعیت رکورد را بررسی کنید.");
+    } finally {
+      setConfirmation(null);
+      setChatLoading(false);
+    }
+  };
+
   const prompts = ["قرارداد های امروز را بگو", "فردا چه برنامه هایی داریم؟", "چه تجهیزاتی باید اجاره شوند؟", "کدام رزروها نزدیک هستند؟", "کدام مشتری بیشترین مانده را دارد؟", "امروز چه پرسنلی درگیر هستند؟"];
 
   return <div className="space-y-6">
-    {confirmation && <section className="space-y-3 rounded-2xl border border-amber-600 bg-amber-950/20 p-5 text-sm"><h3 className="font-bold">تأیید عملیات واقعی: {confirmation.label}</h3><p>رکورد: {confirmation.targetId || "رکورد جدید"}</p>{confirmation.amount != null && <p>مبلغ: {Number(confirmation.amount).toLocaleString("fa-IR")} تومان</p>}<p>{confirmation.consequences}</p><details open><summary>جزئیات دقیق درخواست</summary><pre dir="ltr" className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(confirmation.preview || confirmation.parameters.input, null, 2)}</pre></details><div className="flex gap-3"><button disabled={chatLoading} className="rounded-xl bg-red-700 px-4 py-2" onClick={async () => { setChatLoading(true); try { const result = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "execute_action", confirmationId: confirmation.id, confirmed: true }) }).then(r => r.json()); if (!result.success) throw new Error(result.error || "عملیات انجام نشد."); setMessages(previous => [...previous, { role: "model", content: "عملیات از مسیر معتبر برنامه ثبت شد. برای جزئیات رکورد به بخش مربوط مراجعه کنید.", timestamp: timeLabel() }]); } catch (error) { appendError(error instanceof Error ? error.message : "خطا در عملیات؛ پیش از تکرار وضعیت رکورد را بررسی کنید."); } finally { setConfirmation(null); setChatLoading(false); } }}>تأیید و اجرا</button><button disabled={chatLoading} onClick={() => setConfirmation(null)}>انصراف</button></div></section>}
+    {confirmation && <section className="atelier-panel space-y-3 p-5 text-sm">
+      <h3 className="font-bold">{confirmation.label}</h3>
+      <p>رکورد {confirmation.targetId || "جدید"}</p>
+      {confirmation.amount != null && <p>مبلغ {Number(confirmation.amount).toLocaleString("fa-IR")} تومان</p>}
+      {confirmation.comparison?.length ? <div className="overview-table-scroll">
+        <table className="overview-table">
+          <thead><tr><th scope="col">فیلد</th><th scope="col">قبل از تغییر</th><th scope="col">بعد از تغییر</th></tr></thead>
+          <tbody>{confirmation.comparison.map(row => <tr key={row.field}>
+            <td>{row.field}</td><td>{row.before ?? "—"}</td><td>{row.after ?? "—"}</td>
+          </tr>)}</tbody>
+        </table>
+      </div> : <details open><summary>جزئیات درخواست</summary><pre dir="ltr" className="max-h-64 overflow-auto whitespace-pre-wrap text-xs">{JSON.stringify(confirmation.preview || confirmation.parameters.input, null, 2)}</pre></details>}
+      <p>{confirmation.consequences}</p>
+      <p className="font-bold">می‌خواهم تغییرات بالا را اعمال کنم. آیا تأیید می‌کنید؟</p>
+      {confirmation.requiredPhrase && <label className="block">
+        <span className="atelier-label">برای تأیید عبارت «{confirmation.requiredPhrase}» را وارد کنید.</span>
+        <input className="atelier-input w-full p-2.5" value={phrase} onChange={event => setPhrase(event.target.value)} />
+      </label>}
+      <div className="flex flex-wrap gap-3">
+        <button disabled={chatLoading || Boolean(confirmation.requiredPhrase && confirmation.requiredPhrase !== phrase)} className="atelier-button" onClick={() => void handleProposal("execute_action")}>تأیید و اعمال تغییرات</button>
+        <button disabled={chatLoading} className="atelier-button-secondary" onClick={() => void handleProposal("cancel_action")}>لغو</button>
+        <button disabled={chatLoading} className="atelier-button-secondary" onClick={() => void handleProposal("cancel_action", true)}>اصلاح پیشنهاد</button>
+      </div>
+    </section>}
     <section className="atelier-panel-red p-4 sm:flex sm:items-center sm:justify-between">
       <div><h2 className="flex items-center gap-2 text-xl font-bold text-white"><span className="flex h-10 w-10 items-center justify-center rounded-xl border border-red-700/50 bg-red-950/40"><Bot className="h-6 w-6 text-red-300" /></span>دستیار هوش مصنوعی</h2><p className="mr-12 mt-1 text-xs text-zinc-500">تحلیل داده‌های واقعی و عملیات تأییدشده با مجوزهای شما</p></div>
       <div className="mt-4 flex rounded-xl border border-red-950 bg-black/50 p-1 sm:mt-0">

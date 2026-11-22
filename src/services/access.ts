@@ -80,6 +80,19 @@ export async function requirePermission(permission: string, projectId?: string |
   throw new ApiError(403, `دسترسی موردنیاز برای این عملیات وجود ندارد: ${permission}`, "PERMISSION_REQUIRED");
 }
 
+export function assertAIAdministrator(actor: EmployeeContext) {
+  if (actor.roleCode !== "admin") {
+    throw new ApiError(403, "دستیار هوش مصنوعی فقط برای مدیر سامانه در دسترس است.", "AI_ADMIN_REQUIRED");
+  }
+}
+
+export async function requireBackupAdministrator() {
+  const actor = await getEmployeeContext();
+  if (!actor) throw new ApiError(401, "ابتدا وارد حساب کاربری شوید.");
+  if (actor.roleCode !== "admin") throw new ApiError(403, "پشتیبان‌گیری و بازیابی فقط برای مدیر سامانه در دسترس است.", "BACKUP_ADMIN_REQUIRED");
+  return actor;
+}
+
 export async function requireAnyPermission(permissions: string[], projectId?: string | null) {
   const context = await getEmployeeContext();
   if (!context) throw new ApiError(401, "دسترسی غیرمجاز: لطفاً ابتدا وارد حساب کاربری خود شوید.");

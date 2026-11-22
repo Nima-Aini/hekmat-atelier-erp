@@ -41,7 +41,7 @@ const NAVIGATION = [
   { id: "customers", label: "مشتریان", icon: UsersRound },
   { id: "personnel", label: "پرسنل", icon: UserRound },
   { id: "equipment", label: "تجهیزات", icon: Camera },
-  { id: "finance", label: "مالی", icon: WalletCards },
+  { id: "finance", label: "مالی و گزارش‌ها", icon: WalletCards },
   { id: "notifications", label: "اعلانات", icon: Bell },
   { id: "ai", label: "دستیار هوش مصنوعی", icon: Bot },
   { id: "appearance", label: "ظاهر و رنگ‌بندی", icon: Settings },
@@ -76,7 +76,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
     me?.navigationPermissions || me?.permissions || [],
   );
   const visibleNavigation = NAVIGATION.filter(({ id }) =>
-    canSeeAtelierSection(id, permissions),
+    canSeeAtelierSection(id, permissions, me?.role?.code),
   );
   const canViewNotifications = canSeeAtelierSection("notifications", permissions);
 

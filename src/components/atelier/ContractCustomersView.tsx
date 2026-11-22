@@ -8,9 +8,13 @@ import { AtelierModal } from "./AtelierModal";
 import { EmptyState, ErrorState, LoadingState } from "./StatusView";
 import { atelierToast } from "@/lib/atelierFeedback";
 import { CustomerProfileView } from "./CustomerProfileView";
+import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
+import type { CustomerProfileData } from "@/lib/customerProfile";
 
 const money = (value: unknown) =>
   value === null || value === undefined ? "—" : `${Number(value || 0).toLocaleString("fa-IR")} تومان`;
+type CustomerEditTarget = { id: string; name: string; mobile: string; profile?: CustomerProfileData["customer"] };
+
 type Sort = "newest" | "oldest" | "contracts" | "total" | "remaining" | "next";
 
 export function ContractCustomersView({ customerId = null, onViewCustomer, onNavigate }: {
@@ -24,7 +28,7 @@ export function ContractCustomersView({ customerId = null, onViewCustomer, onNav
     [error, setError] = useState(""),
     [query, setQuery] = useUrlState("query", ""),
     [sort, setSort] = useState<Sort>("newest"),
-    [editing, setEditing] = useState<any>(null);
+    [editing, setEditing] = useState<CustomerEditTarget | null>(null);
   const load = useCallback(() => {
     setLoading(true);
     fetch("/api/atelier/customers")
@@ -64,7 +68,7 @@ export function ContractCustomersView({ customerId = null, onViewCustomer, onNav
     [customers, query, sort],
   );
   if (customerId) return <>
-    <CustomerProfileView id={customerId} revision={revision} onBack={() => onViewCustomer(null)} onNavigate={onNavigate} onEdit={setEditing} />
+    <CustomerProfileView id={customerId} revision={revision} onBack={() => onViewCustomer(null)} onNavigate={onNavigate} onEdit={profile => setEditing({ id: profile.studio.id, name: profile.name, mobile: profile.mobile, profile })} />
     {editing && <CustomerEdit customer={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); setRevision(value => value + 1); }} />}
   </>;
   return (
@@ -190,15 +194,19 @@ function CustomerEdit({
   onClose,
   onSaved,
 }: {
-  customer: any;
+  customer: CustomerEditTarget;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [name, setName] = useState(customer.name),
     [mobile, setMobile] = useState(customer.mobile),
     [saving, setSaving] = useState(false);
+  const [changes, setChanges] = useState<Record<string, string | boolean | null>>({});
+  const profile = customer.profile;
+  const studio = profile?.studio;
+  const setField = (name: string, value: string | boolean | null) => setChanges(current => ({ ...current, [name]: value }));
   return (
-    <AtelierModal title="ویرایش مشتری" onClose={onClose}>
+    <AtelierModal title="ویرایش اطلاعات مشتری" onClose={onClose}>
       <form
         onSubmit={async (event) => {
           event.preventDefault();
@@ -207,10 +215,11 @@ function CustomerEdit({
             const data = await fetch(`/api/atelier/customers/${customer.id}`, {
               method: "PUT",
               headers: { "content-type": "application/json" },
-              body: JSON.stringify({ name, mobile }),
+              body: JSON.stringify({ ...changes, ...(name !== customer.name ? { name } : {}), ...(mobile !== customer.mobile ? { mobile } : {}) }),
             }).then((r) => r.json());
             if (!data.success)
               throw new Error(data.error || "ویرایش انجام نشد.");
+            atelierToast("اطلاعات مشتری ذخیره شد.", "success");
             onSaved();
           } catch (reason) {
             atelierToast(reason instanceof Error ? reason.message : "ویرایش انجام نشد.", "error");
@@ -239,6 +248,66 @@ function CustomerEdit({
             dir="ltr"
           />
         </label>
+        {profile && studio && <>
+          <p className="text-xs text-zinc-500">این اطلاعات برای پرونده مشتری و قراردادهای آینده استفاده می‌شود. جزئیات هر قرارداد را از همان قرارداد ویرایش کنید.</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {([
+              ["phone", "تلفن دوم", profile.phone, "tel"],
+              ["email", "ایمیل", profile.email, "email"],
+              ["storeName", "نام مجموعه", profile.storeName, "text"],
+              ["city", "شهر", profile.city, "text"],
+              ["region", "منطقه", profile.region, "text"],
+              ["postalCode", "کد پستی", profile.postalCode, "text"],
+              ["latitude", "عرض جغرافیایی", profile.latitude, "text"],
+              ["longitude", "طول جغرافیایی", profile.longitude, "text"],
+              ["groomName", "نام داماد", studio.groomName, "text"],
+              ["brideName", "نام عروس", studio.brideName, "text"],
+              ["socialMedia", "شبکه اجتماعی", studio.socialMedia, "text"],
+              ["referrer", "منبع آشنایی", studio.referrer, "text"],
+            ] as const).map(([key, label, initial, type]) => (
+              <label key={key}>
+                <span className="atelier-label">{label}</span>
+                <input type={type} className="atelier-input w-full py-2.5" value={String(changes[key] ?? initial ?? "")} onChange={event => setField(key, event.target.value)} />
+              </label>
+            ))}
+            <label>
+              <span className="atelier-label">نقش مخاطب</span>
+              <select className="atelier-input w-full py-2.5" value={String(Object.hasOwn(changes, "contactPersonRole") ? changes.contactPersonRole ?? "" : studio.contactPersonRole ?? "")} onChange={event => setField("contactPersonRole", event.target.value || null)}>
+                <option value="">تعیین نشده</option>
+                {Object.entries({ groom: "داماد", bride: "عروس", father: "پدر", mother: "مادر", manager: "مدیر", self: "خود مشتری", other: "سایر" }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="atelier-label">سطح مشتری</span>
+              <select aria-label="سطح مشتری" className="atelier-input w-full py-2.5" value={String(changes.vipLevel ?? studio.vipLevel)} onChange={event => setField("vipLevel", event.target.value)}>
+                {Object.entries({ standard: "استاندارد", gold: "طلایی", platinum: "پلاتینیوم", vip: "ویژه" }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <JalaliDatePicker label="تاریخ مناسبت" value={Object.hasOwn(changes, "anniversaryDate") ? (changes.anniversaryDate ? new Date(String(changes.anniversaryDate)) : null) : studio.anniversaryDate ? new Date(studio.anniversaryDate) : null} onChange={value => setField("anniversaryDate", value?.toISOString() ?? null)} />
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={Boolean(changes.socialConsent ?? studio.socialConsent)} onChange={event => setField("socialConsent", event.target.checked)} />
+              رضایت انتشار تصاویر
+            </label>
+            {profile.canEditCredit && ([
+              ["paymentTermsDays", "مهلت پرداخت (روز)", profile.paymentTermsDays],
+              ["creditLimit", "سقف اعتبار (تومان)", profile.creditLimit],
+            ] as const).map(([key, label, initial]) => <label key={key} className="block">
+              <span className="atelier-label">{label}</span>
+              <input type="number" min="0" className="atelier-input w-full py-2.5" value={String(changes[key] ?? initial ?? "")} onChange={event => setField(key, event.target.value)} />
+            </label>)}
+          </div>
+          {([
+            ["address", "آدرس", profile.address],
+            ["specialPreferences", "ترجیحات ویژه", studio.specialPreferences],
+            ["customerNotes", "یادداشت مشتری", profile.notes],
+            ["studioNotes", "یادداشت آتلیه", studio.notes],
+          ] as const).map(([key, label, initial]) => (
+            <label className="block" key={key}>
+              <span className="atelier-label">{label}</span>
+              <textarea className="atelier-input w-full py-2.5" rows={2} value={String(changes[key] ?? initial ?? "")} onChange={event => setField(key, event.target.value)} />
+            </label>
+          ))}
+        </>}
         <div className="flex justify-end gap-2">
           <button
             type="button"

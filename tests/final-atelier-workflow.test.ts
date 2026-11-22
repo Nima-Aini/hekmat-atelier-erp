@@ -260,7 +260,7 @@ describe("Final Iranian atelier workflow", () => {
 
   it("keeps the exact Persian menu order and one responsive left-side navigation", () => {
     const layout = readFileSync(new URL("../src/components/layout/AppLayout.tsx", import.meta.url), "utf8");
-    const expected = ["داشبورد", "قرارداد", "مراجعات روزانه", "رزرو", "برنامه ریزی", "تقویم", "مشتریان", "پرسنل", "تجهیزات", "مالی", "اعلانات", "دستیار هوش مصنوعی", "تنظیمات"];
+    const expected = ["داشبورد", "قرارداد", "مراجعات روزانه", "رزرو", "برنامه ریزی", "تقویم", "مشتریان", "پرسنل", "تجهیزات", "مالی و گزارش‌ها", "اعلانات", "دستیار هوش مصنوعی", "تنظیمات"];
     const indexes = expected.map((label) => layout.indexOf(`label: "${label}"`));
     expect(indexes.every((index) => index >= 0)).toBe(true);
     expect(indexes).toEqual([...indexes].sort((a, b) => a - b));

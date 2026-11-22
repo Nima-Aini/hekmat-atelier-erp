@@ -39,6 +39,7 @@ export interface CreatePersonnelInput {
 }
 
 export interface UpdatePersonnelInput {
+  expectedRevision?: string;
   employeeId?: string | null;
   personnelType?: "employee" | "temporary_worker" | "project_based";
   fullName?: string;
@@ -419,6 +420,10 @@ export async function updateStudioPersonnel(id: string, input: UpdatePersonnelIn
     throw new ApiError(404, "پرسنل موردنظر یافت نشد.");
   }
 
+  if (input.expectedRevision !== undefined && input.expectedRevision !== existing.updatedAt.toISOString()) {
+    throw new ApiError(409, "اطلاعات پرسنل پس از تهیه پیشنهاد تغییر کرده است.", "AI_RECORD_REVISION_CHANGED");
+  }
+  const revision = input.expectedRevision?.slice(0, -1);
   const updateData: Partial<typeof studioPersonnel.$inferInsert> = {
     updatedAt: new Date(),
   };
@@ -489,8 +494,9 @@ export async function updateStudioPersonnel(id: string, input: UpdatePersonnelIn
     const [updated] = await tx
       .update(studioPersonnel)
       .set(updateData)
-      .where(eq(studioPersonnel.id, id))
+      .where(and(eq(studioPersonnel.id, id), revision ? sql`date_trunc('milliseconds', ${studioPersonnel.updatedAt}) = ${revision}::timestamp` : undefined))
       .returning();
+    if (!updated) throw new ApiError(409, "اطلاعات پرسنل پس از تهیه پیشنهاد تغییر کرده است.", "AI_RECORD_REVISION_CHANGED");
     if (updated.employeeId) {
       await tx.update(employees).set({
         baseSalary: updated.fixedSalary,

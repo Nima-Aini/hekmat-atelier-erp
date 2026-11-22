@@ -54,8 +54,8 @@ export default function HomePage() {
   );
   const selectedFinanceContractId = activeTab === "finance" ? routeParts[1] || searchParams.get("contract") : null;
   const permissionValues: string[] = me?.navigationPermissions || me?.permissions || [];
-  const availableSections = visibleAtelierSections(SECTION_IDS, permissionValues);
-  const effectiveActiveTab = canSeeAtelierSection(activeTab, permissionValues)
+  const availableSections = visibleAtelierSections(SECTION_IDS, permissionValues, me?.role?.code);
+  const effectiveActiveTab = canSeeAtelierSection(activeTab, permissionValues, me?.role?.code)
     ? activeTab
     : availableSections[0] || "";
   const renderActiveView = () => {

@@ -20,7 +20,74 @@ function operationalPool(connectionString: string) {
  return value;
 }
 
-export function activationAvailable() { return process.env.RESTORE_ALLOW_ACTIVATION === "true" && Boolean(process.env.POSTGRES_ADMIN_URL && process.env.RESTORE_TARGET_DATABASE_URL); }
+export function activationAvailable() {
+ if (process.env.RESTORE_ALLOW_ACTIVATION !== "true") return false;
+ try {
+  const source = new URL(process.env.DATABASE_URL!);
+  const target = new URL(process.env.RESTORE_TARGET_DATABASE_URL!);
+  const control = new URL(process.env.POSTGRES_ADMIN_URL!);
+  const names = [nameOf(source), nameOf(target), nameOf(control)];
+  const roles = [source.username, target.username, control.username].map(decodeURIComponent);
+  return sameServer(source, target) && sameServer(source, control) && names.every(Boolean) && new Set(names).size === 3 && roles.every(Boolean) && new Set(roles).size === 3;
+ } catch {
+  return false;
+ }
+}
+
+async function verifyCandidateAppAccess(candidate: Pool, source: URL, target: URL) {
+ const appRole = decodeURIComponent(source.username);
+ const ownerRole = decodeURIComponent(target.username);
+ if (appRole === ownerRole) return;
+ if (!appRole) throw new ApiError(422, "حساب برنامه برای بررسی دیتابیس بازیابی‌شده مشخص نیست.", "RESTORE_APP_ROLE_REQUIRED");
+
+ // Grant only runtime privileges on the application schema inside the isolated database.
+ const role = identifier(appRole);
+ const client = await candidate.connect();
+ try {
+  await client.query("BEGIN");
+  await client.query(`GRANT CONNECT ON DATABASE ${identifier(nameOf(target))} TO ${role}`);
+  await client.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
+  await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
+  await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+  await client.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${role}`);
+  await client.query("COMMIT");
+ } catch {
+  await client.query("ROLLBACK").catch(() => undefined);
+  throw new ApiError(422, "مجوزهای حساب برنامه روی دیتابیس بازیابی‌شده قابل تنظیم نیست.", "RESTORE_APP_ACCESS_FAILED");
+ } finally {
+  client.release();
+ }
+
+ // Connect with the real application credentials before changing the active database.
+ const previewUrl = new URL(source);
+ previewUrl.pathname = target.pathname;
+ const app = operationalPool(previewUrl.toString());
+ try {
+  const permissions = await app.query(`SELECT
+   has_schema_privilege('public', 'USAGE') AS schema_access,
+   NOT EXISTS (
+    SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE CASE WHEN n.nspname='public' AND c.relkind IN ('r','p') THEN
+     NOT (has_table_privilege(c.oid, 'SELECT') AND has_table_privilege(c.oid, 'INSERT')
+      AND has_table_privilege(c.oid, 'UPDATE') AND has_table_privilege(c.oid, 'DELETE'))
+    ELSE false END
+   ) AS tables_access,
+   NOT EXISTS (
+    SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE CASE WHEN n.nspname='public' AND c.relkind='S' THEN
+     NOT has_sequence_privilege(c.oid,'USAGE')
+    ELSE false END
+   ) AS sequences_access`);
+  const access = permissions.rows[0];
+  if (!access?.schema_access || !access.tables_access || !access.sequences_access) throw new Error("Missing runtime grants");
+  const integrity = await verifyDatabaseIntegrity(app);
+  if (!integrity.valid) throw new Error("Candidate integrity check failed for app role");
+ } catch {
+  throw new ApiError(422, "اتصال یا مجوزهای حساب برنامه روی دیتابیس بازیابی‌شده تأیید نشد.", "RESTORE_APP_ACCESS_FAILED");
+ } finally {
+  await app.end();
+ }
+}
 
 
 export async function prepareRestoreTarget() {
@@ -40,7 +107,7 @@ export async function activateRestoredDatabase(backupId: string, confirmation: u
  const source = new URL(process.env.DATABASE_URL!); const target = new URL(process.env.RESTORE_TARGET_DATABASE_URL!); const control = new URL(process.env.POSTGRES_ADMIN_URL!);
  if (!sameServer(source, target) || !sameServer(source, control) || nameOf(source) === nameOf(target) || [nameOf(source), nameOf(target)].includes(nameOf(control))) throw new ApiError(422, "انتقال امن به دو دیتابیس مجزا و اتصال مدیریتی مستقل روی یک سرور نیاز دارد.");
  const adminPool = operationalPool(control.toString());
- const admin = await adminPool.connect(); let locked = false; let switched = false; let frozen = false;
+ const admin = await adminPool.connect(); let locked = false; let switched = false; let frozen = false; let maintenanceEntered = false;
  const operationId = randomUUID();
  const retainedName = `atelier_before_${randomUUID().replaceAll("-", "")}`; let safetyBackupId: string | null = null;
  let candidate: Pool | null = operationalPool(target.toString());
@@ -53,7 +120,8 @@ export async function activateRestoredDatabase(backupId: string, confirmation: u
   const integrity = await verifyDatabaseIntegrity(candidate); if (!integrity.valid) throw new ApiError(422, "دیتابیس مقصد یکپارچه نیست.");
   const admins = await candidate.query("SELECT 1 FROM employee_accounts a JOIN employees e ON e.id=a.employee_id JOIN roles r ON r.id=a.role_id WHERE r.code='admin' AND a.status='active' AND e.status='active' AND COALESCE(e.offboarding_stage,'active')='active' LIMIT 1");
   if (!admins.rows.length) throw new ApiError(422, "نسخه انتخابی حساب مدیر فعال ندارد؛ بازیابی نیازمند بررسی مسئول سرور است.", "RESTORE_ADMIN_MISSING");
-  await enterMaintenanceMode(backupId);
+  await verifyCandidateAppAccess(candidate, source, target);
+  await enterMaintenanceMode(backupId); maintenanceEntered = true;
   const safety = await createSystemBackup(context, `pre-restore:${backupId}:activation`, storage);
   await verifySystemBackup(safety.id, context, storage); safetyBackupId = safety.id;
   await event("safety_verified");
@@ -92,7 +160,7 @@ export async function activateRestoredDatabase(backupId: string, confirmation: u
     try { const verified = await verifyDatabaseIntegrity(recovery); if (!verified.valid) throw new Error("Recovery integrity failed"); await recovery.query("INSERT INTO audit_logs(action,entity_type,entity_id,user_id,user_name,details) VALUES('RESTORE_ACTIVATION_ROLLED_BACK','database_backup',$1,$2,$3,$4)", [backupId,context.employeeId || context.userId || "operator",context.userName || "مدیر",JSON.stringify({ safetyBackupId, recoveryVerified: true })]); await recovery.query("UPDATE application_runtime_state SET maintenance_mode=false,operation=NULL,backup_id=NULL,updated_at=NOW() WHERE id='global'"); } finally { await recovery.end(); }
     await event("rollback_verified");
    } catch { await event("operator_recovery_required"); throw new ApiError(503, "سامانه در وضعیت بازیابی است. نسخه ایمنی و دیتابیس قبلی محفوظ‌اند؛ مسئول سرور باید انتقال را بررسی کند.", "RESTORE_RECOVERY_REQUIRED"); }
-  } else if (locked) { await exitMaintenanceMode(); }
+  } else if (maintenanceEntered) { await exitMaintenanceMode(); }
   await event("activation_failed");
   if (error instanceof ApiError) throw error;
   throw new ApiError(500, "انتقال ناموفق بود؛ دیتابیس قبلی حفظ شد.", "RESTORE_ACTIVATION_FAILED");

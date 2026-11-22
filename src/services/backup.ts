@@ -166,6 +166,14 @@ export async function validateRestore(id: string, context?: AuditContext, storag
 
 function databaseIdentity(url: URL) { return `${url.hostname.toLowerCase()}:${url.port || "5432"}/${decodeURIComponent(url.pathname.slice(1))}`; }
 
+export function isolatedRestoreConfigured() {
+  try {
+    return databaseIdentity(databaseUrl()) !== databaseIdentity(databaseUrl("RESTORE_TARGET_DATABASE_URL"));
+  } catch {
+    return false;
+  }
+}
+
 export async function restoreBackupToIsolatedDatabase(id: string, confirmation: unknown, context: AuditContext, storage: BackupStorage = getBackupStorage()) {
   if (confirmation !== "RESTORE") throw new ApiError(400, "برای تأیید بازیابی باید عبارت RESTORE وارد شود.", "RESTORE_CONFIRMATION_REQUIRED");
   const report = await validateRestore(id, context, storage); if (!report.backupValid) throw new ApiError(422, "نسخه پشتیبان برای بازیابی معتبر نیست.", "RESTORE_VALIDATION_FAILED");

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiError } from "@/lib/apiError";
+import { ApiError, apiError, assertUuid } from "@/lib/apiError";
 import { requirePermission } from "@/services/access";
 import {
   completeReservation,
@@ -8,6 +8,33 @@ import {
   saveReservation,
 } from "@/services/studio/finalWorkflow";
 import { assertDailyVisitFinancialPermissions } from "@/services/studio/dailyVisitAuthorization";
+import { db } from "@/db";
+import { studioReservations } from "@/db/schema";
+import { and, eq } from "drizzle-orm";
+import { reservationScope } from "@/services/studio/reservationAccess";
+
+export async function GET(_: Request, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const actor = await requirePermission("studio.reservations.view");
+    const { id } = await params;
+    assertUuid(id);
+    const [reservation] = await db.select({
+      id: studioReservations.id,
+      title: studioReservations.title,
+      reservedAt: studioReservations.reservedAt,
+      customerName: studioReservations.customerName,
+      mobile: studioReservations.mobile,
+      notes: studioReservations.notes,
+      status: studioReservations.status,
+      updatedAt: studioReservations.updatedAt,
+    }).from(studioReservations).where(and(eq(studioReservations.id, id), await reservationScope(actor))).limit(1);
+    if (!reservation || reservation.status === "cancelled") throw new ApiError(404, "رزرو یافت نشد.");
+    return NextResponse.json({ success: true, reservation }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch (error) {
+    return apiError(error, "دریافت رزرو");
+  }
+}
+
 export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
