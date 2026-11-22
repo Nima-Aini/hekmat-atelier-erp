@@ -103,6 +103,15 @@ try {
  assert.equal(await customerCity(), "شیراز");
  assert.equal((await ai("execute_action", { confirmationId: ready.id, confirmed: true })).status(), 409);
 
+ await page.goto(`${base}/finance`);
+ await page.getByRole("heading", { name: "مالی و گزارش‌ها", exact: true }).waitFor();
+ const recordReceipt = page.getByRole("button", { name: "ثبت دریافت", exact: true });
+ await recordReceipt.waitFor();
+ assert.equal(await recordReceipt.count(), 1);
+ await recordReceipt.click();
+ await page.getByLabel("نوع دریافت", { exact: true }).selectOption("manual");
+ await page.getByText("مشخصات دریافت آزاد", { exact: true }).waitFor();
+
  await page.setViewportSize({ width: 390, height: 844 });
  await page.goto(`${base}/contracts/${id}`); await time.waitFor(); await time.click();
  assert.equal(await page.getByLabel("ساعت - ساعت", { exact: true }).isVisible(), true);

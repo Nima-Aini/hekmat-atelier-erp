@@ -5,10 +5,10 @@ import { migrateDatabase } from "../src/db/migrate";
 import { employees, auditLogs } from "../src/db/schema";
 import { hasAtelierPermission } from "../src/lib/atelierPermissions";
 import type { EmployeeContext } from "../src/services/access";
-vi.mock("@/services/access", () => ({ canAccessPermission: async (actor: EmployeeContext, permission: string) => hasAtelierPermission(actor.permissions, permission) }));
+vi.mock("@/services/access", async importOriginal => ({ ...await importOriginal<typeof import("@/services/access")>(), canAccessPermission: async (actor: EmployeeContext, permission: string) => hasAtelierPermission(actor.permissions, permission) }));
 import { AI_OPERATIONS, prepareAIOperation, executeAIOperation } from "../src/services/aiOperations";
 
-const actor: EmployeeContext = { employeeId: "00000000-0000-4000-8000-000000000071", employeeName: "AI test", permissions: new Set(["ai.use", "studio.customers.edit", "studio.customers.view"]) };
+const actor: EmployeeContext = { employeeId: "00000000-0000-4000-8000-000000000071", employeeName: "AI test", roleCode: "admin", permissions: new Set(["ai.use", "studio.customers.edit", "studio.customers.view"]) };
 let calls = 0;
 describe("authenticated AI operations", () => {
   beforeAll(async () => {

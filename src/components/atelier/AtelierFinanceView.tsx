@@ -6,7 +6,6 @@ import {
   RefreshCw,
   Search,
   WalletCards,
-  Plus,
   FileText,
   ArrowUpRight,
 } from "lucide-react";
@@ -312,8 +311,6 @@ export function AtelierFinanceView({
     <FinanceOverview
       data={data}
       onTab={selectTab}
-      onReceipt={() => setReceipt({ sourceType: "contract" })}
-      onExpense={() => setExpenseOpen(true)}
       onAccount={() => setTab("حساب‌ها و صندوق‌ها")}
       onInstallment={(r) =>
         setReceipt({ ...r, sourceType: "installment", sourceId: r.id })
@@ -332,18 +329,9 @@ export function AtelierFinanceView({
   const receiptView = (
     <div className="space-y-4">
       {ledgerFilters}
-      <div className="flex justify-end">
-        <button
-          onClick={() => setReceipt({ sourceType: "contract" })}
-          className="atelier-button !bg-emerald-700"
-        >
-          <BanknoteArrowDown className="h-4 w-4" />
-          ثبت دریافت
-        </button>
-      </div>
       <Table
         headers={["تاریخ", "منبع", "حساب", "مبلغ", "روش"]}
-        rows={(data?.receipts || []).map((r: any) => [
+        rows={(data?.receipts || []).filter((r: any) => matchesLedger({ ...r, incoming: true })).map((r: any) => [
           date(r.paymentDate, true),
           r.source?.title || "دریافت",
           r.accountName,
@@ -463,12 +451,6 @@ export function AtelierFinanceView({
   );
   const expenseView = (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <button onClick={() => setExpenseOpen(true)} className="atelier-button">
-          <Plus className="h-4 w-4" />
-          ثبت هزینه
-        </button>
-      </div>
       {ledgerFilters}
       <OverviewCard>
         <div className="grid gap-3 sm:grid-cols-2">
@@ -675,7 +657,7 @@ export function AtelierFinanceView({
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-extrabold">
             <WalletCards className="h-6 w-6 text-slate-300" />
-            مالی
+            مالی و گزارش‌ها
           </h1>
           <p className="mt-2 text-sm leading-6 text-slate-400">
             مدیریت حساب‌ها، دریافت‌ها، پرداخت‌ها و وضعیت نقدینگی آتلیه
@@ -683,20 +665,12 @@ export function AtelierFinanceView({
         </div>
         <div className="flex flex-wrap gap-2">
           {canCreateReceipt && <button
-            onClick={() => setReceipt({ sourceType: "contract" })}
+            onClick={() => setReceipt({ sourceType: "choose" })}
             disabled={!data || busy}
             className="atelier-button !border-emerald-700 !bg-emerald-800"
           >
             <BanknoteArrowDown className="h-4 w-4" />
-            ثبت دریافت مرتبط
-          </button>}
-          {canCreateReceipt && <button
-            onClick={() => setReceipt({ sourceType: "manual" })}
-            disabled={!data || busy}
-            className="atelier-button !border-emerald-700 !bg-emerald-950"
-          >
-            <BanknoteArrowDown className="h-4 w-4" />
-            ثبت دریافت آزاد
+            ثبت دریافت
           </button>}
           {canCreateExpense && <button
             onClick={() => setExpenseOpen(true)}
@@ -993,7 +967,9 @@ function ReceiptModal({
   onSave,
 }: any) {
   const isInstallment = target.sourceType === "installment";
-  const isManual = target.sourceType === "manual";
+  const canChooseSource = target.sourceType === "choose";
+  const [sourceKind, setSourceKind] = useState(target.sourceType === "manual" ? "manual" : "linked");
+  const isManual = sourceKind === "manual";
   const [sourceId, setSourceId] = useState(target.sourceId || ""),
     [title, setTitle] = useState(""),
     [counterparty, setCounterparty] = useState(""),
@@ -1035,6 +1011,13 @@ function ReceiptModal({
         className="space-y-5"
       >
         <section className="overview-secondary-surface rounded-2xl border p-4">
+          {canChooseSource && <label className="mb-3 block">
+            <span className="atelier-label">نوع دریافت</span>
+            <select className={inputClass} value={sourceKind} onChange={e => setSourceKind(e.target.value)}>
+              <option value="linked">مرتبط با قرارداد یا مراجعه</option>
+              <option value="manual">دریافت آزاد</option>
+            </select>
+          </label>}
           <h3 className="font-black">{isManual ? "مشخصات دریافت آزاد" : "این دریافت متعلق به چیست؟"}</h3>
           {isManual && <div className="mt-3 grid gap-3 sm:grid-cols-2"><label><span className="atelier-label">عنوان *</span><input required maxLength={200} value={title} onChange={event => setTitle(event.target.value)} className={inputClass} /></label><label><span className="atelier-label">مشتری / طرف حساب اختیاری</span><input value={counterparty} onChange={event => setCounterparty(event.target.value)} className={inputClass} /></label></div>}
           {!isManual && !isInstallment && !target.sourceId && (
