@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { ApiError, apiError } from "@/lib/apiError";
+import { ApiError, apiError, assertUuid } from "@/lib/apiError";
 import { canAccessPermission, getScopedProjectIds, requirePermission } from "@/services/access";
 import { parseReportDateParam } from "@/lib/dateUtils";
 import { getAtelierFinanceCenter } from "@/services/studio/financeCenter";
@@ -20,7 +20,13 @@ export async function GET(request: Request) {
     if ((from && !start) || (until && !end) || (start && end && start > end)) {
       throw new ApiError(400, "بازه تاریخ گزارش معتبر نیست.");
     }
-    const data = await getAtelierFinanceCenter(await getScopedProjectIds(["studio.finance.view"]), true, { start, end });
+    const customerId = search.get("reportCustomer");
+    const projectId = search.get("reportProject");
+    const accountId = search.get("reportAccount");
+    for (const id of [customerId, projectId, accountId]) if (id) assertUuid(id);
+    const paymentType = search.get("reportPaymentType");
+    if (paymentType && !/^[a-z0-9_]{1,60}$/.test(paymentType)) throw new ApiError(400, "نوع تراکنش معتبر نیست.");
+    const data = await getAtelierFinanceCenter(await getScopedProjectIds(["studio.finance.view"]), true, { start, end, customerId, projectId, accountId, paymentType });
     const reports = canReports ? {
       ...data.reports,
       totals: { ...data.reports.totals, estimatedContractProfit: canProfit ? data.reports.totals.estimatedContractProfit : null },

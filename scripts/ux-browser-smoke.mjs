@@ -118,6 +118,14 @@ try {
  assert.equal(await customerCity(), "شیراز");
  assert.equal((await ai("execute_action", { confirmationId: ready.id, confirmed: true })).status(), 409);
 
+ await page.goto(`${base}/contracts`);
+ await page.getByRole("button", { name: "قرارداد جدید", exact: true }).click();
+ const dialog = page.locator(".app-modal");
+ await dialog.locator("select").first().selectOption(settings.projectTypes[0].id);
+ await dialog.getByLabel("شماره تماس", { exact: false }).fill("09120000666");
+ await dialog.getByRole("button", { name: "بارگذاری پرونده با شماره تماس" }).click();
+ await page.waitForFunction(() => Array.from(document.querySelectorAll(".app-modal input")).some(input => input.value === "ux-customer@example.com"));
+
  await page.goto(`${base}/finance`);
  await page.getByRole("heading", { name: "مالی و گزارش‌ها", exact: true }).waitFor();
  const recordReceipt = page.getByRole("button", { name: "ثبت دریافت", exact: true });

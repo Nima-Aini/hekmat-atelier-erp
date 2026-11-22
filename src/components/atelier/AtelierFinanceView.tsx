@@ -122,6 +122,7 @@ export function AtelierFinanceView({
   const [reportFrom, setReportFrom] = useState<Date | null>(null);
   const [reportTo, setReportTo] = useState<Date | null>(null);
   const [reportScope, setReportScope] = useState("");
+  const [reportFilters, setReportFilters] = useState({ reportCustomer: "", reportProject: "", reportAccount: "", reportPaymentType: "" });
   const [expenseOpen, setExpenseOpen] = useState(false);
   const [expenseCategory, setExpenseCategory] = useState("all"),
     [expenseProject, setExpenseProject] = useState("all");
@@ -594,6 +595,10 @@ export function AtelierFinanceView({
     />
   );
   const reportTotals = data?.reports?.totals;
+  const reportContracts: Array<{customerId: string | null; customerName: string; coreProjectId: string | null; projectTitle: string}> = data?.contractFinance || [];
+  const customerChoices = new Map(reportContracts.flatMap(row => row.customerId ? [[row.customerId, row.customerName] as const] : []));
+  const projectChoices = new Map(reportContracts.flatMap(row => row.coreProjectId ? [[row.coreProjectId, row.projectTitle] as const] : []));
+  const transactionTypes = new Set(ledger.map(row => row.paymentType).filter(Boolean));
   const reports = (
     <div className="space-y-4">
       <OverviewCard title="بازه گزارش">
@@ -602,19 +607,32 @@ export function AtelierFinanceView({
           const query = new URLSearchParams();
           if (reportFrom) query.set("reportFrom", toBusinessGregorianDateString(reportFrom));
           if (reportTo) query.set("reportTo", toBusinessGregorianDateString(reportTo));
+          for (const [key, value] of Object.entries(reportFilters)) if (value) query.set(key, value);
           setReportScope(query.toString());
         }}>
           <JalaliDatePicker label="از تاریخ" value={reportFrom} onChange={setReportFrom} />
           <JalaliDatePicker label="تا تاریخ" value={reportTo} onChange={setReportTo} />
-          <button disabled={busy} className="atelier-button self-end" type="submit">اعمال بازه</button>
+          {([
+            ["reportCustomer", "مشتری", [...customerChoices]],
+            ["reportProject", "پروژه", [...projectChoices]],
+            ["reportAccount", "حساب", accounts.map(account => [account.id, account.name])],
+            ["reportPaymentType", "نوع تراکنش", [...transactionTypes].map(type => [type, atelierLabel(type)])],
+          ] as const).map(([key, label, options]) => <label className="block" key={key}>
+            <span className="atelier-label">{label}</span>
+            <select className={inputClass} value={reportFilters[key]} onChange={event => setReportFilters(previous => ({ ...previous, [key]: event.target.value }))}>
+              <option value="">همه</option>
+              {options.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>)}
+          <button disabled={busy} className="atelier-button self-end" type="submit">اعمال فیلترهای گزارش</button>
         </form>
       </OverviewCard>
       {reportTotals && <OverviewCard title="نتیجه دوره">
         <ReportTotals rows={[
-          { label: "ارزش قراردادهای تأییدشده ثبت‌شده در دوره", amount: reportTotals.recognizedRevenue },
+          ...(reportTotals.recognizedRevenue === null ? [] : [{ label: "ارزش قراردادهای تأییدشده ثبت‌شده در دوره", amount: reportTotals.recognizedRevenue }]),
           { label: "دریافت واقعی", amount: reportTotals.collected },
           { label: "پرداخت واقعی", amount: reportTotals.paid },
-          { label: "هزینه ثبت‌شده", amount: reportTotals.postedExpenses },
+          ...(reportTotals.postedExpenses === null ? [] : [{ label: "هزینه ثبت‌شده", amount: reportTotals.postedExpenses }]),
           ...(reportTotals.estimatedContractProfit === null ? [] : [
             { label: "سود برآوردی قراردادهای ثبت‌شده در دوره", amount: reportTotals.estimatedContractProfit },
           ]),
@@ -623,8 +641,8 @@ export function AtelierFinanceView({
       <div className="grid gap-4 lg:grid-cols-3">
         {[
           { title: "دریافت بر اساس منبع", rows: data?.reports?.incomeBySource },
-          { title: "هزینه بر اساس دسته", rows: data?.reports?.expensesByCategory },
-          ...(data?.access?.profit ? [{ title: "سود برآوردی بر اساس نوع پروژه", rows: data?.reports?.profitByProjectType }] : []),
+          ...(data?.reports?.cashOnly ? [] : [{ title: "هزینه بر اساس دسته", rows: data?.reports?.expensesByCategory }]),
+          ...(data?.access?.profit && !data?.reports?.cashOnly ? [{ title: "سود برآوردی بر اساس نوع پروژه", rows: data?.reports?.profitByProjectType }] : []),
         ].map(({ title, rows }) => (
           <OverviewCard title={title} key={title}><ReportTotals rows={rows || []} /></OverviewCard>
         ))}
