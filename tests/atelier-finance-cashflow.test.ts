@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import { db } from "../src/db";
+import { parseReportDateParam } from "../src/lib/dateUtils";
 import { migrateDatabase } from "../src/db/migrate";
 import { accounts, atelierExpenseSources, expensePaymentAllocations, expenses, payments, employees } from "../src/db/schema";
 import { postCanonicalExpense, postCanonicalExpensePayment } from "../src/services/financial";
@@ -59,13 +60,24 @@ describe("Atelier finance and cashflow", () => {
     expect(center.reports.expensesByCategory.some((row) => row.label === "دستمزد")).toBe(true);
   });
 
-  it("keeps one Persian finance menu entry and all eleven internal sections", () => {
+  it("reports posted payments once within the selected Tehran civil day", async () => {
+    const start = parseReportDateParam("2026-09-02")!;
+    const end = parseReportDateParam("2026-09-02", true)!;
+    const center = await getAtelierFinanceCenter(null, true, { start, end });
+    const paymentsInPeriod = center.payments.filter(row => row.paymentDate >= start && row.paymentDate <= end);
+    const total = paymentsInPeriod.reduce((sum, row) => sum + row.amount, 0);
+    expect(total).toBeGreaterThanOrEqual(3_000_000);
+    expect(center.reports.totals.paid).toBe(total);
+    expect(center.summary.paid).toBeGreaterThan(center.reports.totals.paid);
+  });
+
+  it("keeps one Persian finance menu entry and all internal sections", () => {
     const layout = readFileSync(new URL("../src/components/layout/AppLayout.tsx", import.meta.url), "utf8");
     const view = readFileSync(new URL("../src/components/atelier/AtelierFinanceView.tsx", import.meta.url), "utf8");
-    expect((layout.match(/label: "مالی"/g) || [])).toHaveLength(1);
-    const order = ["تجهیزات", "مالی", "اعلانات"].map((label) => layout.indexOf(`label: "${label}"`));
+    expect((layout.match(/label: "مالی و گزارش‌ها"/g) || [])).toHaveLength(1);
+    const order = ["تجهیزات", "مالی و گزارش‌ها", "اعلانات"].map((label) => layout.indexOf(`label: "${label}"`));
     expect(order).toEqual([...order].sort((a, b) => a - b));
-    for (const section of ["نمای کلی", "حساب‌ها و صندوق‌ها", "دریافت‌ها", "پرداخت‌ها", "هزینه‌ها", "مطالبات", "بدهی‌ها", "حقوق و دستمزد", "سود قراردادها", "گردش نقدینگی", "گزارش مالی"]) expect(view).toContain(`"${section}"`);
+    for (const section of ["نمای کلی", "حساب‌ها و صندوق‌ها", "دریافت‌ها", "پرداخت‌ها", "هزینه‌ها", "مطالبات", "اقساط", "بدهی‌ها", "حقوق و دستمزد", "سود قراردادها", "گردش نقدینگی", "گزارش مالی"]) expect(view).toContain(`"${section}"`);
     for (const duplicate of ["studio_payments", "atelier_payments", "atelier_cashflow_ledger"]) expect(view).not.toContain(duplicate);
   });
 });

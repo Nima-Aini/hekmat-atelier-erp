@@ -37,6 +37,16 @@ describe("authenticated AI operations", () => {
     await expect(prepareAIOperation(actor, "raw_sql", {})).rejects.toThrow("مجاز");
     await expect(prepareAIOperation(actor, "expense_create", {})).rejects.toThrow("مجاز");
   });
+  it("requires a deliberate phrase for higher-risk proposals without consuming the pending confirmation", async () => {
+    const financeActor = { ...actor, permissions: new Set([...actor.permissions, "studio.finance.create_expense"]) };
+    const prepared = await prepareAIOperation(financeActor, "expense_create", { input: { amount: 1000 } });
+    const id = prepared.confirmation!.id;
+    expect(prepared.confirmation!.requiredPhrase).toBe("تأیید عملیات");
+    for (const phrase of [undefined, "بله"]) {
+      await expect(executeAIOperation(financeActor, id, true, phrase)).rejects.toMatchObject({ code: "AI_DELIBERATE_CONFIRMATION_REQUIRED" });
+    }
+  });
+
   it("rechecks revoked permission at execution and audits failure", async () => {
     const prepared = await prepareAIOperation(actor, "test_write", {});
     const id = prepared.confirmation!.id;
