@@ -196,7 +196,7 @@ export async function getAtelierCustomerProfile(actor: EmployeeContext, id: stri
     const canEdit = await canEditSharedStudioCustomer(actor, identity.customer.id, tx);
     return {
       customer: { ...identity.customer, creditLimit: financeVisible ? identity.customer.creditLimit : null, paymentTermsDays: financeVisible ? identity.customer.paymentTermsDays : null,
-        assignedEmployeeName: identity.employeeName, studio: identity.studio },
+        canEditCredit: actor.roleCode === "admin", assignedEmployeeName: identity.employeeName, studio: identity.studio },
       access: { canEdit, canManageTasks: actor.permissions.has("*"), finance: financeVisible, planning: planningProjectIds.length > 0 || calendarProjectIds.length > 0 || globalAllows("studio.planning.view", "studio.calendar.view", "studio.view"), contracts: contractProjectIds.length > 0 },
       summary: { projects: visibleProjects.length, upcoming: schedule.filter(s => s.id.startsWith("manual:")).filter(s => s.date && s.date >= now && !s.completed && !s.cancelled).length },
       projects: visibleProjects.map(p => ({ id: p.id, number: p.projectNumber, title: p.title, date: p.eventDate, status: p.status, location: p.mainLocation, archived: Boolean(p.archivedAt),

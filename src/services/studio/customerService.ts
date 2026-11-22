@@ -8,7 +8,7 @@ import {
   studioContracts,
 } from "@/db/schema";
 import { and, desc, eq, exists, ilike, inArray, or, sql } from "drizzle-orm";
-import { ApiError, assertUuid, pageNumber } from "@/lib/apiError";
+import { ApiError, assertUuid, decimal, pageNumber } from "@/lib/apiError";
 import { logAuditEvent, type AuditContext } from "@/services/audit";
 
 export interface CreateStudioCustomerInput {
@@ -32,6 +32,10 @@ export interface CreateStudioCustomerInput {
 
 export interface UpdateStudioCustomerInput {
   expectedRevision?: { customer: string; studio: string };
+  latitude?: string | null;
+  longitude?: string | null;
+  paymentTermsDays?: string | number | null;
+  creditLimit?: string | number | null;
   name?: string;
   mobile?: string;
   email?: string | null;
@@ -303,7 +307,7 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput, tra
   return transaction ? create(transaction) : db.transaction(create);
 }
 
-export async function updateStudioCustomer(id: string, input: UpdateStudioCustomerInput, audit?: AuditContext) {
+export async function updateStudioCustomer(id: string, input: UpdateStudioCustomerInput, audit?: AuditContext, canEditCredit = false) {
   assertUuid(id);
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new ApiError(400, "اطلاعات مشتری معتبر نیست.");
 
@@ -365,6 +369,25 @@ export async function updateStudioCustomer(id: string, input: UpdateStudioCustom
       if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ApiError(400, "ایمیل معتبر نیست.");
       baseCustUpdate.email = email;
     }
+    for (const key of ["latitude", "longitude"] as const) {
+      if (input[key] === undefined) continue;
+      const coordinate = optionalText(input[key], 30);
+      if (coordinate && (!Number.isFinite(Number(coordinate)) || Math.abs(Number(coordinate)) > (key === "latitude" ? 90 : 180))) {
+        throw new ApiError(400, "مختصات جغرافیایی معتبر نیست.");
+      }
+      baseCustUpdate[key] = coordinate;
+    }
+    if (input.paymentTermsDays !== undefined || input.creditLimit !== undefined) {
+      if (!canEditCredit) throw new ApiError(403, "ویرایش شرایط اعتباری پرونده به مجوز مدیر نیاز دارد.");
+      if (input.paymentTermsDays !== undefined) {
+        const terms = input.paymentTermsDays === null || input.paymentTermsDays === "" ? null : Number(input.paymentTermsDays);
+        if (terms !== null && (!Number.isInteger(terms) || terms < 0 || terms > 3650)) throw new ApiError(400, "مهلت پرداخت معتبر نیست.");
+        baseCustUpdate.paymentTermsDays = terms;
+      }
+      if (input.creditLimit !== undefined) {
+        baseCustUpdate.creditLimit = input.creditLimit === null || input.creditLimit === "" ? null : decimal(input.creditLimit, "سقف اعتبار", 2);
+      }
+    }
     const customerNotes = input.customerNotes === undefined ? input.notes : input.customerNotes;
     if (customerNotes !== undefined) baseCustUpdate.notes = optionalText(customerNotes);
 
@@ -399,7 +422,10 @@ export async function updateStudioCustomer(id: string, input: UpdateStudioCustom
       if (typeof input.socialConsent !== "boolean") throw new ApiError(400, "رضایت انتشار تصاویر معتبر نیست.");
       studioUpdate.socialConsent = input.socialConsent;
     }
-    if (input.vipLevel !== undefined) studioUpdate.vipLevel = input.vipLevel;
+    if (input.vipLevel !== undefined) {
+      if (!["standard", "gold", "platinum", "vip"].includes(input.vipLevel)) throw new ApiError(400, "سطح مشتری معتبر نیست.");
+      studioUpdate.vipLevel = input.vipLevel;
+    }
 
     const [updated] = await tx
       .update(studioCustomers)

@@ -19,6 +19,6 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     const { id } = await params;
     const actor = await requireStudioCustomerAccess(id, "studio.customers.edit");
     const audit = { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName };
-    return NextResponse.json({ success: true, customer: await updateStudioCustomer(id, await request.json(), audit) });
+    return NextResponse.json({ success: true, customer: await updateStudioCustomer(id, await request.json(), audit, actor.roleCode === "admin") });
   } catch (error) { return apiError(error, "ویرایش اطلاعات مشتری"); }
 }

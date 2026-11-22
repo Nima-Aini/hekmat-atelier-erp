@@ -258,6 +258,8 @@ function CustomerEdit({
               ["city", "شهر", profile.city, "text"],
               ["region", "منطقه", profile.region, "text"],
               ["postalCode", "کد پستی", profile.postalCode, "text"],
+              ["latitude", "عرض جغرافیایی", profile.latitude, "text"],
+              ["longitude", "طول جغرافیایی", profile.longitude, "text"],
               ["groomName", "نام داماد", studio.groomName, "text"],
               ["brideName", "نام عروس", studio.brideName, "text"],
               ["socialMedia", "شبکه اجتماعی", studio.socialMedia, "text"],
@@ -275,11 +277,24 @@ function CustomerEdit({
                 {Object.entries({ groom: "داماد", bride: "عروس", father: "پدر", mother: "مادر", manager: "مدیر", self: "خود مشتری", other: "سایر" }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
+            <label className="block">
+              <span className="atelier-label">سطح مشتری</span>
+              <select aria-label="سطح مشتری" className="atelier-input w-full py-2.5" value={String(changes.vipLevel ?? studio.vipLevel)} onChange={event => setField("vipLevel", event.target.value)}>
+                {Object.entries({ standard: "استاندارد", gold: "طلایی", platinum: "پلاتینیوم", vip: "ویژه" }).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
             <JalaliDatePicker label="تاریخ مناسبت" value={Object.hasOwn(changes, "anniversaryDate") ? (changes.anniversaryDate ? new Date(String(changes.anniversaryDate)) : null) : studio.anniversaryDate ? new Date(studio.anniversaryDate) : null} onChange={value => setField("anniversaryDate", value?.toISOString() ?? null)} />
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" checked={Boolean(changes.socialConsent ?? studio.socialConsent)} onChange={event => setField("socialConsent", event.target.checked)} />
               رضایت انتشار تصاویر
             </label>
+            {profile.canEditCredit && ([
+              ["paymentTermsDays", "مهلت پرداخت (روز)", profile.paymentTermsDays],
+              ["creditLimit", "سقف اعتبار (تومان)", profile.creditLimit],
+            ] as const).map(([key, label, initial]) => <label key={key} className="block">
+              <span className="atelier-label">{label}</span>
+              <input type="number" min="0" className="atelier-input w-full py-2.5" value={String(changes[key] ?? initial ?? "")} onChange={event => setField(key, event.target.value)} />
+            </label>)}
           </div>
           {([
             ["address", "آدرس", profile.address],
