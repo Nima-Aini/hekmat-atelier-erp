@@ -7,11 +7,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, useId } from "react"
 import { Banknote, CheckCircle2, Edit3, FilePlus2, PackagePlus, Printer, Search, Trash2 } from "lucide-react";
 import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
+import type { CustomerProfileData } from "@/lib/customerProfile";
 import { expandPackageToContractItems } from "@/lib/atelierCatalog";
 import {
   getBusinessDateTimeParts,
   tehranDateTimeToUtc,
   toJalaliDate,
+  toLatinDigits,
 } from "@/lib/dateUtils";
 import { AtelierModal } from "./AtelierModal";
 import { ContractCancellationDialog } from "./ContractCancellationDialog";
@@ -358,6 +360,8 @@ function ContractForm({
     initial?.customer?.name || "",
   );
   const [mobile, setMobile] = useState(initial?.customer?.mobile || "");
+  const [lookupBusy, setLookupBusy] = useState(false);
+  const lookupVersion = useRef(0);
   const [contractDate, setContractDate] = useState<Date | null>(
     initial?.contractDate ? new Date(initial.contractDate) : null,
   );
@@ -391,6 +395,58 @@ function ContractForm({
     const enteredKeys: string[] = Array.isArray(initial?.typeMetadata?.__customerEnteredKeys) ? initial.typeMetadata.__customerEnteredKeys : [];
     return Object.fromEntries(enteredKeys.filter(key => Object.hasOwn(values, key)).map(key => [key, typeof values[key] === "boolean" ? values[key] : String(values[key] ?? "")]));
   });
+  const [customerDefaults, setCustomerDefaults] = useState<CustomerFormDetails>({});
+  const [linkedMobile, setLinkedMobile] = useState<string | null>(null);
+  const customerFormValues = { ...customerDefaults, ...customerDetails };
+  const changeMobile = (value: string) => {
+    lookupVersion.current += 1;
+    setLookupBusy(false);
+    if (linkedMobile && linkedMobile !== toLatinDigits(value).trim()) {
+      setCustomerDefaults({});
+      setCustomerDetails({});
+      setCustomerName("");
+      setLinkedMobile(null);
+    }
+    setMobile(value);
+  };
+  const lookupCustomer = async () => {
+    const requestedMobile = toLatinDigits(mobile).trim();
+    if (!/^09[0-9]{9}$/.test(requestedMobile) || lookupBusy) return;
+    const version = ++lookupVersion.current;
+    setLookupBusy(true);
+    try {
+      const search = new URLSearchParams({ search: requestedMobile, pageSize: "20" });
+      const listing = await fetch(`/api/studio/customers?${search}`, { cache: "no-store" });
+      const candidates = await listing.json();
+      if (!listing.ok || !candidates.success) throw new Error(candidates.error || "جستجوی پرونده ممکن نشد.");
+      const matches = (candidates.customers || []).filter((row: { mobile: string }) => row.mobile === requestedMobile);
+      if (matches.length > 1) throw new Error("بیش از یک پرونده با این شماره وجود دارد. ابتدا پرونده‌های مشتری را بررسی کنید.");
+      if (!matches[0]) throw new Error("پرونده قابل‌دسترسی با این شماره پیدا نشد.");
+      const response = await fetch(`/api/atelier/customers/${encodeURIComponent(matches[0].id)}`, { cache: "no-store" });
+      const body = await response.json();
+      if (!response.ok || !body.success) throw new Error(body.error || "پرونده مشتری بارگذاری نشد.");
+      if (version !== lookupVersion.current) return;
+      const customer = body.profile.customer as CustomerProfileData["customer"];
+      const studio = customer.studio;
+      const values = {
+        phone: customer.phone, email: customer.email, storeName: customer.storeName, city: customer.city,
+        region: customer.region, postalCode: customer.postalCode, address: customer.address, latitude: customer.latitude, longitude: customer.longitude,
+        customerNotes: customer.notes, paymentTermsDays: customer.paymentTermsDays, creditLimit: customer.creditLimit,
+        groomName: studio.groomName, brideName: studio.brideName, socialMedia: studio.socialMedia, referrer: studio.referrer,
+        contactPersonRole: studio.contactPersonRole, anniversaryDate: studio.anniversaryDate, vipLevel: studio.vipLevel,
+        socialConsent: studio.socialConsent, specialPreferences: studio.specialPreferences, studioNotes: studio.notes,
+      };
+      setCustomerName(customer.name);
+      setLinkedMobile(requestedMobile);
+      setCustomerDefaults(Object.fromEntries(Object.entries(values)
+        .filter(([, value]) => value !== null && value !== undefined)
+        .map(([key, value]) => [key, typeof value === "boolean" ? value : String(value)])));
+    } catch (reason) {
+      if (version === lookupVersion.current) atelierToast(reason instanceof Error ? reason.message : "پرونده مشتری بارگذاری نشد.", "error");
+    } finally {
+      if (version === lookupVersion.current) setLookupBusy(false);
+    }
+  };
   const setCustomerDetail = (key: string, value: string | boolean) => setCustomerDetails((current) => {
     if (value === "" && (key === "vipLevel" || key === "socialConsent")) {
       const next = { ...current }; delete next[key]; return next;
@@ -539,7 +595,7 @@ function ContractForm({
                 label="شماره تماس"
                 required
                 value={mobile}
-                onChange={setMobile}
+                onChange={changeMobile}
                 dir="ltr"
               />
               <JalaliDatePicker
@@ -566,8 +622,13 @@ function ContractForm({
               <div><Field label="تالار / باغ / لوکیشن" value={location} onChange={setLocation} /><p className="mt-1 text-[10px] text-zinc-600">مثال: تالار محمد / باغ احسان</p></div>
             </section>
             <section className="atelier-panel p-4">
-              <h3 className="mb-1 text-sm font-black">اطلاعات پرونده مشتری</h3>
-              <p className="mb-4 text-xs text-zinc-500">در قرارداد جدید این فیلدها خالی‌اند. هنگام ویرایش، مقدار فیلدهای ثبت‌شده از پروندهٔ مشترک و به‌روز مشتری خوانده می‌شود و ممکن است پس از ثبت این قرارداد تغییر کرده باشد. تغییرات شما نیز در همان پرونده ذخیره می‌شود.</p>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-sm font-black">اطلاعات پرونده مشتری</h3>
+                {!initial && <button type="button" className="atelier-button-secondary text-xs" disabled={lookupBusy || !/^09[0-9]{9}$/.test(toLatinDigits(mobile).trim())} onClick={() => void lookupCustomer()}>
+                  {lookupBusy ? "در حال یافتن پرونده…" : "بارگذاری پرونده با شماره تماس"}
+                </button>}
+              </div>
+              <p className="mb-4 text-xs text-zinc-500">با شماره تماس می‌توانید اطلاعات فعلی پرونده را بارگذاری کنید. تغییراتی که در این بخش ثبت می‌کنید در پرونده مشترک ذخیره می‌شود.</p>
               {fields.some((field) => field.key === "groomName" || field.key === "brideName") &&
                 <p className="mb-4 text-xs text-zinc-400">نام عروس و داماد در بخش اطلاعات مخصوص پروژه ثبت می‌شود؛ تغییر آن‌ها پروندهٔ مشتری را نیز به‌روزرسانی می‌کند.</p>}
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -577,18 +638,18 @@ function ContractForm({
                   ["address", "آدرس", "text"], ["latitude", "عرض جغرافیایی", "text"], ["longitude", "طول جغرافیایی", "text"],
                   ["groomName", "نام داماد", "text"], ["brideName", "نام عروس", "text"],
                   ["socialMedia", "شبکه اجتماعی", "text"], ["referrer", "منبع آشنایی", "text"],
-                ] as const).filter(([key]) => !["groomName", "brideName"].includes(key) || !fields.some((field) => field.key === key)).map(([key, label, type]) => <Field key={key} label={label} type={type} value={String(customerDetails[key] || "")} onChange={(value) => setCustomerDetail(key, value)} />)}
-                <label className="block"><span className="atelier-label">نقش مخاطب</span><select className="atelier-input w-full py-2.5" value={String(customerDetails.contactPersonRole || "")} onChange={(event) => setCustomerDetail("contactPersonRole", event.target.value)}><option value="">انتخاب نشده</option>{[["groom","داماد"],["bride","عروس"],["father","پدر"],["mother","مادر"],["manager","مدیر"],["self","خود مشتری"],["other","سایر"]].map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-                <JalaliDatePicker label="تاریخ مناسبت" value={customerDetails.anniversaryDate ? new Date(String(customerDetails.anniversaryDate)) : null} onChange={(value) => setCustomerDetail("anniversaryDate", value?.toISOString() || "")} />
-                <label className="block"><span className="atelier-label">سطح مشتری</span><select className="atelier-input w-full py-2.5" value={String(customerDetails.vipLevel || "")} onChange={(event) => setCustomerDetail("vipLevel", event.target.value)}><option value="">انتخاب نشده</option>{[["standard","استاندارد"],["gold","طلایی"],["platinum","پلاتینیوم"],["vip","ویژه"]].map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
-                <label className="block"><span className="atelier-label">رضایت انتشار تصاویر</span><select className="atelier-input w-full py-2.5" value={customerDetails.socialConsent === undefined || customerDetails.socialConsent === "" ? "" : String(customerDetails.socialConsent)} onChange={(event) => setCustomerDetail("socialConsent", event.target.value === "" ? "" : event.target.value === "true")}><option value="">ثبت نشده</option><option value="true">بله</option><option value="false">خیر</option></select></label>
+                ] as const).filter(([key]) => !["groomName", "brideName"].includes(key) || !fields.some((field) => field.key === key)).map(([key, label, type]) => <Field key={key} label={label} type={type} value={String(customerFormValues[key] || "")} onChange={(value) => setCustomerDetail(key, value)} />)}
+                <label className="block"><span className="atelier-label">نقش مخاطب</span><select className="atelier-input w-full py-2.5" value={String(customerFormValues.contactPersonRole || "")} onChange={(event) => setCustomerDetail("contactPersonRole", event.target.value)}><option value="">انتخاب نشده</option>{[["groom","داماد"],["bride","عروس"],["father","پدر"],["mother","مادر"],["manager","مدیر"],["self","خود مشتری"],["other","سایر"]].map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+                <JalaliDatePicker label="تاریخ مناسبت" value={customerFormValues.anniversaryDate ? new Date(String(customerFormValues.anniversaryDate)) : null} onChange={(value) => setCustomerDetail("anniversaryDate", value?.toISOString() || "")} />
+                <label className="block"><span className="atelier-label">سطح مشتری</span><select className="atelier-input w-full py-2.5" value={String(customerFormValues.vipLevel || "")} onChange={(event) => setCustomerDetail("vipLevel", event.target.value)}><option value="">انتخاب نشده</option>{[["standard","استاندارد"],["gold","طلایی"],["platinum","پلاتینیوم"],["vip","ویژه"]].map(([value,label]) => <option value={value} key={value}>{label}</option>)}</select></label>
+                <label className="block"><span className="atelier-label">رضایت انتشار تصاویر</span><select className="atelier-input w-full py-2.5" value={customerFormValues.socialConsent === undefined || customerFormValues.socialConsent === "" ? "" : String(customerFormValues.socialConsent)} onChange={(event) => setCustomerDetail("socialConsent", event.target.value === "" ? "" : event.target.value === "true")}><option value="">ثبت نشده</option><option value="true">بله</option><option value="false">خیر</option></select></label>
                 {!financeRedacted && <>
-                  <Field label="مهلت پرداخت (روز)" type="number" value={String(customerDetails.paymentTermsDays ?? "")} onChange={(value) => setCustomerDetail("paymentTermsDays", value)} />
-                  <Field label="سقف اعتبار (تومان)" type="number" value={String(customerDetails.creditLimit ?? "")} onChange={(value) => setCustomerDetail("creditLimit", value)} />
+                  <Field label="مهلت پرداخت (روز)" type="number" value={String(customerFormValues.paymentTermsDays ?? "")} onChange={(value) => setCustomerDetail("paymentTermsDays", value)} />
+                  <Field label="سقف اعتبار (تومان)" type="number" value={String(customerFormValues.creditLimit ?? "")} onChange={(value) => setCustomerDetail("creditLimit", value)} />
                 </>}
               </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                {[["specialPreferences","ترجیحات ویژه"],["customerNotes","یادداشت مشتری"],["studioNotes","یادداشت آتلیه"]].map(([key,label]) => <label className="block" key={key}><span className="atelier-label">{label}</span><textarea className="atelier-input min-h-24 w-full py-2.5" value={String(customerDetails[key] || "")} onChange={(event) => setCustomerDetail(key,event.target.value)} /></label>)}
+                {[["specialPreferences","ترجیحات ویژه"],["customerNotes","یادداشت مشتری"],["studioNotes","یادداشت آتلیه"]].map(([key,label]) => <label className="block" key={key}><span className="atelier-label">{label}</span><textarea className="atelier-input min-h-24 w-full py-2.5" value={String(customerFormValues[key] || "")} onChange={(event) => setCustomerDetail(key,event.target.value)} /></label>)}
               </div>
             </section>
             {fields.length > 0 && (
