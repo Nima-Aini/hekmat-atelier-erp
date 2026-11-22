@@ -1,5 +1,7 @@
 import { db } from "@/db";
 import {
+  customerProjectMemberships,
+  employeeProjectAssignments,
   equipmentReservations,
   personnelSalaryRecords,
   personnelSkills,
@@ -17,7 +19,9 @@ import {
 } from "@/db/schema";
 import { ApiError, assertUuid } from "@/lib/apiError";
 import { canAccessPermission, getEmployeeContext, getScopedProjectIds, requirePermission, type EmployeeContext } from "@/services/access";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
+import { hasAtelierPermission, hasScopedAtelierPermission } from "@/lib/atelierPermissions";
+import type { Transaction } from "@/services/product";
 
 export type StudioScopedResource =
   | "contract" | "payment" | "expense" | "salary" | "rental"
@@ -113,13 +117,40 @@ export async function requireStudioGlobalAccess(permission = "studio.view") {
   return requirePermission(permission);
 }
 
+export async function canEditSharedStudioCustomer(actor: EmployeeContext, baseId: string, client: Transaction | typeof db = db) {
+  if (actor.permissions.has("*")) return true;
+  const [studioOwners, coreOwners] = await Promise.all([
+    client.select({ coreProjectId: studioProjects.projectId }).from(studioProjects)
+      .innerJoin(studioCustomers, eq(studioCustomers.id, studioProjects.studioCustomerId))
+      .where(eq(studioCustomers.customerId, baseId)),
+    client.select({ coreProjectId: customerProjectMemberships.projectId }).from(customerProjectMemberships)
+      .where(eq(customerProjectMemberships.customerId, baseId)),
+  ]);
+  const projectIds = [...new Set([...studioOwners, ...coreOwners].map(owner => owner.coreProjectId))];
+  if (projectIds.includes(null)) return false;
+  const ids = projectIds.filter((id): id is string => id !== null);
+  if (!ids.length) return hasAtelierPermission(actor.permissions, "studio.customers.edit");
+  const assignments = await client.select({ projectId: employeeProjectAssignments.projectId, permissionSet: employeeProjectAssignments.permissionSet })
+    .from(employeeProjectAssignments)
+    .where(and(eq(employeeProjectAssignments.employeeId, actor.employeeId), eq(employeeProjectAssignments.status, "active"), inArray(employeeProjectAssignments.projectId, ids)));
+  const grants = new Map(assignments.map(row => [row.projectId, (row.permissionSet || {}) as Record<string, unknown>]));
+  return ids.every(projectId => {
+    const scope = grants.get(projectId);
+    return Boolean(scope && hasScopedAtelierPermission(actor.permissions, "studio.customers.edit", scope));
+  });
+}
+
 export async function requireStudioCustomerAccess(studioCustomerId: string, permission = "studio.view") {
   assertUuid(studioCustomerId);
   const actor = await getEmployeeContext();
   if (!actor) throw new ApiError(401, "ابتدا وارد حساب کاربری شوید.");
-  const [exists] = await db.select({ id: studioCustomers.id }).from(studioCustomers).where(eq(studioCustomers.id, studioCustomerId)).limit(1);
+  const [exists] = await db.select({ id: studioCustomers.id, baseId: studioCustomers.customerId }).from(studioCustomers).where(eq(studioCustomers.id, studioCustomerId)).limit(1);
   if (!exists) throw notFound("مشتری آتلیه");
   if (actor.permissions.has("*")) return actor;
+  if (permission === "studio.customers.edit") {
+    if (await canEditSharedStudioCustomer(actor, exists.baseId)) return actor;
+    throw new ApiError(403, "ویرایش این پرونده به دسترسی ویرایش در همه پروژه‌های مرتبط نیاز دارد.", "PROJECT_SCOPE_FORBIDDEN");
+  }
   const owners = await db.select({ coreProjectId: studioProjects.projectId }).from(studioProjects).where(eq(studioProjects.studioCustomerId, studioCustomerId));
   if (!owners.length && await canAccessPermission(actor, permission)) return actor;
   for (const owner of owners) if (owner.coreProjectId && await canAccessPermission(actor, permission, owner.coreProjectId)) return actor;

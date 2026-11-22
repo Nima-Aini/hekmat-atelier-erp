@@ -14,9 +14,24 @@ import { hasAtelierPermission, hasScopedAtelierPermission } from "@/lib/atelierP
 import type { EmployeeContext } from "@/services/access";
 import { readPostedInstallmentAllocations } from "./installmentReadModel";
 import { reservationScope } from "./reservationAccess";
+import { canEditSharedStudioCustomer } from "./access";
 
 const n = (value: unknown) => Number(value || 0);
 const oneOf = (column: AnyColumn, ids: string[]) => ids.length ? inArray(column, ids) : sql`false`;
+function contractProfileFields(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return [];
+  const metadata = input as Record<string, unknown>;
+  const labels = metadata.__fieldLabels;
+  if (!labels || typeof labels !== "object" || Array.isArray(labels)) return [];
+  return Object.entries(labels).flatMap(([key, label]) => {
+    if (key.startsWith("__") || key === "paymentDraft" || !Object.hasOwn(metadata, key)) return [];
+    const value = metadata[key];
+    return typeof label === "string" && typeof value === "string" && value.trim()
+      ? [{ key, label, value }]
+      : [];
+  });
+}
+
 const activeInvoice = (status: string) => status === "issued" || status === "corrected";
 export type CustomerSchedule = {
   id: string; title: string; kind: string; date: Date | null; endDate: Date | null;
@@ -178,7 +193,7 @@ export async function getAtelierCustomerProfile(actor: EmployeeContext, id: stri
       status: reservation.status, completed: reservation.status === "completed", cancelled: reservation.status === "cancelled", projectTitle: null, location: null,
       notes: reservation.notes, personnel: [], equipment: [], target: null });
     schedule.sort((a, b) => (a.date ? +a.date : Infinity) - (b.date ? +b.date : Infinity));
-    const canEdit = rawProjects.length ? rawProjects.some(p => allows(p.projectId, "studio.customers.edit")) : globalAllows("studio.customers.edit");
+    const canEdit = await canEditSharedStudioCustomer(actor, identity.customer.id, tx);
     return {
       customer: { ...identity.customer, creditLimit: financeVisible ? identity.customer.creditLimit : null, paymentTermsDays: financeVisible ? identity.customer.paymentTermsDays : null,
         assignedEmployeeName: identity.employeeName, studio: identity.studio },
@@ -187,7 +202,7 @@ export async function getAtelierCustomerProfile(actor: EmployeeContext, id: stri
       projects: visibleProjects.map(p => ({ id: p.id, number: p.projectNumber, title: p.title, date: p.eventDate, status: p.status, location: p.mainLocation, archived: Boolean(p.archivedAt),
         contracts: contractRows.filter(r => r.contract.studioProjectId === p.id && contractProjectIds.includes(p.id)).map(({ contract: c, typeTitle }) => {
           const inv = c.invoiceId ? invoiceMap.get(c.invoiceId) : null;
-          return { id: c.id, number: c.contractNumber, date: c.contractDate, programDate: c.programDate, deliveryDate: c.deliveryCommitmentDate, status: c.status, typeTitle,
+          return { id: c.id, number: c.contractNumber, date: c.contractDate, programDate: c.programDate, deliveryDate: c.deliveryCommitmentDate, status: c.status, typeTitle, fields: contractProfileFields(c.typeMetadata),
             amount: financialCoreVisible(p.projectId) ? n(inv?.grandTotal ?? c.totalAmount) : null, paid: inv ? n(inv.paidAmount) : null, remaining: inv ? n(inv.balanceDue) : null };
         }) })),
       schedule: schedule.filter(row => row.id.startsWith("manual:")).map(row => ({ ...row, sourceType: row.id.split(":")[0], sourceId: row.id.split(":")[1] })),

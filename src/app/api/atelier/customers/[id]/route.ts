@@ -17,7 +17,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    await requireStudioCustomerAccess(id, "studio.customers.edit");
-    return NextResponse.json({ success: true, customer: await updateStudioCustomer(id, await request.json()) });
+    const actor = await requireStudioCustomerAccess(id, "studio.customers.edit");
+    const audit = { userId: actor.employeeId, employeeId: actor.employeeId, userName: actor.employeeName };
+    return NextResponse.json({ success: true, customer: await updateStudioCustomer(id, await request.json(), audit) });
   } catch (error) { return apiError(error, "ویرایش اطلاعات مشتری"); }
 }

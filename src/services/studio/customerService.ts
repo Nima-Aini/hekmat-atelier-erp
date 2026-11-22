@@ -9,6 +9,7 @@ import {
 } from "@/db/schema";
 import { and, desc, eq, exists, ilike, inArray, or, sql } from "drizzle-orm";
 import { ApiError, assertUuid, pageNumber } from "@/lib/apiError";
+import { logAuditEvent, type AuditContext } from "@/services/audit";
 
 export interface CreateStudioCustomerInput {
   customerId?: string | null;
@@ -32,6 +33,13 @@ export interface CreateStudioCustomerInput {
 export interface UpdateStudioCustomerInput {
   name?: string;
   mobile?: string;
+  email?: string | null;
+  storeName?: string | null;
+  city?: string | null;
+  region?: string | null;
+  postalCode?: string | null;
+  customerNotes?: string | null;
+  studioNotes?: string | null;
   phone?: string | null;
   address?: string | null;
   socialMedia?: string | null;
@@ -39,7 +47,7 @@ export interface UpdateStudioCustomerInput {
   customerType?: "wedding" | "portrait" | "commercial" | "family" | "industrial" | "event" | "child" | "modeling";
   groomName?: string | null;
   brideName?: string | null;
-  contactPersonRole?: "groom" | "bride" | "father" | "mother" | "manager" | "self" | "other";
+  contactPersonRole?: "groom" | "bride" | "father" | "mother" | "manager" | "self" | "other" | null;
   anniversaryDate?: Date | string | null;
   specialPreferences?: any;
   socialConsent?: boolean;
@@ -294,8 +302,15 @@ export async function createStudioCustomer(input: CreateStudioCustomerInput, tra
   return transaction ? create(transaction) : db.transaction(create);
 }
 
-export async function updateStudioCustomer(id: string, input: UpdateStudioCustomerInput) {
+export async function updateStudioCustomer(id: string, input: UpdateStudioCustomerInput, audit?: AuditContext) {
   assertUuid(id);
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new ApiError(400, "اطلاعات مشتری معتبر نیست.");
+
+  const optionalText = (value: unknown, max = 2000) => {
+    if (value === null) return null;
+    if (typeof value !== "string" || value.trim().length > max) throw new ApiError(400, "مقدار یکی از فیلدهای مشتری معتبر نیست.");
+    return value.trim() || null;
+  };
 
   return db.transaction(async (tx) => {
     const [existing] = await tx
@@ -317,21 +332,29 @@ export async function updateStudioCustomer(id: string, input: UpdateStudioCustom
     };
 
     if (input.name !== undefined) {
-      if (!input.name.trim()) throw new ApiError(400, "نام مشتری نباید خالی باشد.");
-      baseCustUpdate.name = input.name.trim();
+      const name = optionalText(input.name, 200);
+      if (!name) throw new ApiError(400, "نام مشتری نباید خالی باشد.");
+      baseCustUpdate.name = name;
     }
 
     if (input.mobile !== undefined) {
-      const cleanMobile = input.mobile.trim();
-      if (!/^09\d{9}$/.test(cleanMobile)) {
+      const cleanMobile = optionalText(input.mobile, 11);
+      if (!cleanMobile || !/^09\d{9}$/.test(cleanMobile)) {
         throw new ApiError(400, "فرمت شماره همراه معتبر نیست.");
       }
       baseCustUpdate.mobile = cleanMobile;
     }
 
-    if (input.phone !== undefined) baseCustUpdate.phone = input.phone?.trim() || null;
-    if (input.address !== undefined) baseCustUpdate.address = input.address?.trim() || null;
-    if (input.notes !== undefined) baseCustUpdate.notes = input.notes?.trim() || null;
+    for (const key of ["phone", "address", "storeName", "city", "region", "postalCode"] as const) {
+      if (input[key] !== undefined) baseCustUpdate[key] = optionalText(input[key]);
+    }
+    if (input.email !== undefined) {
+      const email = optionalText(input.email, 254);
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new ApiError(400, "ایمیل معتبر نیست.");
+      baseCustUpdate.email = email;
+    }
+    const customerNotes = input.customerNotes === undefined ? input.notes : input.customerNotes;
+    if (customerNotes !== undefined) baseCustUpdate.notes = optionalText(customerNotes);
 
     if (Object.keys(baseCustUpdate).length > 1) {
       await tx
@@ -346,17 +369,24 @@ export async function updateStudioCustomer(id: string, input: UpdateStudioCustom
     };
 
     if (input.customerType !== undefined) studioUpdate.customerType = input.customerType;
-    if (input.groomName !== undefined) studioUpdate.groomName = input.groomName?.trim() || null;
-    if (input.brideName !== undefined) studioUpdate.brideName = input.brideName?.trim() || null;
-    if (input.contactPersonRole !== undefined) studioUpdate.contactPersonRole = input.contactPersonRole;
-    if (input.socialMedia !== undefined) studioUpdate.socialMedia = input.socialMedia?.trim() || null;
-    if (input.referrer !== undefined) studioUpdate.referrer = input.referrer?.trim() || null;
-    if (input.notes !== undefined) studioUpdate.notes = input.notes?.trim() || null;
-    if (input.anniversaryDate !== undefined) {
-      studioUpdate.anniversaryDate = input.anniversaryDate ? new Date(input.anniversaryDate) : null;
+    for (const key of ["groomName", "brideName", "socialMedia", "referrer", "specialPreferences"] as const) {
+      if (input[key] !== undefined) studioUpdate[key] = optionalText(input[key]);
     }
-    if (input.specialPreferences !== undefined) studioUpdate.specialPreferences = input.specialPreferences;
-    if (input.socialConsent !== undefined) studioUpdate.socialConsent = Boolean(input.socialConsent);
+    if (input.contactPersonRole !== undefined) {
+      if (input.contactPersonRole !== null && !["groom", "bride", "father", "mother", "manager", "self", "other"].includes(input.contactPersonRole)) throw new ApiError(400, "نقش مخاطب معتبر نیست.");
+      studioUpdate.contactPersonRole = input.contactPersonRole;
+    }
+    const studioNotes = input.studioNotes === undefined ? input.notes : input.studioNotes;
+    if (studioNotes !== undefined) studioUpdate.notes = optionalText(studioNotes);
+    if (input.anniversaryDate !== undefined) {
+      const anniversary = input.anniversaryDate ? new Date(input.anniversaryDate) : null;
+      if (anniversary && !Number.isFinite(anniversary.getTime())) throw new ApiError(400, "تاریخ مناسبت معتبر نیست.");
+      studioUpdate.anniversaryDate = anniversary;
+    }
+    if (input.socialConsent !== undefined) {
+      if (typeof input.socialConsent !== "boolean") throw new ApiError(400, "رضایت انتشار تصاویر معتبر نیست.");
+      studioUpdate.socialConsent = input.socialConsent;
+    }
     if (input.vipLevel !== undefined) studioUpdate.vipLevel = input.vipLevel;
 
     const [updated] = await tx
@@ -365,6 +395,11 @@ export async function updateStudioCustomer(id: string, input: UpdateStudioCustom
       .where(eq(studioCustomers.id, id))
       .returning();
 
+    const changedFields = [
+      ...Object.keys(baseCustUpdate).filter(key => key !== "updatedAt").map(key => `customer.${key}`),
+      ...Object.keys(studioUpdate).filter(key => key !== "updatedAt").map(key => `studio.${key}`),
+    ];
+    if (audit && changedFields.length) await logAuditEvent("STUDIO_CUSTOMER_UPDATED", "studio_customer", id, { changedFields }, audit, tx);
     return updated;
   });
 }

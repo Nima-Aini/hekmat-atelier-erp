@@ -67,6 +67,19 @@ try {
  await page.getByRole("button", { name: "بستن", exact: true }).first().click();
  await page.waitForURL(`${base}/contracts`);
  await page.getByRole("button", { name: /^مشتریان/ }).first().click(); await page.waitForURL(`${base}/customers`); await page.goBack(); await page.waitForURL(`${base}/contracts`); assert.equal(new URL(page.url()).pathname, "/contracts"); await page.goForward(); await page.waitForURL(`${base}/customers`); assert.equal(new URL(page.url()).pathname, "/customers");
+ await page.getByRole("button", { name: "مشاهده مشتری تست مرورگر", exact: true }).click();
+ await page.getByRole("button", { name: "ویرایش اطلاعات مشتری", exact: true }).click();
+ await page.getByLabel("ایمیل", { exact: true }).fill("ux-customer@example.com");
+ await page.getByLabel("یادداشت مشتری", { exact: true }).fill("یادداشت پرونده");
+ await page.getByLabel("یادداشت آتلیه", { exact: true }).fill("یادداشت داخلی");
+ const customerSaved = page.waitForResponse(response => response.url().includes("/api/atelier/customers/") && response.request().method() === "PUT" && response.ok());
+ await page.getByRole("button", { name: "ذخیره", exact: true }).click();
+ await customerSaved;
+ await page.reload();
+ for (const value of ["ux-customer@example.com", "یادداشت پرونده", "یادداشت داخلی"]) {
+  await page.getByText(value, { exact: true }).waitFor();
+ }
+
  await page.setViewportSize({ width: 390, height: 844 });
  await page.goto(`${base}/contracts/${id}`); await time.waitFor(); await time.click();
  assert.equal(await page.getByLabel("ساعت - ساعت", { exact: true }).isVisible(), true);
