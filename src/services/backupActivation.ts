@@ -20,7 +20,70 @@ function operationalPool(connectionString: string) {
  return value;
 }
 
-export function activationAvailable() { return process.env.RESTORE_ALLOW_ACTIVATION === "true" && Boolean(process.env.POSTGRES_ADMIN_URL && process.env.RESTORE_TARGET_DATABASE_URL); }
+export function activationAvailable() {
+ if (process.env.RESTORE_ALLOW_ACTIVATION !== "true") return false;
+ try {
+  const source = new URL(process.env.DATABASE_URL!);
+  const target = new URL(process.env.RESTORE_TARGET_DATABASE_URL!);
+  const control = new URL(process.env.POSTGRES_ADMIN_URL!);
+  const names = [nameOf(source), nameOf(target), nameOf(control)];
+  return sameServer(source, target) && sameServer(source, control) && names.every(Boolean) && new Set(names).size === 3;
+ } catch {
+  return false;
+ }
+}
+
+async function verifyCandidateAppAccess(candidate: Pool, source: URL, target: URL) {
+ const appRole = decodeURIComponent(source.username);
+ const ownerRole = decodeURIComponent(target.username);
+ if (appRole === ownerRole) return;
+ if (!appRole) throw new ApiError(422, "حساب برنامه برای بررسی دیتابیس بازیابی‌شده مشخص نیست.", "RESTORE_APP_ROLE_REQUIRED");
+
+ // Grant only runtime privileges on the application schema inside the isolated database.
+ const role = identifier(appRole);
+ const client = await candidate.connect();
+ try {
+  await client.query("BEGIN");
+  await client.query(`GRANT CONNECT ON DATABASE ${identifier(nameOf(target))} TO ${role}`);
+  await client.query(`GRANT USAGE ON SCHEMA public TO ${role}`);
+  await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${role}`);
+  await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${role}`);
+  await client.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${role}`);
+  await client.query("COMMIT");
+ } catch {
+  await client.query("ROLLBACK").catch(() => undefined);
+  throw new ApiError(422, "مجوزهای حساب برنامه روی دیتابیس بازیابی‌شده قابل تنظیم نیست.", "RESTORE_APP_ACCESS_FAILED");
+ } finally {
+  client.release();
+ }
+
+ // Connect with the real application credentials before changing the active database.
+ const previewUrl = new URL(source);
+ previewUrl.pathname = target.pathname;
+ const app = operationalPool(previewUrl.toString());
+ try {
+  const permissions = await app.query(`SELECT
+   has_schema_privilege('public', 'USAGE') AS schema_access,
+   NOT EXISTS (
+    SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='public' AND c.relkind IN ('r','p')
+    AND NOT (has_table_privilege(c.oid, 'SELECT') AND has_table_privilege(c.oid, 'INSERT')
+     AND has_table_privilege(c.oid, 'UPDATE') AND has_table_privilege(c.oid, 'DELETE'))
+   ) AS tables_access,
+   NOT EXISTS (
+    SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname='public' AND c.relkind='S' AND NOT has_sequence_privilege(c.oid,'USAGE')
+   ) AS sequences_access`);
+  const access = permissions.rows[0];
+  if (!access?.schema_access || !access.tables_access || !access.sequences_access) throw new Error("Missing runtime grants");
+  const integrity = await verifyDatabaseIntegrity(app);
+  if (!integrity.valid) throw new Error("Candidate integrity check failed for app role");
+ } catch {
+  throw new ApiError(422, "اتصال یا مجوزهای حساب برنامه روی دیتابیس بازیابی‌شده تأیید نشد.", "RESTORE_APP_ACCESS_FAILED");
+ } finally {
+  await app.end();
+ }
+}
 
 
 export async function prepareRestoreTarget() {
@@ -53,6 +116,7 @@ export async function activateRestoredDatabase(backupId: string, confirmation: u
   const integrity = await verifyDatabaseIntegrity(candidate); if (!integrity.valid) throw new ApiError(422, "دیتابیس مقصد یکپارچه نیست.");
   const admins = await candidate.query("SELECT 1 FROM employee_accounts a JOIN employees e ON e.id=a.employee_id JOIN roles r ON r.id=a.role_id WHERE r.code='admin' AND a.status='active' AND e.status='active' AND COALESCE(e.offboarding_stage,'active')='active' LIMIT 1");
   if (!admins.rows.length) throw new ApiError(422, "نسخه انتخابی حساب مدیر فعال ندارد؛ بازیابی نیازمند بررسی مسئول سرور است.", "RESTORE_ADMIN_MISSING");
+  await verifyCandidateAppAccess(candidate, source, target);
   await enterMaintenanceMode(backupId);
   const safety = await createSystemBackup(context, `pre-restore:${backupId}:activation`, storage);
   await verifySystemBackup(safety.id, context, storage); safetyBackupId = safety.id;
