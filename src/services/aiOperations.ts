@@ -3,7 +3,7 @@ import { NextRequest } from "next/server";
 import { sql } from "drizzle-orm";
 import { db } from "@/db";
 import { ApiError, assertUuid } from "@/lib/apiError";
-import { canAccessPermission, type EmployeeContext } from "@/services/access";
+import { assertAIAdministrator, canAccessPermission, type EmployeeContext } from "@/services/access";
 import { logAuditEvent } from "@/services/audit";
 
 type Module = Record<string, unknown>;
@@ -33,7 +33,6 @@ export const AI_OPERATIONS: Record<string, Operation> = {
   calendar_read: { label: "مشاهده تقویم", permission: "studio.calendar.view", method: "GET", load: () => import("@/app/api/atelier/calendar/route") },
   personnel_list: { label: "مشاهده پرسنل", permission: "studio.personnel.view", method: "GET", load: () => import("@/app/api/studio/personnel/route") },
   personnel_create: { label: "ثبت پرسنل", permission: "studio.personnel.manage", method: "POST", load: () => import("@/app/api/studio/personnel/route") },
-  personnel_access: { label: "تغییر دسترسی پرسنل و ابطال نشست قبلی", permission: "studio.personnel.manage", method: "PUT", load: () => import("@/app/api/atelier/personnel/[id]/access/route") },
   wage_pay: { label: "پرداخت دستمزد و کسر از حساب", permission: "studio.personnel.finance.pay", method: "POST", load: () => import("@/app/api/atelier/personnel/[id]/finance/[salaryId]/pay/route") },
   equipment_list: { label: "مشاهده تجهیزات", permission: "studio.equipment.view", method: "GET", load: () => import("@/app/api/studio/equipment/route") },
   equipment_create: { label: "ثبت تجهیز", permission: "studio.equipment.manage", method: "POST", load: () => import("@/app/api/studio/equipment/route") },
@@ -47,12 +46,14 @@ export const AI_OPERATIONS: Record<string, Operation> = {
 
 type Parameters = { targetId?: string; params?: Record<string, string>; input?: Record<string, unknown>; query?: Record<string, string> };
 export async function availableAIOperations(actor: EmployeeContext) {
+  assertAIAdministrator(actor);
   const allowed = await Promise.all(Object.entries(AI_OPERATIONS).map(async ([operation, item]) => await canAccessPermission(actor, item.permission) ? { operation, label: item.label, mutation: item.method !== "GET" } : null));
   return allowed.filter(Boolean);
 }
 async function authorize(actor: EmployeeContext, operation: string) {
-  const tool = AI_OPERATIONS[operation];
-  if (!tool || !await canAccessPermission(actor, "ai.use") || !await canAccessPermission(actor, tool.permission)) throw new ApiError(403, "این عملیات برای دستیار شما مجاز نیست.");
+  assertAIAdministrator(actor);
+  const tool = Object.hasOwn(AI_OPERATIONS, operation) ? AI_OPERATIONS[operation] : undefined;
+  if (!tool || !await canAccessPermission(actor, tool.permission)) throw new ApiError(403, "این عملیات برای دستیار شما مجاز نیست.");
   return tool;
 }
 async function dispatch(tool: Operation, parameters: Parameters) {
@@ -84,6 +85,7 @@ export async function prepareAIOperation(actor: EmployeeContext, operation: stri
   return { confirmation: { id, label: tool.label, targetId: parameters.targetId || null, amount: preview?.received ?? parameters.input?.amount ?? null, parameters: stored, preview, consequences: "با تأیید، عملیات واقعی از مسیر معتبر برنامه انجام می‌شود. تغییر مالی فقط ثبت حسابداری است و انتقال بانکی انجام نمی‌دهد." } };
 }
 export async function executeAIOperation(actor: EmployeeContext, id: string, confirmed: unknown) {
+  assertAIAdministrator(actor);
   assertUuid(id);
   if (confirmed !== true) throw new ApiError(400, "تأیید صریح عملیات الزامی است.");
   const claimed = await db.execute(sql`UPDATE atelier_ai_actions SET status='processing', updated_at=now() WHERE id=${id}::uuid AND actor_id=${actor.employeeId}::uuid AND status='pending' AND expires_at > now() RETURNING operation, parameters, target_id`);

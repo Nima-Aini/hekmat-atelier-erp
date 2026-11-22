@@ -76,7 +76,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({
     me?.navigationPermissions || me?.permissions || [],
   );
   const visibleNavigation = NAVIGATION.filter(({ id }) =>
-    canSeeAtelierSection(id, permissions),
+    canSeeAtelierSection(id, permissions, me?.role?.code),
   );
   const canViewNotifications = canSeeAtelierSection("notifications", permissions);
 

@@ -11,24 +11,26 @@ export const ATELIER_NAVIGATION_PERMISSION: Record<string, string> = {
   equipment: "studio.equipment.view",
   finance: "studio.finance.view",
   notifications: "studio.notifications.view",
-  ai: "ai.view",
   settings: "settings.view",
 };
 
 export function canSeeAtelierSection(
   sectionId: string,
   permissionValues: Iterable<string>,
+  roleCode?: string | null,
 ) {
+  if (sectionId === "ai") return roleCode === "admin";
   if (sectionId === "appearance") return true;
   const permissions = new Set(permissionValues);
   if (permissions.has("*")) return true;
   if (hasAtelierPermission(permissions, ATELIER_NAVIGATION_PERMISSION[sectionId] || "")) return true;
-  return sectionId !== "ai" && sectionId !== "settings" && permissions.has("studio.view");
+  return sectionId !== "settings" && permissions.has("studio.view");
 }
 
 export function visibleAtelierSections(
   sectionIds: readonly string[],
   permissionValues: Iterable<string>,
+  roleCode?: string | null,
 ) {
-  return sectionIds.filter((id) => canSeeAtelierSection(id, permissionValues));
+  return sectionIds.filter((id) => canSeeAtelierSection(id, permissionValues, roleCode));
 }
