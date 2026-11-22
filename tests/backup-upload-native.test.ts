@@ -39,7 +39,7 @@ describe.skipIf(!enabled)("uploaded native archive and safety snapshot", () => {
    runtimeSourceUrl.username = runtimeRole;
    runtimeSourceUrl.password = runtimePass;
    await pool.query(`GRANT USAGE ON SCHEMA public TO "${runtimeRole}"`);
-   await pool.query(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${runtimeRole}"`);
+   await pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${runtimeRole}"`);
    await pool.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${runtimeRole}"`);
  }, 60000);
  afterAll(async () => { if (originalSourceUrl) process.env.DATABASE_URL = originalSourceUrl; if (admin) { await admin.query(`DROP DATABASE IF EXISTS "${targetName}" WITH (FORCE)`); await admin.end(); } if (directory) await rm(directory, { recursive: true, force: true }); });
