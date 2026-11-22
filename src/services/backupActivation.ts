@@ -107,7 +107,7 @@ export async function activateRestoredDatabase(backupId: string, confirmation: u
  const source = new URL(process.env.DATABASE_URL!); const target = new URL(process.env.RESTORE_TARGET_DATABASE_URL!); const control = new URL(process.env.POSTGRES_ADMIN_URL!);
  if (!sameServer(source, target) || !sameServer(source, control) || nameOf(source) === nameOf(target) || [nameOf(source), nameOf(target)].includes(nameOf(control))) throw new ApiError(422, "انتقال امن به دو دیتابیس مجزا و اتصال مدیریتی مستقل روی یک سرور نیاز دارد.");
  const adminPool = operationalPool(control.toString());
- const admin = await adminPool.connect(); let locked = false; let switched = false; let frozen = false;
+ const admin = await adminPool.connect(); let locked = false; let switched = false; let frozen = false; let maintenanceEntered = false;
  const operationId = randomUUID();
  const retainedName = `atelier_before_${randomUUID().replaceAll("-", "")}`; let safetyBackupId: string | null = null;
  let candidate: Pool | null = operationalPool(target.toString());
@@ -121,7 +121,7 @@ export async function activateRestoredDatabase(backupId: string, confirmation: u
   const admins = await candidate.query("SELECT 1 FROM employee_accounts a JOIN employees e ON e.id=a.employee_id JOIN roles r ON r.id=a.role_id WHERE r.code='admin' AND a.status='active' AND e.status='active' AND COALESCE(e.offboarding_stage,'active')='active' LIMIT 1");
   if (!admins.rows.length) throw new ApiError(422, "نسخه انتخابی حساب مدیر فعال ندارد؛ بازیابی نیازمند بررسی مسئول سرور است.", "RESTORE_ADMIN_MISSING");
   await verifyCandidateAppAccess(candidate, source, target);
-  await enterMaintenanceMode(backupId);
+  await enterMaintenanceMode(backupId); maintenanceEntered = true;
   const safety = await createSystemBackup(context, `pre-restore:${backupId}:activation`, storage);
   await verifySystemBackup(safety.id, context, storage); safetyBackupId = safety.id;
   await event("safety_verified");
@@ -160,7 +160,7 @@ export async function activateRestoredDatabase(backupId: string, confirmation: u
     try { const verified = await verifyDatabaseIntegrity(recovery); if (!verified.valid) throw new Error("Recovery integrity failed"); await recovery.query("INSERT INTO audit_logs(action,entity_type,entity_id,user_id,user_name,details) VALUES('RESTORE_ACTIVATION_ROLLED_BACK','database_backup',$1,$2,$3,$4)", [backupId,context.employeeId || context.userId || "operator",context.userName || "مدیر",JSON.stringify({ safetyBackupId, recoveryVerified: true })]); await recovery.query("UPDATE application_runtime_state SET maintenance_mode=false,operation=NULL,backup_id=NULL,updated_at=NOW() WHERE id='global'"); } finally { await recovery.end(); }
     await event("rollback_verified");
    } catch { await event("operator_recovery_required"); throw new ApiError(503, "سامانه در وضعیت بازیابی است. نسخه ایمنی و دیتابیس قبلی محفوظ‌اند؛ مسئول سرور باید انتقال را بررسی کند.", "RESTORE_RECOVERY_REQUIRED"); }
-  } else if (locked) { await exitMaintenanceMode(); }
+  } else if (maintenanceEntered) { await exitMaintenanceMode(); }
   await event("activation_failed");
   if (error instanceof ApiError) throw error;
   throw new ApiError(500, "انتقال ناموفق بود؛ دیتابیس قبلی حفظ شد.", "RESTORE_ACTIVATION_FAILED");
