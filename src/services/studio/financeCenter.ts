@@ -22,7 +22,11 @@ async function assertFinanceScope(actor: EmployeeContext, projectId: string | nu
   if (projectId && !(await canAccessPermission(actor, "studio.finance.manage", projectId))) throw new ApiError(403, "دسترسی مالی به این پروژه مجاز نیست.", "PROJECT_SCOPE_FORBIDDEN");
 }
 
-export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | null = null, includeUnassigned = true) {
+export async function getAtelierFinanceCenter(
+  allowedCoreProjectIds: string[] | null = null,
+  includeUnassigned = true,
+  reportRange: { start: Date | null; end: Date | null } = { start: null, end: null },
+) {
   const [accountRows, rawPaymentRows, rawExpenseRows, rawContracts, visits, reservations, rawSalaries, rawRentals, rawInstallmentRows, categoryRows] = await Promise.all([
     db.select().from(accounts).where(eq(accounts.status, "active")).orderBy(desc(accounts.isDefault), asc(accounts.name)),
     db.select({ payment: payments, accountName: accounts.name }).from(payments).innerJoin(accounts, eq(accounts.id, payments.accountId)).where(eq(payments.status, "completed")).orderBy(desc(payments.paymentDate)),
@@ -122,10 +126,24 @@ export async function getAtelierFinanceCenter(allowedCoreProjectIds: string[] | 
   });
   const byKey = (rows: Array<{ key: string; amount: number }>) => [...rows.reduce((map, row) => map.set(row.key, (map.get(row.key) || 0) + row.amount), new Map<string, number>())].map(([label, amount]) => ({ label, amount }));
   const categoryTitleByCode = new Map(categoryRows.map((row) => [row.code, row.title]));
+  const inReportPeriod = (date: Date) =>
+    (!reportRange.start || date >= reportRange.start) && (!reportRange.end || date <= reportRange.end);
+  const reportReceipts = receipts.filter(row => inReportPeriod(row.paymentDate));
+  const reportPayments = outgoings.filter(row => inReportPeriod(row.paymentDate));
+  const reportCosts = expenseList.filter(row => inReportPeriod(row.expenseDate));
+  const periodContracts = new Set(contracts.filter(({ contract }) => inReportPeriod(contract.createdAt)).map(({ contract }) => contract.id));
+  const reportProfit = profitRows.filter(row => periodContracts.has(row.contractId));
   const reports = {
-    incomeBySource: byKey(receipts.map((row) => ({ key: row.source?.type === "contract" ? "قرارداد" : row.source?.type === "daily_visit" ? "مراجعه روزانه" : row.source?.type === "reservation" ? "رزرو" : "سایر", amount: row.amount }))),
-    expensesByCategory: byKey(expenseList.map((row) => ({ key: categoryTitleByCode.get(row.category) || row.category || "سایر", amount: row.amount }))),
-    profitByProjectType: byKey(profitRows.map((row) => ({ key: row.projectType || "سایر", amount: row.profit }))),
+    totals: {
+      recognizedRevenue: reportProfit.reduce((sum, row) => sum + row.revenue, 0),
+      collected: reportReceipts.reduce((sum, row) => sum + row.amount, 0),
+      paid: reportPayments.reduce((sum, row) => sum + row.amount, 0),
+      postedExpenses: reportCosts.reduce((sum, row) => sum + row.amount, 0),
+      estimatedContractProfit: reportProfit.reduce((sum, row) => sum + row.profit, 0),
+    },
+    incomeBySource: byKey(reportReceipts.map((row) => ({ key: row.source?.type === "contract" ? "قرارداد" : row.source?.type === "daily_visit" ? "مراجعه روزانه" : row.source?.type === "reservation" ? "رزرو" : "سایر", amount: row.amount }))),
+    expensesByCategory: byKey(reportCosts.map((row) => ({ key: categoryTitleByCode.get(row.category) || row.category || "سایر", amount: row.amount }))),
+    profitByProjectType: byKey(reportProfit.map((row) => ({ key: row.projectType || "سایر", amount: row.profit }))),
   };
   return {
     summary: { liquidity: accountRows.reduce((sum, row) => sum + n(row.balance), 0), received: income, paid: outcome, receivable, payable, personnelDebt, rentalDebt, netCashflow: income - outcome, receivedThisMonth, paidThisMonth, expensesThisMonth, contractedThisMonth, estimatedProfitThisMonth },

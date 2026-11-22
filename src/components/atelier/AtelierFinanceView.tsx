@@ -12,6 +12,7 @@ import {
 import { JalaliDatePicker } from "@/components/ui/JalaliDatePicker";
 import { MoneyInput } from "@/components/ui/MoneyInput";
 import { atelierToast } from "@/lib/atelierFeedback";
+import { toBusinessGregorianDateString } from "@/lib/dateUtils";
 import { atelierLabel } from "@/lib/atelierLabels";
 import { AtelierModal } from "./AtelierModal";
 import {
@@ -118,6 +119,9 @@ export function AtelierFinanceView({
     [schedule, setSchedule] = useState<any>(null),
     [adjust, setAdjust] = useState<any>(null),
     [outgoing, setOutgoing] = useState<any>(null);
+  const [reportFrom, setReportFrom] = useState<Date | null>(null);
+  const [reportTo, setReportTo] = useState<Date | null>(null);
+  const [reportScope, setReportScope] = useState("");
   const [expenseOpen, setExpenseOpen] = useState(false);
   const [expenseCategory, setExpenseCategory] = useState("all"),
     [expenseProject, setExpenseProject] = useState("all");
@@ -134,7 +138,7 @@ export function AtelierFinanceView({
     setBusy(true);
     setError("");
     try {
-      const response = await fetch("/api/atelier/finance", {
+      const response = await fetch(`/api/atelier/finance${reportScope ? `?${reportScope}` : ""}`, {
         cache: "no-store",
       });
       const body = await response.json();
@@ -146,7 +150,7 @@ export function AtelierFinanceView({
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [reportScope]);
   useEffect(() => {
     void load();
   }, [load]);
@@ -589,25 +593,42 @@ export function AtelierFinanceView({
       ])}
     />
   );
+  const reportTotals = data?.reports?.totals;
   const reports = (
-    <div className="grid gap-4 lg:grid-cols-3">
-      {[
-        ["درآمد بر اساس منبع", data?.reports?.incomeBySource],
-        ["هزینه بر اساس دسته", data?.reports?.expensesByCategory],
-        ["سود بر اساس نوع پروژه", data?.reports?.profitByProjectType],
-      ].map(([title, rows]) => (
-        <section className="atelier-card p-5" key={String(title)}>
-          <div className="mb-4 flex justify-between">
-            <h2 className="font-black">{String(title)}</h2>
-            <NeonStatus
-              tone={String(title).includes("سود") ? "success" : "info"}
-            >
-              تحلیل
-            </NeonStatus>
-          </div>
-          <ReportTotals rows={(rows as any[]) || []} />
-        </section>
-      ))}
+    <div className="space-y-4">
+      <OverviewCard title="بازه گزارش">
+        <form className="grid gap-3 sm:grid-cols-3" onSubmit={event => {
+          event.preventDefault();
+          const query = new URLSearchParams();
+          if (reportFrom) query.set("reportFrom", toBusinessGregorianDateString(reportFrom));
+          if (reportTo) query.set("reportTo", toBusinessGregorianDateString(reportTo));
+          setReportScope(query.toString());
+        }}>
+          <JalaliDatePicker label="از تاریخ" value={reportFrom} onChange={setReportFrom} />
+          <JalaliDatePicker label="تا تاریخ" value={reportTo} onChange={setReportTo} />
+          <button disabled={busy} className="atelier-button self-end" type="submit">اعمال بازه</button>
+        </form>
+      </OverviewCard>
+      {reportTotals && <OverviewCard title="نتیجه دوره">
+        <ReportTotals rows={[
+          { label: "ارزش قراردادهای تأییدشده ثبت‌شده در دوره", amount: reportTotals.recognizedRevenue },
+          { label: "دریافت واقعی", amount: reportTotals.collected },
+          { label: "پرداخت واقعی", amount: reportTotals.paid },
+          { label: "هزینه ثبت‌شده", amount: reportTotals.postedExpenses },
+          ...(reportTotals.estimatedContractProfit === null ? [] : [
+            { label: "سود برآوردی قراردادهای ثبت‌شده در دوره", amount: reportTotals.estimatedContractProfit },
+          ]),
+        ]} />
+      </OverviewCard>}
+      <div className="grid gap-4 lg:grid-cols-3">
+        {[
+          { title: "دریافت بر اساس منبع", rows: data?.reports?.incomeBySource },
+          { title: "هزینه بر اساس دسته", rows: data?.reports?.expensesByCategory },
+          ...(data?.access?.profit ? [{ title: "سود برآوردی بر اساس نوع پروژه", rows: data?.reports?.profitByProjectType }] : []),
+        ].map(({ title, rows }) => (
+          <OverviewCard title={title} key={title}><ReportTotals rows={rows || []} /></OverviewCard>
+        ))}
+      </div>
     </div>
   );
   const content: Record<string, React.ReactNode> = {
