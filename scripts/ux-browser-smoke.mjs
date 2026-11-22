@@ -6,6 +6,34 @@ const base = process.env.UX_BASE_URL || "http://127.0.0.1:3310";
 if (!['127.0.0.1', 'localhost'].includes(new URL(base).hostname) || process.env.UX_DISPOSABLE_DATABASE !== "true") throw new Error("Browser mutation checks require an explicitly disposable local database.");
 if (!process.env.UX_ADMIN_USERNAME || !process.env.UX_ADMIN_PASSWORD) throw new Error("Explicit disposable administrator credentials are required.");
 const browser = await chromium.launch({ executablePath: process.env.UX_CHROMIUM_PATH, headless: true, args: ["--no-sandbox", ...(process.env.UX_SINGLE_PROCESS === "true" ? ["--single-process", "--no-zygote", "--disable-dev-shm-usage", "--disable-gpu", "--disable-software-rasterizer"] : [])] });
+
+async function verifyOverviewTheme(page, theme) {
+ await page.goto(base);
+ await page.locator(".overview-page").waitFor();
+ for (const width of [360, 390, 768, 1440]) {
+  await page.setViewportSize({ width, height: 900 });
+  const colors = await page.locator(".overview-page").evaluate(el => {
+   const channel = value => {
+    const normalized = value / 255;
+    return normalized <= .04045 ? normalized / 12.92 : ((normalized + .055) / 1.055) ** 2.4;
+   };
+   const luminance = color => {
+    const [red, green, blue] = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(channel);
+    return .2126 * red + .7152 * green + .0722 * blue;
+   };
+   const text = luminance(getComputedStyle(el).color);
+   const background = luminance(getComputedStyle(document.body).backgroundColor);
+   return {
+    contrast: (Math.max(text, background) + .05) / (Math.min(text, background) + .05),
+    theme: document.documentElement.dataset.theme,
+   };
+  });
+  assert.equal(colors.theme, theme);
+  assert.ok(colors.contrast >= 4.5, `Overview text contrast ${colors.contrast} in ${theme} at ${width}px`);
+  await page.screenshot({ path: `/tmp/atelier-overview-${theme}-${width}.png`, fullPage: true });
+ }
+}
+
 try {
  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
  const errors = []; page.on("pageerror", error => errors.push(error.message));
@@ -21,6 +49,7 @@ try {
  await page.reload(); await page.getByLabel("حالت نمایش").waitFor();
  assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
  assert.equal(await page.locator("html").evaluate(el => el.style.getPropertyValue("--accent")), "#1d4ed8");
+ await verifyOverviewTheme(page, "light");
  const settings = await (await page.request.get(`${base}/api/atelier/settings`)).json();
  assert.equal(settings.success, true, settings.error || "Settings request failed");
  const response = await page.request.post(`${base}/api/atelier/contracts`, { data: { idempotencyKey: crypto.randomUUID(), projectTypeId: settings.projectTypes[0].id, customerName: "تست مرورگر", mobile: "09120000666", programDate: "2035-06-20T20:30:00Z", items: [{ title: "تست", unitPrice: 10000 }] } });
@@ -45,6 +74,7 @@ try {
  await page.screenshot({ path: "/tmp/atelier-mobile-verified.png", fullPage: true });
  await page.goto(`${base}/appearance`); await Promise.all([page.waitForResponse(response => response.url().includes("/api/me/appearance") && response.request().method() === "PUT" && response.ok()), page.getByLabel("حالت نمایش").selectOption("dark")]);
  await page.reload(); assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
+ await verifyOverviewTheme(page, "dark");
  assert.deepEqual(errors, []);
  console.log("UX browser smoke passed: authentication return URL, appearance persistence, contract deep links, time save/refresh, history and 390px mobile picker.");
 } finally { await browser.close(); }
