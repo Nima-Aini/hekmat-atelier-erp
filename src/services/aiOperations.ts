@@ -25,6 +25,7 @@ export const AI_OPERATIONS: Record<string, Operation> = {
   contract_approve: { label: "تأیید قرارداد", permission: "studio.contract.approve", method: "POST", load: () => import("@/app/api/atelier/contracts/[id]/approve/route") },
   contract_delete_draft: { label: "حذف پیش‌قرارداد بدون سابقه مالی", permission: "studio.contract.delete_draft", method: "DELETE", load: () => import("@/app/api/atelier/contracts/[id]/route") },
   contract_cancel: { label: "ابطال قرارداد و برگشت حسابداری وجوه", permission: "studio.contract.cancel", method: "POST", load: () => import("@/app/api/atelier/contracts/[id]/cancellation/route") },
+  reservation_read: { label: "مشاهده جزئیات رزرو", permission: "studio.reservations.view", method: "GET", load: () => import("@/app/api/atelier/reservations/[id]/route") },
   reservations_list: { label: "مشاهده رزروهای مجاز", permission: "studio.reservations.view", method: "GET", load: () => import("@/app/api/atelier/reservations/route") },
   reservation_create: { label: "ثبت رزرو", permission: "studio.reservations.create", method: "POST", load: () => import("@/app/api/atelier/reservations/route") },
   reservation_update: { label: "ویرایش رزرو", permission: "studio.reservations.edit", method: "PUT", load: () => import("@/app/api/atelier/reservations/[id]/route") },
@@ -129,6 +130,16 @@ async function prepareCustomerUpdate(tool: Operation, parameters: Parameters) {
 }
 
 const profileEdits: Record<string, { resultKey: string; fields: Record<string, string>; required: string[] }> = {
+  contract_update: {
+    resultKey: "contract",
+    fields: { notes: "یادداشت قرارداد", executionLocation: "محل اجرا" },
+    required: [],
+  },
+  reservation_update: {
+    resultKey: "reservation",
+    fields: { title: "عنوان رزرو", notes: "یادداشت رزرو" },
+    required: ["title"],
+  },
   equipment_update: {
     resultKey: "equipment",
     fields: { title: "عنوان تجهیز", category: "دسته", brand: "برند", model: "مدل", serialNumber: "شماره سریال", notes: "یادداشت" },
@@ -150,14 +161,17 @@ async function prepareRecordUpdate(tool: Operation, parameters: Parameters, conf
   for (const [key, value] of Object.entries(parameters.input || {})) {
     if (!Object.hasOwn(config.fields, key) || (value !== null && typeof value !== "string")) throw new ApiError(400, "فیلد پیشنهادی قابل ویرایش نیست.");
     const after = value?.trim() || null;
-    if ((!after && config.required.includes(key)) || (after && after.length > 2000)) throw new ApiError(400, "مقدار پیشنهادی معتبر نیست.");
+    if ((!after && config.required.includes(key)) || (after && after.length > (key === "title" && config.resultKey === "reservation" ? 180 : 2000))) throw new ApiError(400, "مقدار پیشنهادی معتبر نیست.");
     const before = typeof record[key] === "string" ? record[key] : null;
     if (before === after) continue;
     comparison.push({ field: config.fields[key], before, after });
     input[key] = after;
   }
   if (!comparison.length) throw new ApiError(400, "پیشنهاد شامل تغییری در رکورد نیست.");
-  return { comparison, input: { ...input, expectedRevision: record.updatedAt } };
+  const reservationDefaults = config.resultKey === "reservation"
+    ? { title: record.title, date: record.reservedAt, customerName: record.customerName, mobile: record.mobile, notes: record.notes }
+    : {};
+  return { comparison, input: { ...reservationDefaults, ...input, expectedRevision: record.updatedAt } };
 }
 
 export async function prepareAIOperation(actor: EmployeeContext, operation: string, parameters: Parameters) {

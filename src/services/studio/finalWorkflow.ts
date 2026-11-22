@@ -110,6 +110,7 @@ type ContractInput = {
   paymentAccountId?: unknown;
   paymentMethod?: unknown;
   customerDetails?: unknown;
+  expectedRevision?: unknown;
 };
 
 const customFieldTypes = ["text", "textarea", "number", "time", "date"] as const;
@@ -933,6 +934,7 @@ export async function updateContract(
       .for("update")
       .limit(1);
     if (!current) throw new ApiError(404, "قرارداد یافت نشد.");
+    if (value.expectedRevision !== undefined && value.expectedRevision !== current.updatedAt.toISOString()) throw new ApiError(409, "قرارداد پس از تهیه پیشنهاد تغییر کرده است.", "AI_RECORD_REVISION_CHANGED");
     const approved =
       current.status === CONTRACT_APPROVED || Boolean(current.invoiceId);
     if (approved && (value.items !== undefined || value.discountAmount !== undefined))
@@ -1357,7 +1359,7 @@ export async function listReservations(reporting = false, actor?: EmployeeContex
 }
 export async function saveReservation(
   actor: EmployeeContext,
-  value: SimpleMoneyInput & { status?: unknown; ownerEmployeeId?: unknown; assignedPersonnelId?: unknown; viewerEmployeeIds?: unknown; sharedPersonnelIds?: unknown; managerPersonnelIds?: unknown },
+  value: SimpleMoneyInput & { expectedRevision?: unknown; status?: unknown; ownerEmployeeId?: unknown; assignedPersonnelId?: unknown; viewerEmployeeIds?: unknown; sharedPersonnelIds?: unknown; managerPersonnelIds?: unknown },
   id?: string,
 ) {
   if (id) await (await import("./reservationAccess")).assertReservationManage(actor, id);
@@ -1376,6 +1378,7 @@ export async function saveReservation(
       assertUuid(id);
       const [existing] = await tx.select().from(studioReservations).where(and(eq(studioReservations.id, id), await (await import("./reservationAccess")).reservationScope(actor))).for("update").limit(1);
       if (!existing || existing.status === "cancelled") throw new ApiError(404, "رزرو یافت نشد.");
+      if (value.expectedRevision !== undefined && value.expectedRevision !== existing.updatedAt.toISOString()) throw new ApiError(409, "رزرو پس از تهیه پیشنهاد تغییر کرده است.", "AI_RECORD_REVISION_CHANGED");
       await (await import("./reservationAccess")).assertReservationManage(actor, id);
       [row] = await tx
         .update(studioReservations)
