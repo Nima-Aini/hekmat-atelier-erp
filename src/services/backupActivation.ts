@@ -66,13 +66,16 @@ async function verifyCandidateAppAccess(candidate: Pool, source: URL, target: UR
    has_schema_privilege('public', 'USAGE') AS schema_access,
    NOT EXISTS (
     SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname='public' AND c.relkind IN ('r','p')
-    AND NOT (has_table_privilege(c.oid, 'SELECT') AND has_table_privilege(c.oid, 'INSERT')
-     AND has_table_privilege(c.oid, 'UPDATE') AND has_table_privilege(c.oid, 'DELETE'))
+    WHERE CASE WHEN n.nspname='public' AND c.relkind IN ('r','p') THEN
+     NOT (has_table_privilege(c.oid, 'SELECT') AND has_table_privilege(c.oid, 'INSERT')
+      AND has_table_privilege(c.oid, 'UPDATE') AND has_table_privilege(c.oid, 'DELETE'))
+    ELSE false END
    ) AS tables_access,
    NOT EXISTS (
     SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-    WHERE n.nspname='public' AND c.relkind='S' AND NOT has_sequence_privilege(c.oid,'USAGE')
+    WHERE CASE WHEN n.nspname='public' AND c.relkind='S' THEN
+     NOT has_sequence_privilege(c.oid,'USAGE')
+    ELSE false END
    ) AS sequences_access`);
   const access = permissions.rows[0];
   if (!access?.schema_access || !access.tables_access || !access.sequences_access) throw new Error("Missing runtime grants");
