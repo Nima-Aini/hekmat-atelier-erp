@@ -2,6 +2,7 @@
 
 import {
   AlertCircle,
+  ArrowUpRight,
   BanknoteArrowDown,
   CalendarDays,
   Clock3,
