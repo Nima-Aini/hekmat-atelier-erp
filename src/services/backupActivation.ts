@@ -27,7 +27,8 @@ export function activationAvailable() {
   const target = new URL(process.env.RESTORE_TARGET_DATABASE_URL!);
   const control = new URL(process.env.POSTGRES_ADMIN_URL!);
   const names = [nameOf(source), nameOf(target), nameOf(control)];
-  return sameServer(source, target) && sameServer(source, control) && names.every(Boolean) && new Set(names).size === 3;
+  const roles = [source.username, target.username, control.username].map(decodeURIComponent);
+  return sameServer(source, target) && sameServer(source, control) && names.every(Boolean) && new Set(names).size === 3 && roles.every(Boolean) && new Set(roles).size === 3;
  } catch {
   return false;
  }
