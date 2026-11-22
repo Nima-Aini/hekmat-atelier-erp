@@ -7,6 +7,20 @@ if (!['127.0.0.1', 'localhost'].includes(new URL(base).hostname) || process.env.
 if (!process.env.UX_ADMIN_USERNAME || !process.env.UX_ADMIN_PASSWORD) throw new Error("Explicit disposable administrator credentials are required.");
 const browser = await chromium.launch({ executablePath: process.env.UX_CHROMIUM_PATH, headless: true, args: ["--no-sandbox", ...(process.env.UX_SINGLE_PROCESS === "true" ? ["--single-process", "--no-zygote", "--disable-dev-shm-usage", "--disable-gpu", "--disable-software-rasterizer"] : [])] });
 
+async function verifySectionRendering(page, theme) {
+ const paths = ["contracts", "customers", "reservations", "calendar", "personnel", "equipment", "finance", "ai", "settings"];
+ for (const route of paths) {
+  await page.goto(`${base}/${route}`);
+  await page.locator(".app-main").getByRole("heading").first().waitFor();
+  for (const width of [360, 390, 768, 1440]) {
+   await page.setViewportSize({ width, height: 900 });
+   assert.equal(await page.locator("html").getAttribute("data-theme"), theme);
+   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true, `Page overflow in /${route} in ${theme} at ${width}px`);
+   if (width === 390 || width === 1440) await page.screenshot({ path: `/tmp/atelier-${route}-${theme}-${width}.png` });
+  }
+ }
+}
+
 async function verifyOverviewTheme(page, theme) {
  await page.goto(base);
  await page.locator(".overview-page").waitFor();
@@ -50,6 +64,7 @@ try {
  assert.equal(await page.locator("html").getAttribute("data-theme"), "light");
  assert.equal(await page.locator("html").evaluate(el => el.style.getPropertyValue("--accent")), "#1d4ed8");
  await verifyOverviewTheme(page, "light");
+ await verifySectionRendering(page, "light");
  const settings = await (await page.request.get(`${base}/api/atelier/settings`)).json();
  assert.equal(settings.success, true, settings.error || "Settings request failed");
  const response = await page.request.post(`${base}/api/atelier/contracts`, { data: { idempotencyKey: crypto.randomUUID(), projectTypeId: settings.projectTypes[0].id, customerName: "تست مرورگر", mobile: "09120000666", programDate: "2035-06-20T20:30:00Z", items: [{ title: "تست", unitPrice: 10000 }] } });
@@ -112,6 +127,15 @@ try {
  await page.getByLabel("نوع دریافت", { exact: true }).selectOption("manual");
  await page.getByText("مشخصات دریافت آزاد", { exact: true }).waitFor();
 
+ await page.goto(`${base}/settings`);
+ await page.getByRole("button", { name: "مدیریت سیستم", exact: true }).click();
+ await page.getByRole("button", { name: "پشتیبان‌گیری", exact: true }).click();
+ for (const name of ["ایجاد و دریافت نسخه پشتیبان", "بازیابی از فایل", "تاریخچه پشتیبان‌گیری و بازیابی"]) {
+  await page.getByRole("heading", { name, exact: true }).waitFor();
+ }
+ await page.locator('input[type="file"]').setInputFiles({ name: "invalid.txt", mimeType: "text/plain", buffer: Buffer.from("invalid format") });
+ await page.getByRole("alert").filter({ hasText: "یک فایل .dump" }).waitFor();
+
  await page.setViewportSize({ width: 390, height: 844 });
  await page.goto(`${base}/contracts/${id}`); await time.waitFor(); await time.click();
  assert.equal(await page.getByLabel("ساعت - ساعت", { exact: true }).isVisible(), true);
@@ -120,6 +144,7 @@ try {
  await page.goto(`${base}/appearance`); await Promise.all([page.waitForResponse(response => response.url().includes("/api/me/appearance") && response.request().method() === "PUT" && response.ok()), page.getByLabel("حالت نمایش").selectOption("dark")]);
  await page.reload(); assert.equal(await page.locator("html").getAttribute("data-theme"), "dark");
  await verifyOverviewTheme(page, "dark");
+ await verifySectionRendering(page, "dark");
  assert.deepEqual(errors, []);
  console.log("UX browser smoke passed: authentication return URL, appearance persistence, contract deep links, time save/refresh, history and 390px mobile picker.");
 } finally { await browser.close(); }
